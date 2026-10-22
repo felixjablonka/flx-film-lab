@@ -1,0 +1,28 @@
+name: Release
+
+# A tag such as v1.0.0 builds the disk image and drafts a release with it, to
+# be checked and published by hand.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  dmg:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build the disk image
+        run: VERSION="${GITHUB_REF_NAME#v}" ./build.sh dmg
+
+      - name: Draft the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd build
+          shasum -a 256 "FLX Film Lab.dmg" > "FLX Film Lab.dmg.sha256"
+          gh release create "$GITHUB_REF_NAME" "FLX Film Lab.dmg" "FLX Film Lab.dmg.sha256" \
+            --draft --generate-notes --title "FLX Film Lab ${GITHUB_REF_NAME#v}"

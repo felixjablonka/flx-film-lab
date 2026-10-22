@@ -1,0 +1,3 @@
+# Baked exposure LUTs are raw float32 data. Some contain no zero byte early
+# on, so git would otherwise take them for text.
+*.tclut binary

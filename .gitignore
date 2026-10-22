@@ -1,0 +1,16 @@
+# Build products (./build.sh)
+/build/
+/FLX Film Lab.app/
+/LUTs/
+
+# Personal RAW files and sample clips used for testing — large, and not source
+/input/
+/Test Files/
+
+# Local tooling state
+.DS_Store
+__pycache__/
+/.claude/settings.local.json
+
+# The manufacturers' datasheets, when downloaded to rebuild the profiles
+/film spec sheets/

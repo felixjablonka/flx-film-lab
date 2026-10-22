@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+
+      # Apple Silicon only: the Intel slice doubles the app's build, and the
+      # release workflow builds it.
+      - name: Build the app and the command-line tools
+        run: |
+          UNIVERSAL=0 ./build.sh
+          ./build.sh lut
+          ./build.sh render
+
+      # Each suite is its own step, and each failed check is reported by name
+      # (tools/ci/run-suite.sh). Every suite runs even after one fails; the
+      # 4K speed check only reports on CI.
+      - name: Invariant checks
+        if: ${{ !cancelled() }}
+        run: tools/ci/run-suite.sh checks
+      - name: Parity with spektrafilm
+        if: ${{ !cancelled() }}
+        run: tools/ci/run-suite.sh parity
+      - name: App checks
+        if: ${{ !cancelled() }}
+        run: tools/ci/run-suite.sh apptest
+      - name: LUT checks
+        if: ${{ !cancelled() }}
+        run: tools/ci/run-suite.sh lutchecks
+      - name: Video checks
+        if: ${{ !cancelled() }}
+        run: tools/ci/run-suite.sh motiontest
+      - name: Motion app checks
+        if: ${{ !cancelled() }}
+        run: tools/ci/run-suite.sh motionapptest
