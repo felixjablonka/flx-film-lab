@@ -13,6 +13,9 @@ The first public release.
   Fujifilm F-Log and F-Log2, Canon Log 2 and 3, and Sony S-Log3.
 - **LUTs:** `flxlut` bakes a look into a .cube for each of those log formats, and
   the app's Export LUT… does the same for the open clip.
+- **V-Log LUT pack:** every film stock as a Real Time LUT for Lumix cameras,
+  and Tri-X through its five filters, attached to the release
+  (`tools/lut/vlog_pack.py`).
 - **Films:** 34 film stocks, 37 counting the pushed versions, and 9 print stocks:
   seven papers and two cinema print films. 20 of the stocks are built here
   from their manufacturers' datasheets:

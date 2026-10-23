@@ -1,4 +1,4 @@
-// Vendored from Glow (~/Documents/Glow, Sources/GlowCore/Pipeline.swift), unchanged
+// Vendored from the author's Glow app (Sources/GlowCore/Pipeline.swift), unchanged
 // apart from this note, so it can be compared and kept in sync with Glow.
 
 import CoreImage

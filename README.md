@@ -1,6 +1,8 @@
+<img src="docs/images/icon.png" width="128" alt="The FLX Film Lab icon">
+
 # FLX Film Lab
 
-FLX Film Lab is a Mac app for shooting film with a digital camera.
+FLX Film Lab is a Mac app for shooting digital photos as if they were film.
 
 **Its films are physical models, not presets.** Each of its 34 stocks, whether
 colour negative, slide, cinema or black and white, is modelled from its
@@ -27,9 +29,9 @@ macOS's own RAW pipeline and runs the whole film model on the GPU.
 - **The physics** is a port of [agx-emulsion / spektrafilm][agx] — real spectral
   sensitivities, characteristic curves and dye absorption spectra read off
   manufacturer datasheets, plus DIR couplers, halation and a stochastic grain
-  model. 34 film stocks and 9 print stocks ship with it, among them four
-  black-and-white films and a black-and-white paper. Slide stocks are read
-  directly off a virtual light table rather than printed, since printing a
+  model. FLX Film Lab ships with 34 film stocks and 9 print stocks, among them
+  four black-and-white films and a black-and-white paper. Its slide stocks are
+  read directly off a virtual light table rather than printed, since printing a
   positive onto RA-4 paper inverts it — and the scan is white-balanced on the
   film base, the way a projector or a scanner treats clear film, without which
   a slide's whites top out around 79% and the whole frame reads flat.
@@ -169,6 +171,11 @@ xattr -cr "/Applications/FLX Film Lab.app"
 
 It needs macOS 14 or later. The app is universal, for Apple Silicon and Intel,
 but has only been tried on Apple Silicon.
+
+Releases also carry a V-Log LUT pack, `FLX-Film-Lab-V-Log-LUTs-<version>.zip`,
+for a Lumix camera's Real Time LUT: every film stock on its usual paper,
+slides on a light table, and Tri-X through its five camera filters, to load
+onto the camera and shoot without the app. Its read-me says how.
 
 ## Build and run
 
@@ -727,6 +734,13 @@ highlight scale and channel headroom for the sun and lamps, at a stop of
 shadow noise. At ISO 640 there is room for that; at ISO 4000 (about 3.7 clean
 stops below grey) the plain table is the better choice.
 
+`python3 tools/lut/vlog_pack.py` bakes the V-Log pack that goes out with a
+release: every stock this way, on its reference paper, and Tri-X through its
+five filters. Tri-X, pushed and through its filters too, and HP5 Plus print
+at Contrast +20 (R102), as they look flat at R115. It writes
+`build/FLX-Film-Lab-V-Log-LUTs-<version>.zip`, with a read-me for the camera,
+and the release workflow attaches it to each release.
+
 `--input flog`, `flog2`, `clog2`, `clog3`, `slog3` (S-Gamut3.Cine) and
 `slog3-sgamut3` take the other cameras' log, on code values / 1023; each has
 a `-video-levels` twin for a video-range file as Resolve hands it. A 65-point
@@ -1070,7 +1084,7 @@ python tools/bake/build_profiles.py   # -> profiles/  (datasheet-derived stocks)
 python tools/bake/build_bw_profiles.py  # -> profiles/  (black-and-white stocks)
 python tools/bake/bake_packs.py       # -> FLXFilmLab/Resources/packs
 python tools/bake/bake_reference.py   # -> tests/parity
-python tools/icon/make_icon.py        # -> FLXFilmLab/Resources/AppIcon.icns
+python tools/icon/make_icon.py        # -> FLXFilmLab/Resources/AppIcon.icns, and the icon's two pictures
 ```
 
 ## Layout

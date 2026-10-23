@@ -1,7 +1,7 @@
 name: Release
 
-# A tag such as v1.0.0 builds the disk image and drafts a release with it, to
-# be checked and published by hand.
+# A tag such as v1.0.0 builds the disk image and the V-Log LUT pack, and
+# drafts a release with both, to be checked and published by hand.
 on:
   push:
     tags: ['v*']
@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 jobs:
-  dmg:
+  release:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v5
@@ -18,11 +18,17 @@ jobs:
       - name: Build the disk image
         run: VERSION="${GITHUB_REF_NAME#v}" ./build.sh dmg
 
+      - name: Bake the V-Log LUT pack
+        run: python3 tools/lut/vlog_pack.py "${GITHUB_REF_NAME#v}"
+
       - name: Draft the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           cd build
+          pack="FLX-Film-Lab-V-Log-LUTs-${GITHUB_REF_NAME#v}.zip"
           shasum -a 256 "FLX Film Lab.dmg" > "FLX Film Lab.dmg.sha256"
+          shasum -a 256 "$pack" > "$pack.sha256"
           gh release create "$GITHUB_REF_NAME" "FLX Film Lab.dmg" "FLX Film Lab.dmg.sha256" \
+            "$pack" "$pack.sha256" \
             --draft --generate-notes --title "FLX Film Lab ${GITHUB_REF_NAME#v}"

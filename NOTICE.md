@@ -292,8 +292,9 @@ S-Gamut3/S-Log3* (Sony), with the constants as colour-science gives them in
 
 ## App icon
 
-The app icon (`FLXFilmLab/Resources/AppIcon.icns`, and the artwork it is made
-from) is © Felix Jablonka, all rights reserved. Neither the GPL nor CC BY-SA
+The app icon (`FLXFilmLab/Resources/AppIcon.icns`, the pictures made from it,
+`docs/images/icon.png` and `tools/icon/social-preview.png`, and the artwork they
+are made from) is © Felix Jablonka, all rights reserved. Neither the GPL nor CC BY-SA
 covers it: a fork or redistribution needs its own icon.
 
 ## Manufacturer datasheets

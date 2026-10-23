@@ -1,4 +1,4 @@
-// Vendored from Glow (~/Documents/Glow, Sources/GlowCore/Look.swift), unchanged
+// Vendored from the author's Glow app (Sources/GlowCore/Look.swift), unchanged
 // apart from this note, so it can be compared and kept in sync with Glow.
 
 import CoreGraphics

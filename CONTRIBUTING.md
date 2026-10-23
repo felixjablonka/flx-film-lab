@@ -1,13 +1,13 @@
 # Contributing
 
-Thank you for looking. FLX Film Lab is a personal project, so issues and pull
-requests are read as time allows.
+FLX Film Lab is a personal project, and its repository takes no issues or pull
+requests. It is free software, though: you are welcome to fork it and change it
+under its licences.
 
 ## Building and testing
 
 Everything builds with the Command Line Tools on macOS 14 or later; see *Build
-and run* in the README. Before a pull request, run the suites that cover what you
-changed:
+and run* in the README. These suites cover what a change can break:
 
 ```bash
 ./build.sh checks          # invariants of the engine: exposure, tone, colour, grain
@@ -32,6 +32,7 @@ datasheet; where a sheet leaves something open, say what was chosen and why in
 
 ## Licences
 
-Code contributions are accepted under the GPLv3 and data contributions under CC
-BY-SA 4.0, the licences of what they join. Please do not add the manufacturers'
-documents themselves, or anything else you do not have the right to share.
+A fork keeps the licences of what it builds on: the GPLv3 for the code and CC
+BY-SA 4.0 for the film and paper data. The app icon is under neither, so a fork
+needs its own. Please do not publish the manufacturers' documents, or anything
+else you do not have the right to share.
