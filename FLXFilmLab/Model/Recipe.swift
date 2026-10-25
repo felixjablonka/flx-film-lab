@@ -129,6 +129,17 @@ struct Recipe: Codable, Equatable {
         set { exposureGradients = newValue.isEmpty ? nil : newValue }
     }
 
+    // MARK: The print's shape
+    /// Turns, mirror, levelling and crop (`FrameGeometry`). Optional so a
+    /// recipe saved before it existed still loads; read and write it through
+    /// `geometry`. Like the masks, it belongs to its frame: pasted settings
+    /// and a newly opened image leave it out.
+    var frameGeometry: FrameGeometry? = nil
+    var geometry: FrameGeometry {
+        get { frameGeometry ?? .identity }
+        set { frameGeometry = newValue == .identity ? nil : newValue }
+    }
+
     // MARK: Print — brightness and contrast
     /// Midtone brightness, as a shift in the print's lightness at mid-grey, in
     /// fractions of the range from paper black to paper white. Positive is
@@ -237,10 +248,12 @@ struct Recipe: Codable, Equatable {
     /// The recipe a newly opened image starts from: this one's look — film,
     /// paper, how it is printed, the film character and the output — with
     /// everything dialled for one particular frame (exposure, tone, colour,
-    /// masks) back at its default, and each auto as the user last set it.
-    func carryingLook(autoExposure: Bool, autoBrightness: Bool, autoContrast: Bool) -> Recipe {
+    /// masks) back at its default. So are the autos, whatever the last image
+    /// had: Auto Exposure on, Auto Brightness and Auto Contrast off.
+    func carryingLook() -> Recipe {
         var r = Recipe()
         r.filmStock = filmStock
+        r.grade = r.defaultGrade
         r.printStock = printStock
         r.lensFilter = lensFilter
         r.scanFilm = scanFilm
@@ -263,9 +276,6 @@ struct Recipe: Codable, Equatable {
         r.filmFormat = filmFormat
         r.outputColorSpace = outputColorSpace
         r.gamutCompress = gamutCompress
-        r.autoExposure = autoExposure
-        r.autoDensity = autoBrightness
-        r.autoGrade = autoContrast
         return r
     }
 

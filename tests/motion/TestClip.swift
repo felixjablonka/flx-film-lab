@@ -85,6 +85,7 @@ enum TestClip {
         case .clog2: return each(own) { CanonLog.code2(linear: $0) } * 1023
         case .clog3: return each(own) { CanonLog.code3(linear: $0) } * 1023
         case .slog3Cine, .slog3: return each(own) { SLog3.code(linear: $0) } * 1023
+        case .ilog: return each(own) { ILog.code(linear: $0) } * 1023
         }
     }
 
@@ -109,6 +110,7 @@ enum TestClip {
         case .clog2: return camera("Canon", "EOS C70")
         case .clog3: return camera("Canon", "EOS R5")
         case .slog3Cine: return camera("Sony", "ILCE-7SM3")
+        case .ilog: return camera("Insta360", "Luna Ultra")
         case .slog3:
             return [item(.quickTimeMetadataComment, """
                 <?xml version="1.0" encoding="UTF-8"?>

@@ -23,7 +23,7 @@ cd "$(dirname "$0")"
 
 APP_NAME="FLX Film Lab"
 # The version a release is built as; the release workflow sets it from the tag.
-VERSION="${VERSION:-1.0.0}"
+VERSION="${VERSION:-1.1.0}"
 # UNIVERSAL=0 builds the app for Apple Silicon only, in half the time. CI does:
 # a failed Intel slice is only reported, never an error, and releases build it.
 UNIVERSAL="${UNIVERSAL:-1}"
@@ -43,6 +43,7 @@ ENGINE_SOURCES=(
   FLXFilmLab/Model/Constants.swift
   FLXFilmLab/Model/ProfilePack.swift
   FLXFilmLab/Model/Recipe.swift
+  FLXFilmLab/Model/FrameGeometry.swift
   FLXFilmLab/Engine/FilmMath.swift
   FLXFilmLab/Engine/ToneCurve.swift
   FLXFilmLab/Engine/PackLibrary.swift
@@ -62,6 +63,7 @@ ENGINE_SOURCES=(
   FLXFilmLab/Engine/FLog.swift
   FLXFilmLab/Engine/CanonLog.swift
   FLXFilmLab/Engine/SLog3.swift
+  FLXFilmLab/Engine/ILog.swift
   FLXFilmLab/Engine/LookLUT.swift
 )
 
@@ -88,6 +90,7 @@ APP_SOURCES=(
   FLXFilmLab/Motion/UI/MotionInspector.swift
   FLXFilmLab/Motion/UI/MotionContentView.swift
   FLXFilmLab/App/RenderEngine.swift
+  FLXFilmLab/App/Presets.swift
   FLXFilmLab/App/DocumentModel.swift
   FLXFilmLab/App/AppMode.swift
   FLXFilmLab/App/FLXFilmLabApp.swift
@@ -95,6 +98,7 @@ APP_SOURCES=(
   FLXFilmLab/UI/Controls.swift
   FLXFilmLab/UI/CurvePlotView.swift
   FLXFilmLab/UI/MaskOverlay.swift
+  FLXFilmLab/UI/CropOverlay.swift
   FLXFilmLab/UI/InspectorView.swift
   FLXFilmLab/UI/ContentView.swift
 )
@@ -108,6 +112,7 @@ CORE_SOURCES=(
   FLXFilmLab/Motion/Video/PlaybackController.swift
   FLXFilmLab/Motion/App/ClipModel.swift
   FLXFilmLab/App/RenderEngine.swift
+  FLXFilmLab/App/Presets.swift
   FLXFilmLab/App/DocumentModel.swift
   FLXFilmLab/App/AppMode.swift
   FLXFilmLab/UI/ControlVocabulary.swift

@@ -266,9 +266,11 @@ enum ToneCurve {
     }
 
     /// The paper's own curve for a neutral tone at a given grade, before any
-    /// tone control — what the meters reason about.
-    static func neutralPaperDensity(paper: ProfilePack, logExposure x: Float, grade: Float) -> Float {
-        let gamma = Constants.gradeReference / clamp(grade, Constants.gradeMin, Constants.gradeMax)
+    /// tone control — what the meters reason about. `softest` is the film's
+    /// softest grade (`ProfilePack.softestGrade`).
+    static func neutralPaperDensity(paper: ProfilePack, logExposure x: Float, grade: Float,
+                                    softest: Float = Constants.gradeMax) -> Float {
+        let gamma = Constants.gradeReference / clamp(grade, Constants.gradeMin, softest)
         var d: Float = 0
         for c in 0..<3 { d += paperDensityRaw(paper: paper, channel: c, x: x, gamma: gamma) }
         return d / 3
@@ -281,11 +283,12 @@ enum ToneCurve {
                         geometry g: Geometry,
                         channel c: Int,
                         logExposure x: Float,
-                        localGrade: Float) -> Float {
+                        localGrade: Float,
+                        softest: Float = Constants.gradeMax) -> Float {
         // 1 — Grade. Contrast as an ISO range value; slope goes as 1/R, and the
         //     morph's sigma' = sigma/gamma turns that into a real curve stretch.
         let gradeR = clamp(Float(recipe.grade) + localGrade + Float(recipe.gradeTrim[c]),
-                           Constants.gradeMin, Constants.gradeMax)
+                           Constants.gradeMin, softest)
         let gamma = Constants.gradeReference / gradeR
         let v = paperDensityRaw(paper: paper, channel: c, x: x, gamma: gamma)
         return applyControls(v, recipe: recipe, geometry: g, channel: c, gradeR: gradeR)
@@ -371,8 +374,10 @@ enum ToneCurve {
     }
 
     /// Build the transfer LUT: width samples along print log-exposure,
-    /// height slices along local grade, RGBA32Float (alpha unused).
-    static func buildLUT(paper: ProfilePack, recipe: Recipe) -> (data: [Float], geometry: Geometry) {
+    /// height slices along local grade, RGBA32Float (alpha unused). Grades
+    /// reach as soft as `softest`, the film's (`ProfilePack.softestGrade`).
+    static func buildLUT(paper: ProfilePack, recipe: Recipe,
+                         softest: Float = Constants.gradeMax) -> (data: [Float], geometry: Geometry) {
         let g = geometry(paper: paper)
         let w = Constants.toneLutWidth
         let h = Constants.toneLutHeight
@@ -393,7 +398,8 @@ enum ToneCurve {
                 let base = (row * w + col) * 4
                 for c in 0..<3 {
                     data[base + c] = density(paper: paper, recipe: recipe, geometry: g,
-                                             channel: c, logExposure: x, localGrade: localGrade)
+                                             channel: c, logExposure: x, localGrade: localGrade,
+                                             softest: softest)
                 }
                 data[base + 3] = 1
             }
@@ -458,7 +464,7 @@ enum ToneCurve {
                 let base = (row * w + col) * 4
                 for c in 0..<3 {
                     let gradeR = clamp(Float(recipe.grade) + localGrade + Float(recipe.gradeTrim[c]),
-                                       Constants.gradeMin, Constants.gradeMax)
+                                       Constants.gradeMin, film.softestGrade)
                     let gain = Constants.gradeReference / gradeR
                     let v = g.anchor + (d - g.anchor) * gain
                     data[base + c] = applyControls(v, recipe: recipe, geometry: g,

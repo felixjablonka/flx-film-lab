@@ -30,10 +30,15 @@ scripts look for these names.
 | Kodak Alaris | KODAK PROFESSIONAL EKTAR 100 Film | E-4046 | `e4046_ektar_100.pdf` | reference only |
 | Kodak Alaris | KODAK PROFESSIONAL TRI-X 320 and 400 Films | F-4017 | `Kodak Tri-X 320 and 400 F-4017.pdf` | `build_bw_profiles.py`, `bw_mtf.py` |
 | Eastman Kodak | KODACHROME 25, 64 and 200 Professional Film | E-55 | `Kodachrome Spec Sheet.pdf` | `build_profiles.py`, `slide_mtf.py` |
+| Kodak Alaris | KODAK PROFESSIONAL T-MAX 100 Film | F-4016 | `f4016_tmax_100-2018.pdf` | `build_bw_profiles.py`, `bw_mtf.py` |
+| Eastman Kodak | KODAK ROYAL GOLD 100 Film | E-41 | `e41-1998_02_Kodak Royal Gold 100.pdf` | `build_profiles.py`, `sheet_readers.py` |
+| Eastman Kodak | KODAK VERICOLOR III Professional Film | E-26 | `e26-Vericolor_III.pdf` | `build_profiles.py`, `sheet_readers.py`, `slide_mtf.py` |
 | Kodak | KODAK WRATTEN 2 Optical Filter No. 8, 22, 25, 47 and 58 | filter data | `Kodak Wratten 2 Filter 8.pdf (and 22, 25, 47, 58)` | `lens_filters.py` |
+| Tiffen | Filter Specifications: 81 series (p. 13), 812 Warming (p. 16) | catalogue | `Tiffen Filter Specifications.pdf` | `lens_filters.py` |
 | Agfa | Technical Data: Agfa range of films, Professional | range sheet | `agfa_films_data.pdf` | `build_bw_profiles.py`, `build_profiles.py`, `bw_mtf.py`, `sheet_readers.py` |
 | HARMAN technology (Ilford) | ILFORD HP5 Plus | technical information | `Ilford HP5 Plus.pdf` | `build_bw_profiles.py` |
 | HARMAN technology (Ilford) | ILFORD MULTIGRADE RC Deluxe | technical information, 2020 | `Ilford Multigrade RC Deluxe.pdf` | `build_bw_profiles.py` |
+| HARMAN technology | HARMAN Phoenix 200 | technical information, Sep 2024 | `HARMAN Phoenix Technical Data sheet 0924.pdf` | `build_profiles.py`, `sheet_readers.py` |
 
 Each profile records which sheet each of its parts came from in its own
 `datasource` field, and `NOTICE.md` lists what is inherited from spektrafilm

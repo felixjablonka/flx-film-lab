@@ -288,13 +288,105 @@ def portrait_xps_160():
                  ((2.011, 0.503), (2.011, 0.503, 0.503, 0.503)))
 
 
+# --- Kodak Royal Gold 100 (E-41), page 3, and Vericolor III (E-26), page 4 --------
+# Vector, every curve black, the labels text with a separate bar for each minus
+# sign, so the rules are named here. A curve is often drawn in several strokes,
+# spread over paths that carry another curve's too; they are joined end to end
+# (`vector_plots.joined`). The curves are named top to bottom at the dense
+# end (B, G, R), the sensitivities by where they peak.
+ROYAL_GOLD = "e41-1998_02_Kodak Royal Gold 100.pdf"
+RG_CURVES = _plot(ROYAL_GOLD, 2, (93.7, 71.8, 278.2, 256.3),
+                  zip((93.7, 139.8, 186.0, 232.1, 278.2), range(-3, 2)),
+                  zip((256.3, 210.1, 164.0, 117.9, 71.8), range(0, 5)))
+RG_SENSITIVITY = _plot(ROYAL_GOLD, 2, (361.4, 71.8, 562.0, 223.3),
+                       ((381.5, 300), (421.7, 400), (461.9, 500), (502.1, 600), (542.3, 700)),
+                       ((223.3, 0.0), (185.4, 1.0), (147.6, 2.0), (109.7, 3.0), (71.8, 4.0)))
+VERICOLOR = "e26-Vericolor_III.pdf"
+VC_CURVES = _plot(VERICOLOR, 3, (75.3, 72.0, 259.8, 257.3),
+                  zip((75.3, 121.4, 167.5, 213.7, 259.8), range(-3, 2)),
+                  zip((257.3, 211.0, 164.7, 118.4, 72.0), range(0, 5)))
+VC_SENSITIVITY = _plot(VERICOLOR, 3, (356.6, 75.0, 549.9, 211.7),
+                       zip((375.9, 395.3, 414.7, 434.1, 453.5, 472.8, 492.2, 511.6, 531.0), range(300, 701, 50)),
+                       ((75.0, 2.0), (109.2, 1.0), (143.4, 0.0), (177.6, -1.0), (211.7, -2.0)))
+
+
+def royal_gold_100():
+    return {"curves": vector_plots.joined_by_value(RG_CURVES, ("B", "G", "R"), at_x=0.0),
+            "sensitivity": vector_plots.joined_by_peak(RG_SENSITIVITY, ("B", "G", "R"))}
+
+
+def vericolor_iii():
+    return {"curves": vector_plots.joined_by_value(VC_CURVES, ("B", "G", "R"), at_x=0.0),
+            "sensitivity": vector_plots.joined_by_peak(VC_SENSITIVITY, ("B", "G", "R"))}
+
+
+# --- HARMAN Phoenix 200 (Sep 2024), pages 2 and 3 --------------------------------
+# Bitmaps: black curves on white over a grey grid, calibrated on the grid —
+# relative log exposure 0-3 and density 0-4 every half; 300-800 nm every 50
+# and "Relative Sensitivity" 0-5 every half. The characteristic curves are
+# read column by column and named top to bottom at the dense end, green, blue,
+# red, as the sheet labels them (blue and red lie on one another below log E
+# 1); each spectral sensitivity is walked from a point on its peak, the layer
+# names on the plot blanked first. The values are returned as plotted.
+PHOENIX = "HARMAN Phoenix Technical Data sheet 0924.pdf"
+
+
+def _phoenix_plot(page: int, x_values, y_values) -> tuple[np.ndarray, "raster.PlotFrame"]:
+    document = pymupdf.open(str(SHEETS / PHOENIX))
+    pixmap = pymupdf.Pixmap(document, document[page].get_images(full=True)[0][0])
+    grey = np.frombuffer(pixmap.samples, dtype=np.uint8).reshape(pixmap.height, pixmap.width, pixmap.n)[..., :3]
+    grey = grey.mean(axis=2)
+    rows, cols = raster.grid_lines(grey < 235)
+    if len(rows) != len(y_values) or len(cols) != len(x_values):
+        raise ValueError(f"{PHOENIX} page {page + 1}: {len(cols)} x {len(rows)} rules, "
+                         f"expected {len(x_values)} x {len(y_values)}")
+    frame = raster.PlotFrame(left=cols[0], right=cols[-1], top=rows[0], bottom=rows[-1],
+                             x_min=float(x_values[0]), x_max=float(x_values[-1]),
+                             y_at_top=float(y_values[0]), y_at_bottom=float(y_values[-1]))
+    return grey < 90, frame
+
+
+def phoenix_200():
+    ink, frame = _phoenix_plot(2, np.arange(0.0, 3.01, 0.5), np.arange(4.0, -0.01, -0.5))
+    x, (green, blue, red) = raster.trace(ink, frame, max_curves=3)
+    curves = {"G": np.stack([x, green], axis=-1), "B": np.stack([x, blue], axis=-1), "R": np.stack([x, red], axis=-1)}
+    ink, frame = _phoenix_plot(1, np.arange(300.0, 801.0, 50.0), np.arange(5.0, -0.01, -0.5))
+    names = ((178, 90, 228, 114), (370, 90, 428, 114), (516, 90, 556, 114))     # "Blue", "Green", "Red"
+    sensitivity = raster.trace_curves(ink, frame, {"B": (410.0, 2.37), "G": (520.0, 2.6), "g": (565.0, 1.3),
+                                                   "R": (650.0, 2.5)}, exclude=list(names))
+    # Green's peak is too sharp to walk over: its falling side has a seed of its own.
+    fall, rise = sensitivity.pop("g"), sensitivity["G"]
+    sensitivity["G"] = np.concatenate([rise[rise[:, 0] < fall[0, 0]], fall])
+    return {"curves": curves, "sensitivity": sensitivity}
+
+
 # The spectral density of a neutral at medium density and at D-min, which
 # these negative sheets plot in place of single-dye spectra: what the donor's
-# dyes are chosen against (`build_profiles.donor_fit`).
+# dyes are chosen against (`build_profiles.donor_fit`). Agfa's plots are
+# labelled in text on their rules and calibrated from it; Kodak's are named.
 NEUTRAL_SPECTRA = {
     "agfa_optima_ii_100": (AGFA, 6, (70.7, 227.5, 196.8, 290.4)),
     "agfa_portrait_xps_160": (AGFA, 7, (53.7, 227.5, 179.8, 290.4)),
+    "kodak_royal_gold_100": _plot(ROYAL_GOLD, 2, (234.1, 325.0, 418.4, 509.3),
+                                  ((234.1, 400), (295.5, 500), (357.0, 600), (418.4, 700)),
+                                  zip((509.3, 472.4, 435.6, 398.7, 361.8, 325.0), np.arange(0.0, 2.51, 0.5))),
+    "kodak_vericolor_iii_160": _plot(VERICOLOR, 3, (358.0, 374.6, 542.3, 558.9),
+                                     ((358.0, 400), (419.4, 500), (480.9, 600), (542.3, 700)),
+                                     zip((558.9, 522.0, 485.2, 448.3, 411.4, 374.6), np.arange(0.0, 2.51, 0.5))),
 }
+
+
+def neutral_spectra(stock: str) -> dict[str, np.ndarray]:
+    """The sheet's midscale neutral ("mid") and D-min ("min") spectral
+    densities, as (wavelength, density)."""
+    entry = NEUTRAL_SPECTRA[stock]
+    if not isinstance(entry, VectorPlot):
+        import datasheet as ds
+        pdf, page, frame = entry
+        axes = ds.calibrate(str(SHEETS / pdf), page, pymupdf.Rect(*frame))
+        entry = VectorPlot(str(SHEETS / pdf), page, frame, ((axes.x0, axes.x_min), (axes.x1, axes.x_max)),
+                           ((axes.y1, axes.y_at_bottom), (axes.y0, axes.y_at_top)))
+    return vector_plots.joined_by_value(entry, ("mid", "min"), at_x=550.0)
 
 
 SOURCES = {
@@ -310,6 +402,9 @@ SOURCES = {
     "kodak_kodachrome_64": kodachrome_64,
     "fujifilm_provia_400x": provia_400x,
     "fujifilm_provia_100f": provia_100f,
+    "kodak_royal_gold_100": royal_gold_100,
+    "kodak_vericolor_iii_160": vericolor_iii,
+    "harman_phoenix_200": phoenix_200,
 }
 
 # How the curves of a sheet read here were told apart, for the profile's
@@ -325,4 +420,7 @@ CURVES_READ = {
     "fujifilm_velvia_100": "read from the vector plot, each layer by its dash pattern",
     "kodak_ektachrome_100": "read from the vector plot, each layer by its order at the dense end",
     "fujifilm_provia_100f": "traced off the sheet's bitmap stencils, one per layer",
+    "kodak_royal_gold_100": "read from the vector plot, each layer by its order at the dense end",
+    "kodak_vericolor_iii_160": "read from the vector plot, each layer by its order at the dense end",
+    "harman_phoenix_200": "traced off the sheet's bitmap, each layer by its order at the dense end",
 }

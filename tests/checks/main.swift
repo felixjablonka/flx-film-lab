@@ -305,6 +305,42 @@ do {
     let flatGrade = try RenderSetupBuilder.resolveAuto(recipe: r, pixels: flat.pixels, width: flat.width,
                                                        height: flat.height, exposureEV: 0).recipe.grade
     check(flatGrade >= 92, String(format: "2-stop scene hardens only to R%.0f (never past R92)", flatGrade))
+
+    // HARMAN Phoenix 200 prints 2.2 times as hard as Portra 400 about
+    // mid-grey, so its grades reach R400 (`gradeSoftest`) where every other
+    // film's stop at R180, with the Contrast slider mapped as it always was.
+    // A 6-stop scene loses its shadows on Phoenix at R115; Auto Contrast goes
+    // past R180 to keep them.
+    let phoenix = try PackLibrary.shared.pack("harman_phoenix_200")
+    let usualRange = try PackLibrary.shared.filmStocks.filter { $0.stock != phoenix.stock }
+        .allSatisfy { try PackLibrary.shared.pack($0.stock).softestGrade == Constants.gradeMax }
+    check(phoenix.softestGrade == 400 && usualRange,
+          String(format: "Phoenix's softest grade R%.0f; every other film's R%.0f", phoenix.softestGrade, Constants.gradeMax))
+    let usual = Controls.contrast, phoenixScale = Controls.contrast(softest: 400)
+    let unchanged = stride(from: -100.0, through: 100, by: 10).allSatisfy {
+        abs(usual.toPhysical($0) - (Double(Constants.gradeReference) - $0 * 0.65)) < 1e-9
+            && abs(usual.fromPhysical(usual.toPhysical($0)) - $0) < 1e-9
+    }
+    check(unchanged && phoenixScale.toPhysical(-100) == 400 && phoenixScale.toPhysical(100) == usual.toPhysical(100)
+          && abs(phoenixScale.fromPhysical(phoenixScale.toPhysical(-37)) + 37) < 1e-9,
+          String(format: "Contrast -100 is R%.0f on Phoenix, R%.0f elsewhere; the hard half the same",
+                 phoenixScale.toPhysical(-100), usual.toPhysical(-100)))
+    // It opens at Contrast -30 on that scale (Felix's pick); every other film at 0.
+    let usualDefault = try PackLibrary.shared.filmStocks.filter { $0.stock != phoenix.stock }
+        .allSatisfy { try PackLibrary.shared.pack($0.stock).defaultGrade == Constants.gradeReference }
+    check(abs(phoenixScale.fromPhysical(Double(phoenix.defaultGrade)) + 30) < 1e-9 && usualDefault,
+          String(format: "Phoenix opens at R%.1f, Contrast %.0f on its scale; every other film at R115",
+                 phoenix.defaultGrade, phoenixScale.fromPhysical(Double(phoenix.defaultGrade))))
+    var p = try baseRecipe(film: phoenix.stock)
+    let six = scene(stops: 6)
+    let phoenixReference = try crushedShare(p, six)
+    p.autoGrade = true
+    let phoenixAuto = try RenderSetupBuilder.resolveAuto(recipe: p, pixels: six.pixels, width: six.width,
+                                                         height: six.height, exposureEV: 0).recipe
+    let phoenixFitted = try crushedShare(phoenixAuto, six)
+    check(phoenixAuto.grade > 180 && phoenixFitted < phoenixReference / 2,
+          String(format: "harman_phoenix_200, 6-stop scene: R%.0f, crushed %.0f%% -> %.0f%% of the frame",
+                 phoenixAuto.grade, phoenixReference * 100, phoenixFitted * 100))
     renderer.setImage(greyWedge(stops), width: stops.count, height: 1)
 }
 
@@ -393,7 +429,8 @@ do {
 
 print("black-and-white stocks print in silver")
 do {
-    let bw = ["kodak_tri_x_400", "kodak_tri_x_400_push2", "ilford_hp5_plus", "fujifilm_neopan_1600", "agfa_apx_25"]
+    let bw = ["kodak_tri_x_400", "kodak_tri_x_400_push2", "ilford_hp5_plus", "fujifilm_neopan_1600", "agfa_apx_25",
+              "kodak_t_max_100"]
     let paper = "ilford_multigrade_rc_deluxe"
 
     // A colourful chart, hue around and exposure across, grain on: on a
@@ -451,7 +488,7 @@ do {
             return 100 * hypot(s / s2, c / c2) / large
         }
         let kodak: [(f: Double, response: Double)] = [(8, 112.0), (24, 100.6), (50, 54.7)]
-        for film in bw where film != "agfa_apx_25" {
+        for film in bw where !["agfa_apx_25", "kodak_t_max_100"].contains(film) {
             var r = try baseRecipe(film: film)
             r.halationEnabled = true          // the scatter lives in the halation stage
             let got = try kodak.map { try response(r, at: $0.f) }
@@ -476,6 +513,17 @@ do {
             let got = try agfa.map { try response(r, at: $0.f) }
             check(zip(got, agfa).allSatisfy { abs($0 - $1.response) < 5 },
                   String(format: "agfa_apx_25: response %.0f%% at 5, %.0f%% at 20, %.0f%% at 30 cycles/mm (Agfa's 105, 99, 90)",
+                         got[0], got[1], got[2]))
+        }
+        // Kodak F-4016 gives T-Max 100 its own curve (D-76), far sharper than
+        // Tri-X's: 109% at 5 cycles/mm, 114% at 20 and still 112% at 30.
+        do {
+            var r = try baseRecipe(film: "kodak_t_max_100")
+            r.halationEnabled = true
+            let kodak: [(f: Double, response: Double)] = [(5, 109.0), (20, 114.0), (30, 112.0)]
+            let got = try kodak.map { try response(r, at: $0.f) }
+            check(zip(got, kodak).allSatisfy { abs($0 - $1.response) < 5 },
+                  String(format: "kodak_t_max_100: response %.0f%% at 5, %.0f%% at 20, %.0f%% at 30 cycles/mm (Kodak's 109, 114, 112)",
                          got[0], got[1], got[2]))
         }
 
@@ -589,7 +637,7 @@ do {
     // the aperture's area — at the 6 um pitch the bake calibrates at, a 6000 px
     // export of a 35 mm frame.
     for (film, rms) in [("kodak_tri_x_400", 17.0), ("kodak_tri_x_400_push2", 19.0), ("ilford_hp5_plus", 17.0),
-                        ("fujifilm_neopan_1600", 23.0), ("agfa_apx_25", 7.0)] {
+                        ("fujifilm_neopan_1600", 23.0), ("agfa_apx_25", 7.0), ("kodak_t_max_100", 8.0)] {
         let pack = try PackLibrary.shared.pack(film)
         let net = pack.densityCurves.enumerated().filter { $0.offset % 3 == 0 }.map { $0.element - pack.densityMin[0] }
         let logE = pack.logExposure
@@ -628,9 +676,43 @@ do {
     renderer.setImage(greyWedge(stops), width: stops.count, height: 1)
 }
 
-print("slides are as sharp as their sheets, and grey")
+print("slides take Tiffen's warming filters")
+do {
+    // Tiffen's 81C and 812, read off its catalogue's transmission curves. One
+    // filter factor opens up for the green-sensitive layer, so a grey card
+    // keeps its lightness while it warms: the 81C a plain amber, the 812 with
+    // half the yellow and nearer pink, as the two look on film. Tiffen rounds
+    // both factors to a third of a stop; its curves pass about two thirds of
+    // the green, half a stop.
+    let slides = PackLibrary.shared.filmStocks.filter { $0.type == "positive" }.map(\.stock)
+    let g = RenderSetupBuilder.midgrayValue
+    renderer.setImage([g, g, g, 1], width: 1, height: 1)
+    func hue(_ c: SIMD3<Float>) -> Float { atan2(c.z, c.y) * 180 / .pi }
+    for film in slides {
+        let filters = try PackLibrary.shared.pack(film).lensFilters ?? []
+        var r = try baseRecipe(film: film)
+        let plain = lab(try render(renderer, r)[0])
+        var casts: [String: SIMD3<Float>] = [:]
+        for f in filters {
+            r.lensFilter = f.id
+            casts[f.id] = lab(try render(renderer, r)[0]) - plain
+        }
+        let amber = casts["81c"] ?? .zero, pinker = casts["812"] ?? .zero
+        let opened = filters.map { log2($0.factor) }
+        check(filters.map(\.id) == ["81c", "812"] && opened.allSatisfy { $0 > 0.3 && $0 < 0.7 }
+              && abs(amber.x) < 2 && abs(pinker.x) < 2 && amber.z > 7 && pinker.z > 3 && pinker.z < amber.z
+              && hue(amber) > hue(pinker) + 5,
+              String(format: "%@: a grey through the 81C a* %+.1f b* %+.1f, through the 812 a* %+.1f b* %+.1f, %.0f° nearer pink; L* within %.1f, opened %.2f and %.2f stops",
+                     film, amber.y, amber.z, pinker.y, pinker.z, hue(amber) - hue(pinker),
+                     max(abs(amber.x), abs(pinker.x)), opened.first ?? 0, opened.last ?? 0))
+    }
+    renderer.setImage(greyWedge(stops), width: stops.count, height: 1)
+}
+
+print("slides, and Vericolor III, are as sharp as their sheets, and grey")
 // Each slide's scatter and spreading inhibition are fitted to its datasheet's
-// MTF (tools/bake/slide_mtf.py), one stop under mid-grey: the green layer's
+// MTF (tools/bake/slide_mtf.py), and so are Vericolor III's, the one colour
+// negative whose sheet plots one, one stop under mid-grey: the green layer's
 // density modulation for a small sinusoidal exposure against a large-area
 // step of the same size. Deeper down the edge effect must not run away — on
 // agx's couplers Provia 400X read 200% at 10 cycles/mm two stops down — and
@@ -642,6 +724,7 @@ do {
         ("fujifilm_velvia_50", [117, 122, 105, 81]), ("fujifilm_velvia_100", [109, 106, 84, 66]),
         ("kodak_ektachrome_100", [97, 91, 81, 63]), ("kodak_kodachrome_25", [131, 138, 110, 79]),
         ("kodak_kodachrome_64", [119, 123, 93, 69]), ("kodak_kodachrome_200", [119, 123, 93, 69]),
+        ("kodak_vericolor_iii_160", [114, 114, 95, 76]),
     ]
     let frequencies = [5.0, 10, 20, 30]
     let side = 6048, rows = 8, m = 0.02
@@ -704,7 +787,8 @@ print("colour negatives built from datasheets print a full, grey range")
 // once printed every shadow at L* 27: the axis does not place that rating.
 do {
     let negatives = ["fujifilm_superia_1600", "fujifilm_superia_reala_100", "agfa_optima_ii_100", "agfa_portrait_xps_160",
-                     "fujifilm_eterna_vivid_160t", "fujifilm_eterna_500t", "fujifilm_reala_500d"]
+                     "fujifilm_eterna_vivid_160t", "fujifilm_eterna_500t", "fujifilm_reala_500d", "kodak_royal_gold_100",
+                     "kodak_vericolor_iii_160", "harman_phoenix_200"]
     let wedge: [Float] = [-3, -2, -1, 0, 1, 2]
     renderer.setImage(greyWedge(wedge), width: wedge.count, height: 1)
     for film in negatives {
@@ -713,6 +797,19 @@ do {
         check(rising && out[0].x < 15 && out[5].x > 75 && abs(out[3].y) < 1 && abs(out[3].z) < 1,
               String(format: "%@: L* %.0f to %.0f from -3 to +2 stops, mid-grey a* %+.1f b* %+.1f",
                      film, out[0].x, out[5].x, out[3].y, out[3].z))
+    }
+    // HARMAN Phoenix 200 runs without DIR couplers (its curves are too steep
+    // for agx's), and without an orange mask needs about twice the usual
+    // yellow: the bake solves its filtration for every colour paper, where the
+    // engine's own solve, started at agx's default, misses it on most.
+    let phoenix = try PackLibrary.shared.pack("harman_phoenix_200")
+    check(phoenix.defaults.dirCouplers == nil, "harman_phoenix_200 carries no DIR couplers")
+    for entry in PackLibrary.shared.printStocks where entry.channelModel != "bw" {
+        var r = try baseRecipe(film: "harman_phoenix_200")
+        r.printStock = entry.stock
+        let grey = try render(renderer, r).map(lab)[3]
+        check(abs(grey.y) < 1 && abs(grey.z) < 1,
+              String(format: "harman_phoenix_200 on %@: mid-grey a* %+.1f b* %+.1f", entry.stock, grey.y, grey.z))
     }
     renderer.setImage(greyWedge(stops), width: stops.count, height: 1)
 }
@@ -876,6 +973,316 @@ do {
         let worst = levels.indices.map { abs(log2(back[$0 * 4 + 1] / levels[$0])) }.max() ?? .infinity
         check(worst < 0.02, String(format: "%@ 16-bit TIFF round trip within %.3f stops", space, worst))
     }
+}
+
+print("the print is turned, mirrored, levelled and cropped as it is, pixel for pixel")
+do {
+    // Lopsided in every direction, so a turn or a mirror the wrong way shows.
+    // The expressions here are kept short: GitHub's older compiler gave up
+    // type-checking the long ones.
+    let w = 48, h = 32
+    var px = [Float](repeating: 1, count: w * h * 4)
+    for y in 0..<h { for x in 0..<w {
+        let o = (y * w + x) * 4
+        let fx = Float(x) / Float(w), fy = Float(y) / Float(h)
+        px[o] = 0.04 + 0.4 * fx
+        px[o + 1] = 0.04 + 0.3 * fy
+        px[o + 2] = 0.06 + 0.3 * fx * fy
+    }}
+    renderer.setImage(px, width: w, height: h)
+    let plain = try baseRecipe(film: "kodak_portra_400")
+    let base = try render(renderer, plain)
+    func shaped(_ recipe: Recipe? = nil, _ edit: (inout FrameGeometry, CGSize) -> Void) throws
+        -> (pixels: [SIMD3<Float>], width: Int, height: Int) {
+        var r = recipe ?? plain
+        var g = r.geometry
+        edit(&g, g.turnedSize(width: Double(w), height: Double(h)))
+        r.geometry = g
+        let out = try render(renderer, r)
+        return (out, Int(renderer.outputSize.width), Int(renderer.outputSize.height))
+    }
+    /// Whether the print `p`, `pw` x `ph`, holds at each pixel the pixel of
+    /// `q`, `qw` wide, that `from` names: pixels moved, none changed.
+    func moved(_ p: [SIMD3<Float>], _ pw: Int, _ ph: Int, from q: [SIMD3<Float>], _ qw: Int,
+               _ from: (Int, Int) -> (Int, Int)) -> Bool {
+        for y in 0..<ph {
+            for x in 0..<pw {
+                let (qx, qy) = from(x, y)
+                if p[y * pw + x] != q[qy * qw + qx] { return false }
+            }
+        }
+        return true
+    }
+
+    var turned4 = FrameGeometry.identity
+    for _ in 0..<4 { turned4.turn(clockwise: true) }
+    var mirrored2 = FrameGeometry.identity
+    mirrored2.flip(horizontal: true)
+    mirrored2.flip(horizontal: true)
+    var none = plain
+    none.geometry = turned4
+    check(none.frameGeometry == nil && turned4 == .identity && mirrored2 == .identity,
+          "four quarter turns, or two mirrors, are no change at all, and are stored as none")
+
+    let right = try shaped { g, _ in g.turn(clockwise: true) }
+    let rightTurned = moved(right.pixels, h, w, from: base, w) { x, y in (y, h - 1 - x) }
+    check(right.width == h && right.height == w && rightTurned,
+          "a quarter turn to the right is the frame turned, exactly (\(right.width)x\(right.height))")
+    let left = try shaped { g, _ in g.turn(clockwise: false) }
+    check(moved(left.pixels, h, w, from: base, w) { x, y in (w - 1 - y, x) }, "and to the left")
+    let across = try shaped { g, _ in g.flip(horizontal: true) }
+    check(moved(across.pixels, w, h, from: base, w) { x, y in (w - 1 - x, y) }, "a mirror left to right is exact")
+    let down = try shaped { g, _ in g.turn(clockwise: true); g.flip(horizontal: false) }
+    check(moved(down.pixels, h, w, from: base, w) { x, y in (w - 1 - y, h - 1 - x) },
+          "and top to bottom, of the turned frame")
+
+    // A burn on the frame's left side stays on it: turned, the print is the
+    // unturned print turned, burn and all.
+    var burn = LocalMask()
+    burn.shape = .polygon
+    burn.points = [CGPoint(x: 0, y: 0), CGPoint(x: 0.3, y: 0), CGPoint(x: 0.3, y: 1), CGPoint(x: 0, y: 1)]
+    burn.stops = 1
+    var burnRecipe = plain
+    burnRecipe.masks = [burn]
+    renderer.setDodgeBurnMap(MaskRasterizer.rasterize(masks: [burn], width: w, height: h))
+    let burnt = try render(renderer, burnRecipe)
+    let burntRight = try shaped(burnRecipe) { g, _ in g.turn(clockwise: true) }
+    renderer.clearDodgeBurn()
+    let middle = w * (h / 2)
+    let darker = burnt[middle + 2].y < base[middle + 2].y
+    let untouched = burnt[middle + w - 3] == base[middle + w - 3]
+    check(darker && untouched, "(the burn darkens the frame's left side, and only that)")
+    check(moved(burntRight.pixels, h, w, from: burnt, w) { x, y in (y, h - 1 - x) },
+          "a burn stays where it was drawn on the frame: turned, the print is the burnt print turned")
+
+    let crop = CGRect(x: 10, y: 6, width: 20, height: 14)
+    let cut = try shaped { g, f in g.setAspect(.free, frame: f); g.setCrop(crop, frame: f) }
+    let cropped = moved(cut.pixels, 20, 14, from: base, w) { x, y in (10 + x, 6 + y) }
+    check(cut.width == 20 && cut.height == 14 && cropped,
+          "a crop is those pixels of the print, at their own size (\(cut.width)x\(cut.height))")
+
+    let developed = renderer.readTap("cmy_film")!
+    let level = try shaped { g, _ in g.setStraighten(9) }
+    let map = GeometryMap(FrameGeometry(straighten: 9), sourceWidth: w, sourceHeight: h)
+    let largest = FrameGeometry.largestCentred(ratio: Double(w) / Double(h), frame: CGSize(width: w, height: h),
+                                               degrees: 9)
+    // Every pixel's centre at least half a pixel inside the levelled frame.
+    var inside = true
+    for y in 0..<level.height {
+        for x in 0..<level.width {
+            let s = CGPoint(x: Double(x) + 0.5, y: Double(y) + 0.5).applying(map.outputToSource)
+            let margin: CGFloat = min(min(s.x, s.y), min(CGFloat(w) - s.x, CGFloat(h) - s.y))
+            if margin < 0.5 { inside = false }
+        }
+    }
+    let largestWidth = Int(largest.width), largestHeight = Int(largest.height)
+    let wideEnough = (largestWidth - 2...largestWidth).contains(level.width)
+    let tallEnough = (largestHeight - 2...largestHeight).contains(level.height)
+    check(wideEnough && tallEnough && inside,
+          "levelled 9°, the print is the largest crop of the frame's shape inside the picture, " +
+          "nothing empty (\(level.width)x\(level.height))")
+    // The developed negative, sampled where each levelled pixel comes from as
+    // apply_geometry does: Catmull-Rom, kept within the four nearest pixels.
+    let shapedNegative = renderer.readTap("shaped_cmy")!
+    func weights(_ t: Float) -> [Float] {
+        let t2 = t * t, t3 = t2 * t
+        let w0: Float = (2 * t2 - t3 - t) / 2
+        let w1: Float = (3 * t3 - 5 * t2 + 2) / 2
+        let w2: Float = (4 * t2 - 3 * t3 + t) / 2
+        let w3: Float = (t3 - t2) / 2
+        return [w0, w1, w2, w3]
+    }
+    func density(_ x: Int, _ y: Int) -> SIMD3<Float> {
+        let o = (min(max(y, 0), h - 1) * w + min(max(x, 0), w - 1)) * 4
+        return SIMD3(developed[o], developed[o + 1], developed[o + 2])
+    }
+    var worst: Float = 0
+    for y in 0..<level.height {
+        for x in 0..<level.width {
+            let s = CGPoint(x: Double(x) + 0.5, y: Double(y) + 0.5).applying(map.outputToSource)
+            let px = Float(s.x) - 0.5, py = Float(s.y) - 0.5
+            let fx = Int(px.rounded(.down)), fy = Int(py.rounded(.down))
+            let wx = weights(px - Float(fx)), wy = weights(py - Float(fy))
+            var want = SIMD3<Float>.zero
+            for j in 0..<4 {
+                for i in 0..<4 {
+                    let weight: Float = wx[i] * wy[j]
+                    want += weight * density(fx - 1 + i, fy - 1 + j)
+                }
+            }
+            let a = density(fx, fy), b = density(fx + 1, fy), c = density(fx, fy + 1), d = density(fx + 1, fy + 1)
+            let lowest = simd_min(simd_min(a, b), simd_min(c, d))
+            let highest = simd_max(simd_max(a, b), simd_max(c, d))
+            want = simd_clamp(want, lowest, highest)
+            let o = (y * level.width + x) * 4
+            let got = SIMD3<Float>(shapedNegative[o], shapedNegative[o + 1], shapedNegative[o + 2])
+            let scale = simd_max(abs(want), SIMD3<Float>(repeating: 1e-3))
+            let error: SIMD3<Float> = abs(got - want) / scale
+            worst = max(worst, error.max())
+        }
+    }
+    check(worst < 1e-4, String(format: "and the negative it is printed from is the frame's, levelled, within %.4f%%",
+                               worst * 100))
+    var whole = plain
+    whole.geometry = FrameGeometry(straighten: 9)
+    _ = try renderer.render(setup: try RenderSetupBuilder.build(recipe: whole), recipe: whole, wholeFrame: true)
+    let screen = renderer.makeDisplayImage(colorSpaceName: "sRGB")!
+    let bytes = CFDataGetBytePtr(screen.dataProvider!.data)!
+    let centre = ((h / 2) * w + w / 2) * 4 + 3
+    let emptyCorner = bytes[3] == 0, fullCentre = bytes[centre] == 255
+    check(screen.width == w && screen.alphaInfo == .premultipliedLast && emptyCorner && fullCentre,
+          "drawing the crop, the whole frame shows, its corners empty where levelling leaves them")
+}
+
+print("levelled, the print's grain is drawn on its own pixels")
+do {
+    // A flat grey, so nothing but the grain varies. Levelled 2.5°, the print's
+    // pixels fall at every position between the frame's; grain drawn on the
+    // frame and levelled with it came out 37% weaker halfway between pixels
+    // than on them, a faint grid every 23 pixels.
+    let w = 1200, h = 800
+    var px = [Float](repeating: 1, count: w * h * 4)
+    for i in 0..<(w * h) { px[i * 4] = 0.06; px[i * 4 + 1] = 0.06; px[i * 4 + 2] = 0.06 }
+    renderer.setImage(px, width: w, height: h)
+    var r = Recipe()
+    r.autoExposure = false
+    r.halationEnabled = false
+    var g = FrameGeometry()
+    g.setStraighten(2.5)
+    r.geometry = g
+    let out = try render(renderer, r)
+    let ow = Int(renderer.outputSize.width), oh = Int(renderer.outputSize.height)
+    let map = GeometryMap(g, sourceWidth: w, sourceHeight: h)
+    var sum = [Double](repeating: 0, count: 4), squares = sum, count = sum
+    for y in 2..<(oh - 2) {
+        for x in 2..<(ow - 2) {
+            var m: Float = 0
+            for j in -1...1 { for i in -1...1 { m += out[(y + j) * ow + x + i].y } }
+            let grain = Double(out[y * ow + x].y - m / 9)
+            let s = CGPoint(x: Double(x) + 0.5, y: Double(y) + 0.5).applying(map.outputToSource)
+            let sx = Double(s.x) - 0.5, sy = Double(s.y) - 0.5
+            let fx = sx - sx.rounded(.down), fy = sy - sy.rounded(.down)
+            // On the frame's pixels, or halfway between them, in each direction.
+            var bin = 0
+            if abs(fx - 0.5) < 0.25 { bin += 1 }
+            if abs(fy - 0.5) < 0.25 { bin += 2 }
+            sum[bin] += grain
+            squares[bin] += grain * grain
+            count[bin] += 1
+        }
+    }
+    var deviation: [Double] = []
+    for bin in 0..<4 {
+        let mean = sum[bin] / count[bin]
+        deviation.append(sqrt(squares[bin] / count[bin] - mean * mean))
+    }
+    let spread = (deviation.max() ?? 0) / max(deviation.min() ?? 1, 1e-12)
+    check(spread < 1.05, String(format: "as strong on the frame's pixels as between them: %.1f%% apart", (spread - 1) * 100))
+}
+
+print("the crop holds its shape, and stays inside the picture")
+do {
+    let proxy = CGSize(width: 2048, height: 1365)
+    func close(_ a: Double, _ b: Double, within tolerance: Double) -> Bool { abs(a - b) < tolerance }
+    func ratio(_ r: CGRect) -> Double { Double(r.width) / Double(r.height) }
+    var g = FrameGeometry()
+    g.setAspect(.fiveFour, frame: proxy)
+    g.swapOrientation(frame: proxy)
+    let upright = g.cropRect(frame: proxy)
+    let fullHeight = close(Double(upright.height), Double(proxy.height), within: 1e-6)
+    check(fullHeight && close(ratio(upright), 0.8, within: 1e-9),
+          String(format: "5:4 stood upright is the frame's full height at 4:5 (%.0f x %.0f)",
+                 upright.width, upright.height))
+    var moved = g
+    let leftward = upright.offsetBy(dx: -300, dy: 0)
+    moved.setCrop(leftward.scaled(by: 0.6, about: leftward.centre), frame: proxy)
+    let full = GeometryMap(moved, sourceWidth: 6048, sourceHeight: 4032)
+    let fullRatio = Double(full.outputWidth) / Double(full.outputHeight)
+    let onePixel = 0.5 / Double(full.outputHeight)
+    check(abs(fullRatio - 0.8) <= onePixel,
+          "drawn on the proxy, it is 4:5 in whole pixels at full size too (\(full.outputWidth)x\(full.outputHeight))")
+    for aspect in [CropAspect.threeTwo, .fourThree, .panoramic] {
+        var a = FrameGeometry()
+        a.setAspect(aspect, frame: proxy)
+        a.setStraighten(-14)
+        let r = a.cropRect(frame: proxy)
+        let kept = close(ratio(r), aspect.longOverShort!, within: 1e-9)
+        check(a.contains(r, frame: proxy) && kept,
+              "\(aspect.rawValue), levelled -14°, keeps its proportions inside the picture")
+    }
+    var custom = FrameGeometry()
+    custom.customWidth = 7
+    custom.customHeight = 5
+    custom.setAspect(.custom, frame: proxy)
+    let seven = custom.cropRect(frame: proxy)
+    custom.swapOrientation(frame: proxy)
+    let five = custom.cropRect(frame: proxy)
+    custom.turn(clockwise: true)
+    let turnedFrame = custom.turnedSize(width: proxy.width, height: proxy.height)
+    let turnedFive = custom.cropRect(frame: turnedFrame)
+    let laidDown = close(ratio(seven), 1.4, within: 1e-9)
+    let stoodUp = close(ratio(five), 5.0 / 7.0, within: 1e-9)
+    let readsAgain = custom.customWidth == 7 && custom.customHeight == 5
+    let turnedBack = close(ratio(turnedFive), 1.4, within: 1e-9)
+    check(laidDown && stoodUp && readsAgain && turnedBack,
+          "a custom 7:5 stands up as 5:7, and turned with its picture it reads 7:5 again")
+
+    var drawn = FrameGeometry()
+    drawn.setAspect(.free, frame: proxy)
+    let corner = CGRect(x: 40, y: 30, width: 900, height: 700)
+    drawn.setCrop(corner, frame: proxy)
+    drawn.setStraighten(12)
+    let shrunk = drawn.cropRect(frame: proxy)
+    drawn.setStraighten(0)
+    let back = drawn.cropRect(frame: proxy)
+    let shrank = shrunk.width < corner.width && drawn.contains(shrunk, frame: proxy)
+    let sameCorner = close(Double(back.minX), Double(corner.minX), within: 1e-6)
+        && close(Double(back.maxY), Double(corner.maxY), within: 1e-6)
+    let sameSize = close(Double(back.width), Double(corner.width), within: 1e-6)
+        && close(Double(back.height), Double(corner.height), within: 1e-6)
+    check(shrank && sameCorner && sameSize, "levelling shrinks a crop as far as it must, and levelling back gives it back")
+    var turned = drawn
+    turned.turn(clockwise: true)
+    turned.flip(horizontal: true)
+    check(turned.upright == drawn, "a crop turned and mirrored with its picture is still the same crop")
+}
+
+print("the meters read only what the crop keeps")
+do {
+    // Dark on the left, light on the right.
+    let w = 120, h = 80
+    var px = [Float](repeating: 1, count: w * h * 4)
+    for y in 0..<h { for x in 0..<w {
+        let side: Float = x < w / 2 ? 0.01 : 0.3
+        let ripple: Float = 1 + 0.2 * Float(y % 7) / 7
+        let o = (y * w + x) * 4
+        px[o] = side * ripple; px[o + 1] = side * ripple; px[o + 2] = side * ripple
+    }}
+    let film = try PackLibrary.shared.pack("kodak_portra_400")
+    func ev(_ g: FrameGeometry) -> Float {
+        let area = g.metered(px, width: w, height: h)
+        return RenderSetupBuilder.autoExposureEV(pixels: area.pixels, width: area.width, height: area.height, film: film)
+    }
+    var lightHalf = FrameGeometry()
+    lightHalf.setAspect(.free, frame: CGSize(width: w, height: h))
+    lightHalf.setCrop(CGRect(x: 60, y: 0, width: 60, height: 80), frame: CGSize(width: w, height: h))
+    var half: [Float] = []
+    for y in 0..<h {
+        let row = y * w * 4
+        half.append(contentsOf: px[(row + 60 * 4)..<(row + w * 4)])
+    }
+    let alone = RenderSetupBuilder.autoExposureEV(pixels: half, width: 60, height: h, film: film)
+    let cropped = ev(lightHalf), whole = ev(.identity)
+    check(cropped == alone && cropped < whole - 0.5,
+          String(format: "cropped to the light half, they read it as if it were the whole frame: %+.2f EV, not %+.2f",
+                 cropped, whole))
+    var turned = lightHalf
+    turned.turn(clockwise: true)
+    turned.flip(horizontal: false)
+    check(ev(turned) == cropped, "turning or mirroring the print does not move them")
+    var quarter = FrameGeometry.identity
+    quarter.turn(clockwise: false)
+    check(ev(quarter) == whole, "nor does turning a print that is not cropped")
 }
 
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) check(s) failed")

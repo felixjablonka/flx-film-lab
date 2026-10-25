@@ -84,13 +84,22 @@ enum Controls {
     /// Contrast, from the paper grade. Slope goes as 1/R, so more contrast is a
     /// lower ISO range value. ±100 spans the whole grade range, R180 to R50,
     /// so the slider can show anything Auto Contrast picks.
-    static let contrast = ControlSpec(
-        photographicName: "Contrast", darkroomName: "Grade",
-        range: -100...100, decimals: 0, unit: "",
-        explanation: "Overall contrast, set by the paper's contrast grade. "
-                   + "R115 is neutral; harder grades compress the scale into fewer stops.",
-        toPhysical: { Double(Constants.gradeReference) - $0 * 0.65 },
-        fromPhysical: { (Double(Constants.gradeReference) - $0) / 0.65 })
+    static let contrast = contrast(softest: Constants.gradeMax)
+
+    /// Contrast for a film whose softest grade is its own
+    /// (`ProfilePack.softestGrade`): the hard half as for every film, the soft
+    /// half spread from R115 to that grade. At R180 it is `contrast`.
+    static func contrast(softest: Float) -> ControlSpec {
+        let reference = Double(Constants.gradeReference)
+        let soft = (Double(softest) - reference) / 100
+        return ControlSpec(
+            photographicName: "Contrast", darkroomName: "Grade",
+            range: -100...100, decimals: 0, unit: "",
+            explanation: "Overall contrast, set by the paper's contrast grade. "
+                       + "R115 is neutral; harder grades compress the scale into fewer stops.",
+            toPhysical: { reference - $0 * ($0 < 0 ? soft : 0.65) },
+            fromPhysical: { reference - $0 < 0 ? (reference - $0) / soft : (reference - $0) / 0.65 })
+    }
 
     static let shadowContrast = linear(
         "Shadow contrast", "Shadow grade", physicalPerUnit: -0.4,

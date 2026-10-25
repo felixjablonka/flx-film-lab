@@ -195,7 +195,7 @@ enum RenderSetupBuilder {
             geometry = built.geometry
             toneAxis = built.axis
         } else {
-            let built = ToneCurve.buildLUT(paper: paper, recipe: recipe)
+            let built = ToneCurve.buildLUT(paper: paper, recipe: recipe, softest: film.softestGrade)
             toneLUT = built.data
             geometry = built.geometry
             toneAxis = (paper.logExposureStart,
@@ -695,7 +695,7 @@ enum RenderSetupBuilder {
         // factor f is simply grade R115 / f.
         let ratio = span / m.range
         let slope: Float = ratio < 1 ? min(ratio * 1.1, 1) : min(0.7 + 0.3 * ratio, 1.25)
-        return Double(min(max(reference / slope, Constants.gradeMin), Constants.gradeMax))
+        return Double(min(max(reference / slope, Constants.gradeMin), setup.film.softestGrade))
     }
 
     /// Auto Brightness: pull the frame's middle tone partway to where an 18%
@@ -708,7 +708,8 @@ enum RenderSetupBuilder {
         let reference = Constants.gradeReference
         let middleDensity: Float = scanFilm
             ? g.anchor + (m.middle - g.anchor) * reference / max(grade, 1)
-            : ToneCurve.neutralPaperDensity(paper: setup.paper, logExposure: m.middle, grade: grade)
+            : ToneCurve.neutralPaperDensity(paper: setup.paper, logExposure: m.middle, grade: grade,
+                                            softest: setup.film.softestGrade)
         let tMiddle = g.lightness.lightness(middleDensity)
         let want = autoBrightnessStrength * (g.midGrey - tMiddle)
         // The curve moves a tone by its profile there. Compensate for that only

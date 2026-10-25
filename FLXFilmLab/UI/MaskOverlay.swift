@@ -4,11 +4,16 @@ import SwiftUI
 /// Points are stored normalised, so a mask drawn on the proxy applies unchanged
 /// to the full-resolution export. The exposure gradients are edited here too,
 /// sharing the selection: identifiers are unique across both.
+///
+/// Points belong to the frame, not to the print: on a turned, levelled or
+/// cropped print they are drawn and dragged through `map`, where the image on
+/// screen comes from in the frame.
 struct MaskOverlay: View {
     @Binding var masks: [LocalMask]
     @Binding var gradients: [ExposureGradient]
     @Binding var selected: UUID?
     let frame: CGRect
+    var map: GeometryMap? = nil
     /// A white outline vanishes on a white surround, so it flips to dark.
     var onLightBackground: Bool = false
 
@@ -75,13 +80,28 @@ struct MaskOverlay: View {
         .allowsHitTesting(selected != nil)
     }
 
+    /// A point of the frame, normalised, on the canvas.
     private func point(_ p: CGPoint) -> CGPoint {
-        CGPoint(x: p.x * frame.width, y: p.y * frame.height)
+        guard let map, !map.isIdentity else { return CGPoint(x: p.x * frame.width, y: p.y * frame.height) }
+        let o = map.outputPoint(fromNormalised: p)
+        return CGPoint(x: o.x / CGFloat(map.outputWidth) * frame.width,
+                       y: o.y / CGFloat(map.outputHeight) * frame.height)
     }
 
+    /// A point on the canvas in the frame, normalised.
     private func normalized(_ p: CGPoint) -> CGPoint {
-        CGPoint(x: min(max(p.x / max(frame.width, 1), -0.5), 1.5),
-                y: min(max(p.y / max(frame.height, 1), -0.5), 1.5))
+        var n = CGPoint(x: p.x / max(frame.width, 1), y: p.y / max(frame.height, 1))
+        if let map, !map.isIdentity {
+            n = map.normalisedSource(fromOutput: CGPoint(x: n.x * CGFloat(map.outputWidth),
+                                                         y: n.y * CGFloat(map.outputHeight)))
+        }
+        return CGPoint(x: min(max(n.x, -0.5), 1.5), y: min(max(n.y, -0.5), 1.5))
+    }
+
+    /// Where `start` goes when dragged by `translation` on the canvas.
+    private func dragged(_ start: CGPoint, by translation: CGSize) -> CGPoint {
+        let p = point(start)
+        return normalized(CGPoint(x: p.x + translation.width, y: p.y + translation.height))
     }
 
     private func outline(for mask: LocalMask) -> Path {
@@ -156,10 +176,7 @@ struct MaskOverlay: View {
                         let start = dragOrigin[key] ?? masks[maskIndex].points[pointIndex]
                         if dragOrigin[key] == nil { dragOrigin[key] = start }
 
-                        let delta = CGPoint(x: value.translation.width / max(frame.width, 1),
-                                            y: value.translation.height / max(frame.height, 1))
-                        let moved = normalized(point(CGPoint(x: start.x + delta.x,
-                                                             y: start.y + delta.y)))
+                        let moved = dragged(start, by: value.translation)
 
                         if isCentre {
                             // An oval's axes are stored relative to its centre, so
@@ -229,15 +246,10 @@ struct MaskOverlay: View {
                               gradients[index].points.count >= 2 else { return }
                         let start = gradientDragOrigin ?? gradients[index].points
                         if gradientDragOrigin == nil { gradientDragOrigin = start }
-                        let delta = CGPoint(x: value.translation.width / max(frame.width, 1),
-                                            y: value.translation.height / max(frame.height, 1))
-                        func moved(_ p: CGPoint) -> CGPoint {
-                            normalized(point(CGPoint(x: p.x + delta.x, y: p.y + delta.y)))
-                        }
                         if let i = pointIndex {
-                            gradients[index].points[i] = moved(start[i])
+                            gradients[index].points[i] = dragged(start[i], by: value.translation)
                         } else {
-                            gradients[index].points = start.map(moved)
+                            gradients[index].points = start.map { dragged($0, by: value.translation) }
                         }
                     }
                     .onEnded { _ in gradientDragOrigin = nil }

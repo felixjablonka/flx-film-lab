@@ -107,11 +107,30 @@ def agfa_apx25_mtf() -> np.ndarray:
     return curve[np.concatenate([[True], np.diff(curve[:, 0]) > 1e-6])]
 
 
+def kodak_t_max_100_mtf() -> np.ndarray:
+    """Kodak's T-MAX 100 MTF (F-4016 page 8, D-76, small tank) as (cycles/mm,
+    fraction). A vector plot, both axes logarithmic; its 100% and 200% labels
+    are set larger than the rest, so it is calibrated on its gridlines, which
+    sit up to a point off a true logarithmic scale, fitted in least squares."""
+    from vector_plots import VectorPlot, by_position
+    plot = VectorPlot(str(SHEETS / "f4016_tmax_100-2018.pdf"), 7, (71.2, 260.1, 273.7, 413.1),
+                      tuple((x, np.log10(v)) for x, v in ((92.8, 2), (105.5, 3), (114.8, 4), (121.5, 5), (142.9, 10),
+                                                          (165.5, 20), (194.4, 50), (216.1, 100), (237.5, 200))),
+                      tuple((y, np.log10(v)) for y, v in ((260.1, 200), (279.4, 100), (289.9, 70), (299.6, 50),
+                                                          (314.3, 30), (326.1, 20), (346.2, 10), (356.5, 7),
+                                                          (366.7, 5), (380.9, 3), (393.5, 2), (413.1, 1))))
+    data = by_position(plot, ("mtf",))["mtf"]
+    curve = 10 ** data[np.argsort(data[:, 0])]
+    curve[:, 1] /= 100
+    return curve[np.concatenate([[True], np.diff(curve[:, 0]) > 1e-6])]
+
+
 # A stock whose own sheet publishes its MTF is fitted to that, up to 50
 # cycles/mm (finer, a 6000 px frame stops resolving the scatter's core: fitted
 # to Agfa's 91 the worst error was 17%, to 50 it is 3%); the others take
 # Kodak's Tri-X curve.
-SHEET_MTF = {"agfa_apx_25": lambda: (lambda c: c[c[:, 0] <= 50])(agfa_apx25_mtf())}
+SHEET_MTF = {"agfa_apx_25": lambda: (lambda c: c[c[:, 0] <= 50])(agfa_apx25_mtf()),
+             "kodak_t_max_100": lambda: (lambda c: c[c[:, 0] <= 50])(kodak_t_max_100_mtf())}
 
 
 def _gauss(sigma_um, f_cmm):

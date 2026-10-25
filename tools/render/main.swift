@@ -80,7 +80,7 @@ func flag(_ name: String) -> Bool { args.contains(name) }
 if let path = option("--recipe") {
     recipe = try JSONDecoder().decode(Recipe.self, from: Data(contentsOf: URL(fileURLWithPath: path)))
 }
-if let v = option("--film") { recipe.filmStock = v }
+if let v = option("--film") { recipe = recipe.loadingFilm(v) }   // as the app switches film
 if let v = option("--paper") { recipe.printStock = v }
 else if option("--film") != nil,
         let film = try? PackLibrary.shared.pack(recipe.filmStock),
@@ -127,18 +127,20 @@ do {
     let renderer = try Renderer()
     renderer.setImage(decoded.pixels, width: decoded.width, height: decoded.height)
 
+    // As the app does: the meters read only what the crop keeps.
+    let area = recipe.geometry.metered(decoded.pixels, width: decoded.width, height: decoded.height)
     if recipe.autoExposure, let film = try? PackLibrary.shared.pack(recipe.filmStock) {
-        let metered = RenderSetupBuilder.autoExposureEV(pixels: decoded.pixels,
-                                                        width: decoded.width,
-                                                        height: decoded.height,
+        let metered = RenderSetupBuilder.autoExposureEV(pixels: area.pixels,
+                                                        width: area.width,
+                                                        height: area.height,
                                                         film: film)
         recipe.exposureEV = Double(metered)
         print(String(format: "metered  %+.2f EV", metered))
     }
     let exposureEV = Float(recipe.exposureEV)
 
-    let auto = try RenderSetupBuilder.resolveAuto(recipe: recipe, pixels: decoded.pixels,
-                                                  width: decoded.width, height: decoded.height,
+    let auto = try RenderSetupBuilder.resolveAuto(recipe: recipe, pixels: area.pixels,
+                                                  width: area.width, height: area.height,
                                                   exposureEV: exposureEV)
     let resolved = auto.recipe
     if auto.metering != nil {
@@ -159,7 +161,8 @@ do {
                  setup.film.name, setup.paper.name, renderTime))
 
     guard let linear = renderer.readLinear() else { fail("render produced no pixels") }
-    try Exporter.write(linear: linear, width: decoded.width, height: decoded.height,
+    try Exporter.write(linear: linear, width: Int(renderer.outputSize.width),
+                       height: Int(renderer.outputSize.height),
                        to: outputURL, format: format, colorSpace: resolved.outputColorSpace,
                        metadata: RawLoader.metadata(of: inputURL))
     print("wrote    \(outputURL.path)")

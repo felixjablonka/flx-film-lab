@@ -3,11 +3,11 @@ import Foundation
 
 // Bakes a film-and-paper look into a .cube LUT for log footage: Nikon N-Log,
 // Apple Log or Apple Log 2 from an iPhone, Panasonic V-Log, Fujifilm F-Log or
-// F-Log2, Canon Log 2 or 3, or Sony S-Log3.
+// F-Log2, Canon Log 2 or 3, Sony S-Log3, or Insta360 I-Log.
 //
 //   flxlut <output.cube> [--film STOCK] [--paper STOCK] [--filter NAME] [--size 33|65]
 //          [--input code|video-levels|applelog|applelog2|vlog|flog|flog2|clog2|clog3|
-//                   slog3|slog3-sgamut3, each but the Apple Logs also as ...-video-levels]
+//                   slog3|slog3-sgamut3|ilog, each but the Apple Logs also as ...-video-levels]
 //          [--output bt1886|apple|srgb|linear]
 //          [--exposure EV] [--brightness L] [--grade R] [--shadows V]
 //          [--highlights V] [--density STOPS] [--yellow CC] [--magenta CC]
@@ -33,8 +33,9 @@ guard let outputPath = args.first, !outputPath.hasPrefix("--") else {
     usage: flxlut <output.cube> [options]
       --film STOCK         film profile (default kodak_portra_800)
       --paper STOCK        print profile (default: the film's reference paper)
-      --filter NAME        camera filter for a black-and-white film:
-                           blue, green, yellow, orange or red
+      --filter NAME        camera filter: blue, green, yellow, orange or red for a
+                           black-and-white film, 81c or 812 (Tiffen's warming
+                           filters) for a slide
       --size N             lattice points per axis (default 65; 33 for monitors)
       --input MODE         the footage, and how the app hands it to the LUT:
                              code          Nikon N-Log, code value / 1023: a Zf writes
@@ -56,6 +57,7 @@ guard let outputPath = args.first, !outputPath.hasPrefix("--") else {
                              clog3         Canon Log 3 / Cinema Gamut, code value / 1023
                              slog3         Sony S-Log3 / S-Gamut3.Cine, code value / 1023
                              slog3-sgamut3  Sony S-Log3 / S-Gamut3, code value / 1023
+                             ilog          Insta360 I-Log / BT.2020, code value / 1023
                              (each)-video-levels  that curve from a video-range file,
                                            as Resolve hands it: (code - 64) / 876
       --output MODE        bt1886   2.4 power, for a Rec.709 reference display (default)
@@ -98,7 +100,7 @@ if let path = option("--recipe") {
         fail("could not read recipe: \(error)")
     }
 }
-if let v = option("--film") { recipe.filmStock = v }
+if let v = option("--film") { recipe = recipe.loadingFilm(v) }   // as the app switches film
 if let v = option("--paper") { recipe.printStock = v }
 else if option("--film") != nil,
         let film = try? PackLibrary.shared.pack(recipe.filmStock),
@@ -141,6 +143,8 @@ case "slog3", "s-log3", "slog3-cine": input = .slog3Cine
 case "slog3-video-levels", "slog3-cine-video-levels": input = .slog3CineVideoLevels
 case "slog3-sgamut3", "s-log3-s-gamut3": input = .slog3
 case "slog3-sgamut3-video-levels": input = .slog3VideoLevels
+case "ilog", "i-log", "insta360": input = .ilog
+case "ilog-video-levels": input = .ilogVideoLevels
 case let other: fail("unknown --input \(other)")
 }
 let output: LookLUT.Output
@@ -158,7 +162,7 @@ do {
     let filter = film.lensFilter(recipe.lensFilter)
     if option("--filter") != nil, recipe.lensFilter != nil, filter == nil {
         let names = film.lensFilters?.map(\.id).joined(separator: ", ")
-        fail("\(film.name) has no \(recipe.lensFilter!) filter" + (names.map { "; it has \($0)" } ?? "; only black-and-white stocks take one"))
+        fail("\(film.name) has no \(recipe.lensFilter!) filter" + (names.map { "; it has \($0)" } ?? "; only black-and-white and slide stocks take one"))
     }
     let start = CFAbsoluteTimeGetCurrent()
     let baker = try LookBaker()
@@ -170,8 +174,8 @@ do {
     let rendering = lightTable ? "\(film.name) on a light table" : "\(film.name) printed on \(paper.name)"
     var comments = ["Made with FLX Film Lab (flxlut): \(rendering)"]
     if let filter {
-        comments.append(String(format: "Camera filter: %@, Wratten %@, %.1fx (exposure opened %.1f stops)",
-                               filter.name, filter.wratten, filter.factor, log2(max(filter.factor, 1))))
+        comments.append(String(format: "Camera filter: %@, %.1fx (exposure opened %.1f stops)",
+                               filter.designation, filter.factor, log2(max(filter.factor, 1))))
     }
     comments.append(String(format: "Exposure %+.2f EV, brightness %+.3f, grade R%.0f, shadows %+.2f, highlights %+.2f, print exposure %+.2f",
                            recipe.exposureEV, recipe.brightness, recipe.grade,

@@ -10,6 +10,7 @@ struct InspectorView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
+                cropSection
                 stockSection
                 exposureSection
                 gradientSection
@@ -50,6 +51,89 @@ struct InspectorView: View {
         Binding(get: { model.recipe.filmStock }, set: { model.selectFilm($0) })
     }
 
+    // MARK: Crop & straighten
+
+    private var geometry: FrameGeometry { model.recipe.geometry }
+
+    private var cropAspect: Binding<CropAspect> {
+        Binding(get: { model.recipe.geometry.aspect }, set: { model.setCropAspect($0) })
+    }
+
+    private var straighten: Binding<Double> {
+        Binding(get: { model.recipe.geometry.straighten }, set: { model.setStraighten($0) })
+    }
+
+    private func customSide(_ side: WritableKeyPath<FrameGeometry, Double>) -> Binding<Double> {
+        Binding(get: { model.recipe.geometry[keyPath: side] },
+                set: { value in
+                    var g = model.recipe.geometry
+                    g[keyPath: side] = value
+                    model.setCustomAspect(width: g.customWidth, height: g.customHeight)
+                })
+    }
+
+    private var cropSection: some View {
+        Section("Crop & Straighten",
+                subtitle: "The print's shape. The film is exposed and developed whole; the meters read only what the crop keeps.") {
+            HStack(spacing: 6) {
+                Toggle(isOn: $model.isCropping) { Label("Crop", systemImage: "crop").font(.system(size: 11)) }
+                    .toggleStyle(.button).controlSize(.small)
+                    .disabled(!model.hasImage)
+                    .help("Show the whole frame with the crop on it, to drag its corners and edges (⌘R).")
+                Picker("", selection: cropAspect) {
+                    ForEach(CropAspect.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .labelsHidden().controlSize(.small).frame(maxWidth: 104)
+                .help("The crop's proportions. Original keeps the frame's own; Free has none.")
+                Button { model.swapCropOrientation() } label: { Image(systemName: "rectangle.portrait.rotate") }
+                    .buttonStyle(.borderless).controlSize(.small)
+                    .disabled(geometry.aspect == .free || !model.hasImage)
+                    .help("Stand the crop up, or lay it down.")
+            }
+
+            if geometry.aspect == .custom {
+                HStack(spacing: 4) {
+                    TextField("Width", value: customSide(\.customWidth), format: .number)
+                        .frame(width: 52)
+                    Text(":").foregroundStyle(.secondary)
+                    TextField("Height", value: customSide(\.customHeight), format: .number)
+                        .frame(width: 52)
+                    Spacer()
+                }
+                .textFieldStyle(.roundedBorder).controlSize(.small).font(.system(size: 11))
+            }
+
+            HStack(spacing: 12) {
+                Button { model.turn(clockwise: false) } label: { Image(systemName: "rotate.left") }
+                    .help("Turn a quarter to the left (⌘[).")
+                Button { model.turn(clockwise: true) } label: { Image(systemName: "rotate.right") }
+                    .help("Turn a quarter to the right (⌘]).")
+                Button { model.flip(horizontal: true) } label: {
+                    Image(systemName: "arrow.left.and.right.righttriangle.left.righttriangle.right")
+                }
+                .help("Mirror left to right.")
+                Button { model.flip(horizontal: false) } label: {
+                    Image(systemName: "arrow.up.and.down.righttriangle.up.righttriangle.down")
+                }
+                .help("Mirror top to bottom.")
+                Spacer()
+                Toggle(isOn: $model.isLevelling) { Label("Level", systemImage: "level").font(.system(size: 11)) }
+                    .toggleStyle(.button).controlSize(.small)
+                    .help("Draw a line on the picture along a horizon, or along an upright, and the picture is levelled to it.")
+            }
+            .buttonStyle(.borderless)
+            .disabled(!model.hasImage)
+
+            ParamSlider(title: "Straighten", value: straighten, range: -FrameGeometry.maxStraighten...FrameGeometry.maxStraighten,
+                        defaultValue: 0, decimals: 1, unit: "°",
+                        help: "Levels the picture, turning it clockwise for positive values. The crop shrinks as far as it must to stay inside the picture, and grows back when you level the other way.")
+
+            Button("Reset crop") { model.resetGeometry() }
+                .buttonStyle(.link).font(.system(size: 10)).padding(.top, 2)
+                .disabled(model.recipe.frameGeometry == nil)
+        }
+    }
+
     // MARK: Stocks
 
     private var stockSection: some View {
@@ -81,7 +165,8 @@ struct InspectorView: View {
     // MARK: Exposure
 
     private var exposureSection: some View {
-        Section("Negative Exposure", subtitle: "How much light the film received.") {
+        Section(model.filmPack?.isPositive == true ? "Exposure" : "Negative Exposure",
+                subtitle: "How much light the film received.") {
             ToggleRow(title: "Auto exposure",
                       isOn: autoToggle(\.autoExposure, value: \.exposureEV, reading: { model.meteredExposureEV }),
                       help: "Meters the frame and sets the Exposure slider to it: the median is pulled most of the way to an 18% grey, but never so far that the brightest tones run past the stock's highlight headroom. Move the slider to take over from there; that turns the auto off.")
@@ -160,6 +245,7 @@ struct InspectorView: View {
                 Button {
                     var gradient = ExposureGradient()
                     gradient.name = "Gradient \(model.recipe.gradients.count + 1)"
+                    gradient.points = model.framePoints(gradient.points)
                     model.recipe.gradients.append(gradient)
                     selectedMask = gradient.id
                 } label: {
@@ -207,9 +293,6 @@ struct InspectorView: View {
                 }
                 recipe[keyPath: auto] = isOn
                 model.recipe = recipe
-                // Flipping the toggle by hand also says what newly opened
-                // images should start with.
-                model.rememberAutoPreference(auto, isOn: isOn)
             })
     }
 
@@ -235,9 +318,9 @@ struct InspectorView: View {
             ToggleRow(title: "Auto contrast",
                       isOn: autoToggle(\.autoGrade, value: \.grade, reading: { model.meteredGrade }),
                       help: "Fits the frame's textured range onto the paper and sets Contrast to it: softens until the darkest and lightest textured tones still hold detail, and hardens a flat scene only partway. Move the slider to take over from there; that turns the auto off.")
-            SpecSlider(spec: Controls.contrast,
+            SpecSlider(spec: Controls.contrast(softest: model.filmPack?.softestGrade ?? Constants.gradeMax),
                        physical: metered(\.grade, auto: \.autoGrade, reading: { model.meteredGrade }),
-                       vocabulary: vocabulary, defaultPhysical: Double(Constants.gradeReference))
+                       vocabulary: vocabulary, defaultPhysical: model.recipe.defaultGrade)
 
             Text(vocabulary == .photographic ? "Split contrast" : "Split grade")
                 .font(.system(size: 10, weight: .medium)).foregroundStyle(.tertiary).padding(.top, 3)
@@ -366,7 +449,7 @@ struct InspectorView: View {
                         var mask = LocalMask()
                         mask.shape = shape
                         mask.name = "\(shape.rawValue.capitalized) \(model.recipe.masks.count + 1)"
-                        mask.points = defaultPoints(for: shape)
+                        mask.points = model.framePoints(defaultPoints(for: shape))
                         model.recipe.masks.append(mask)
                         selectedMask = mask.id
                     } label: {
@@ -540,11 +623,10 @@ struct InspectorView: View {
             .help("Photographic uses the names Capture One and Lightroom use, where positive always means brighter. Darkroom shows the underlying print controls. Either way the tooltip names the other.")
 
             Picker("Preview size", selection: $model.proxyMaxDimension) {
-                Text("1024 px").tag(1024)
-                Text("2048 px").tag(2048)
-                Text("3072 px").tag(3072)
+                ForEach(DocumentModel.previewSizes, id: \.self) { Text("\($0) px").tag($0) }
             }
             .controlSize(.small).font(.system(size: 11))
+            .help("The preview's long side. Larger is sharper on screen and slower to redraw: on an M4 Pro a print control redraws 2560 px in about 23 ms and 4096 px in about 57. A file smaller than this is shown at its own size, never enlarged, and export is always at full size. Kept between launches.")
         }
     }
 }

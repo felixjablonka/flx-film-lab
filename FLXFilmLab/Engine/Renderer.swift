@@ -74,6 +74,28 @@ struct PrintUniforms {
     var pad7: Float = 0
 }
 
+/// A `GeometryMap` as the kernels read it: a print pixel's position to the
+/// frame's. `GeometryUniforms` in flx.metal; the default is the frame as it is.
+struct GeometryUniforms {
+    var column0 = SIMD2<Float>(1, 0)
+    var column1 = SIMD2<Float>(0, 1)
+    var offset = SIMD2<Float>.zero
+    var sourceSize = SIMD2<Float>.zero
+    var active: Int32 = 0
+    var pad: Int32 = 0
+
+    init() {}
+
+    init(_ map: GeometryMap) {
+        let t = map.outputToSource
+        column0 = SIMD2(Float(t.a), Float(t.b))
+        column1 = SIMD2(Float(t.c), Float(t.d))
+        offset = SIMD2(Float(t.tx), Float(t.ty))
+        sourceSize = SIMD2(Float(map.sourceSize.width), Float(map.sourceSize.height))
+        active = map.isIdentity ? 0 : 1
+    }
+}
+
 /// Everything the film stage reads. Equal keys mean the developed negative
 /// from the last render can be reused as it is.
 struct FilmStageKey: Equatable {
@@ -86,8 +108,11 @@ struct FilmStageKey: Equatable {
     var halation: [Double]
     var grain: [Double]
     var filmFormat: FilmFormat
+    /// The grain is drawn on the frame, unless the print is shaped: then it
+    /// is drawn on the print's own pixels (`Renderer.render`, step 2d).
+    var grainOnFrame: Bool
 
-    init(setup: RenderSetup, recipe: Recipe) {
+    init(setup: RenderSetup, recipe: Recipe, grainOnFrame: Bool = true) {
         film = setup.film.stock
         lensFilter = setup.lensFilter?.id
         exposureEV = setup.exposureEV
@@ -98,6 +123,7 @@ struct FilmStageKey: Equatable {
                     recipe.scatterAmount, recipe.scatterScale]
         grain = [recipe.grainEnabled ? 1 : 0, recipe.grainAmount, recipe.grainScale]
         filmFormat = recipe.filmFormat
+        self.grainOnFrame = grainOnFrame
     }
 }
 
@@ -165,6 +191,7 @@ final class Renderer {
     private let printAndScan: MTLComputePipelineState
     private let grainRestoreMean: MTLComputePipelineState
     private let encodeDisplay: MTLComputePipelineState
+    private let applyGeometry: MTLComputePipelineState
 
     // Per-image textures
     private var sourceTexture: MTLTexture?
@@ -189,6 +216,22 @@ final class Renderer {
     /// What the developed negative in `developedCmy` was made from.
     private var filmStageKey: FilmStageKey?
     private var displayStaging: MTLTexture?
+    /// A shaped print's own textures, at its own size: the negative turned,
+    /// levelled and cropped, the same with its grain, two scratch textures,
+    /// the print, and its copy for the screen.
+    private var shapedNegative: MTLTexture?
+    private var shapedGrainy: MTLTexture?
+    private var shapedScratchA: MTLTexture?
+    private var shapedScratchB: MTLTexture?
+    private var geometryLinear: MTLTexture?
+    private var geometryDisplay: MTLTexture?
+    /// What the last render finished with: the print as cut, linear and for
+    /// the screen, and whether the screen's copy has empty corners.
+    private var finishedLinear: MTLTexture?
+    private var finishedDisplay: MTLTexture?
+    private var displayHasAlpha = false
+    /// The last render's size: the frame's, or its crop's.
+    private(set) var outputSize: CGSize = .zero
 
     // Cached uploads
     private var tcLutTexture: MTLTexture?
@@ -238,6 +281,7 @@ final class Renderer {
         printAndScan = try pipeline("print_and_scan")
         grainRestoreMean = try pipeline("grain_restore_mean")
         encodeDisplay = try pipeline("encode_display")
+        applyGeometry = try pipeline("apply_geometry")
 
         dummyDodgeBurn = makeTexture(width: 1, height: 1, format: .rg32Float, write: false)
     }
@@ -294,14 +338,25 @@ final class Renderer {
         cmyFilmB = makeTexture(width: width, height: height, format: format)
         correction = makeTexture(width: width, height: height, format: format)
         correctionBlurred = makeTexture(width: width, height: height, format: format)
-        linearOut = makeTexture(width: width, height: height, format: .rgba32Float)
-        displayOut = makeTexture(width: width, height: height, format: .rgba8Unorm)
+        // The print at the frame's size is made on first use: a shaped print
+        // is made in textures of its own size instead.
+        linearOut = nil
+        displayOut = nil
         dodgeBurnTexture = nil
         effectsOut = nil
         filmStageKey = nil
         developedCmy = nil
         developedGrainFree = nil
         displayStaging = nil
+        shapedNegative = nil
+        shapedGrainy = nil
+        shapedScratchA = nil
+        shapedScratchB = nil
+        geometryLinear = nil
+        geometryDisplay = nil
+        finishedLinear = nil
+        finishedDisplay = nil
+        outputSize = .zero
     }
 
     private func makeTexture(width: Int, height: Int, format: MTLPixelFormat, write: Bool = true) -> MTLTexture? {
@@ -314,8 +369,11 @@ final class Renderer {
 
     // MARK: - Render
 
+    /// Render the print `recipe` makes, in the shape it gives the print.
+    /// `wholeFrame` keeps the whole frame, turned and levelled, for drawing
+    /// the crop on.
     @discardableResult
-    func render(setup: RenderSetup, recipe: Recipe) throws -> MTLTexture? {
+    func render(setup: RenderSetup, recipe: Recipe, wholeFrame: Bool = false) throws -> MTLTexture? {
         guard let source = sourceTexture,
               let raw = rawLinear,
               let rawB = rawLinearB,
@@ -325,9 +383,7 @@ final class Renderer {
               var cmy = cmyFilm,
               let cmyAlt = cmyFilmB,
               let corr = correction,
-              let corrBlurred = correctionBlurred,
-              let linear = linearOut,
-              let display = displayOut else { return nil }
+              let corrBlurred = correctionBlurred else { return nil }
 
         try ensureTcLut(for: setup.film, lensFilter: setup.lensFilter)
         uploadToneLUT(setup.toneLUT)
@@ -341,11 +397,17 @@ final class Renderer {
         let width = source.width, height = source.height
         guard let cb = queue.makeCommandBuffer() else { return nil }
 
+        // Turned, levelled or cropped, the print is made at its own size from
+        // the negative given its shape (step 2d).
+        let map = GeometryMap(recipe.geometry, sourceWidth: width, sourceHeight: height,
+                              wholeFrame: wholeFrame)
+        let shaped = !map.isIdentity
+
         // The film stage — exposure, halation, development, couplers, grain —
         // depends on none of the print controls. When only those moved, the
         // developed negative from the last render is reused: the print stage
         // alone is about a quarter of the work.
-        let filmKey = FilmStageKey(setup: setup, recipe: recipe)
+        let filmKey = FilmStageKey(setup: setup, recipe: recipe, grainOnFrame: !shaped)
         var grainFree: MTLTexture?
         if filmKey == filmStageKey, let developed = developedCmy {
             cmy = developed
@@ -436,31 +498,11 @@ final class Renderer {
                 cmy = cmyAlt
             }
 
-            // 2c — grain, in the density domain where development actually happens.
-            //      agx softens the drawn particles with a Gaussian of `blur`
-            //      pixels (0.65 for every stock), which takes the noise per
-            //      pixel down to under half; without it the grain was twice as
-            //      loud as agx's at any size. Only the grain is softened here,
-            //      not the image under it, so turning grain on costs no
-            //      sharpness. agx skips blurs under 0.4 px, and so does this.
-            if recipe.grainEnabled, recipe.grainAmount > 0, let grain = setup.film.defaults.grain {
+            // 2c — grain (`drawGrain`), on the frame unless the print is shaped.
+            if !shaped, recipe.grainEnabled, recipe.grainAmount > 0, let grain = setup.film.defaults.grain {
                 let target = (cmy === cmyAlt) ? cmyFilm! : cmyAlt
-                var uniforms = grainUniforms(grain: grain, setup: setup, recipe: recipe)
-                encode(cb, filmGrain, width: width, height: height) { e in
-                    e.setTexture(cmy, index: 0)
-                    e.setTexture(scratch1, index: 1)
-                    e.setBytes(&uniforms, length: MemoryLayout<GrainUniforms>.stride, index: 0)
-                }
-                var deviation = scratch1
-                if grain.blur > 0.4 {
-                    blur(cb, from: scratch1, to: scratch2, sigma: grain.blur)
-                    deviation = scratch2
-                }
-                encode(cb, filmGrainApply, width: width, height: height) { e in
-                    e.setTexture(cmy, index: 0)
-                    e.setTexture(deviation, index: 1)
-                    e.setTexture(target, index: 2)
-                }
+                drawGrain(cb, grain, on: cmy, into: target, scratch: scratch1, scratch2,
+                          setup: setup, recipe: recipe)
                 grainFree = cmy
                 cmy = target
             }
@@ -469,11 +511,68 @@ final class Renderer {
         }
         developedCmy = cmy
 
+        // 2d — the print's shape: the developed negative turned, mirrored,
+        //      levelled and cropped, as the enlarger's easel and the trimmer
+        //      would shape the print, and the rest made at the print's own
+        //      size. Exposure, halation and the couplers have acted on the
+        //      whole frame, and the pixels keep the frame's size, so a crop
+        //      enlarges the grain as cropping a print does. The grain is drawn
+        //      after, on the print's own pixels: drawn on the frame and
+        //      levelled with it, it was softened wherever the print's pixels
+        //      fall between the frame's, and showed a faint grid, every 23
+        //      pixels at 2.5°.
+        var negative = cmy
+        let printed: MTLTexture, screen: MTLTexture
+        var printScratch = scratch1, printScratchB = scratch2, grainyBlur = rawB
+        if shaped {
+            let w = map.outputWidth, h = map.outputHeight
+            if geometryLinear?.width != w || geometryLinear?.height != h {
+                shapedNegative = makeTexture(width: w, height: h, format: intermediateFormat)
+                shapedGrainy = makeTexture(width: w, height: h, format: intermediateFormat)
+                shapedScratchA = makeTexture(width: w, height: h, format: intermediateFormat)
+                shapedScratchB = makeTexture(width: w, height: h, format: intermediateFormat)
+                geometryLinear = makeTexture(width: w, height: h, format: .rgba32Float)
+                geometryDisplay = makeTexture(width: w, height: h, format: .rgba8Unorm)
+            }
+            guard let shapedNeg = shapedNegative, let grainy = shapedGrainy, let a = shapedScratchA,
+                  let b = shapedScratchB, let shapedPrint = geometryLinear, let shapedScreen = geometryDisplay else {
+                throw RendererError.textureAllocation
+            }
+            var uniforms = GeometryUniforms(map)
+            encode(cb, applyGeometry, width: w, height: h) { e in
+                e.setTexture(cmy, index: 0)
+                e.setTexture(shapedNeg, index: 1)
+                e.setBytes(&uniforms, length: MemoryLayout<GeometryUniforms>.stride, index: 0)
+            }
+            negative = shapedNeg
+            grainFree = nil
+            if recipe.grainEnabled, recipe.grainAmount > 0, let grain = setup.film.defaults.grain {
+                drawGrain(cb, grain, on: shapedNeg, into: grainy, scratch: a, b, setup: setup, recipe: recipe)
+                negative = grainy
+                grainFree = shapedNeg
+            }
+            printed = shapedPrint
+            screen = shapedScreen
+            // The grainy negative is printed before its texture is needed again.
+            printScratch = a
+            printScratchB = b
+            grainyBlur = grainy
+        } else {
+            if linearOut == nil {
+                linearOut = makeTexture(width: width, height: height, format: .rgba32Float)
+                displayOut = makeTexture(width: width, height: height, format: .rgba8Unorm)
+            }
+            guard let frame = linearOut, let frameScreen = displayOut else { throw RendererError.textureAllocation }
+            printed = frame
+            screen = frameScreen
+        }
+
         // 3 — printing.expose + printing.develop + scanning.scan, fused
         var printUniforms = setup.printUniforms
+        var shape = GeometryUniforms(map)
         let db = dodgeBurnTexture ?? dummyDodgeBurn
         func printNegative(_ negative: MTLTexture, into destination: MTLTexture) {
-            encode(cb, printAndScan, width: width, height: height) { e in
+            encode(cb, printAndScan, width: destination.width, height: destination.height) { e in
                 e.setTexture(negative, index: 0)
                 e.setTexture(destination, index: 1)
                 e.setTexture(toneLut, index: 2)
@@ -481,9 +580,10 @@ final class Renderer {
                 e.setBuffer(spectralBuffer, offset: 0, index: 0)
                 e.setBytes(&printUniforms, length: MemoryLayout<PrintUniforms>.stride, index: 1)
                 e.setBuffer(toneShiftBuffer, offset: 0, index: 2)
+                e.setBytes(&shape, length: MemoryLayout<GeometryUniforms>.stride, index: 3)
             }
         }
-        printNegative(cmy, into: linear)
+        printNegative(negative, into: printed)
 
         // 3b — grain as texture only.
         //
@@ -508,36 +608,74 @@ final class Renderer {
         // appears to average when it fits an image to its window. The
         // film-stage scratch textures are free by now.
         if let grainFree {
-            printNegative(grainFree, into: scratch1)
-            blur(cb, from: linear, to: rawB, sigma: 3)
-            blur(cb, from: scratch1, to: scratch2, sigma: 3)
-            encode(cb, grainRestoreMean, width: width, height: height) { e in
-                e.setTexture(linear, index: 0)
-                e.setTexture(rawB, index: 1)
-                e.setTexture(scratch2, index: 2)
+            printNegative(grainFree, into: printScratch)
+            blur(cb, from: printed, to: grainyBlur, sigma: 3)
+            blur(cb, from: printScratch, to: printScratchB, sigma: 3)
+            encode(cb, grainRestoreMean, width: printed.width, height: printed.height) { e in
+                e.setTexture(printed, index: 0)
+                e.setTexture(grainyBlur, index: 1)
+                e.setTexture(printScratchB, index: 2)
             }
         }
 
         // 3c — bloom and glow: Glow's effects (FLXFilmLab/Effects), a look laid
         //      on the finished print in linear light. Their sizes are
-        //      fractions of the long edge, so the preview blooms as the
-        //      full-size export does. Core Image encodes into this same
-        //      command buffer.
+        //      fractions of the frame's long edge, so the preview blooms as the
+        //      full-size export does, and a crop enlarges them as it enlarges
+        //      the grain. Core Image encodes into this same command buffer.
         if let effects = recipe.effects, effects.isActive {
-            applyEffects(effects, to: linear, commandBuffer: cb)
+            applyEffects(effects, to: printed, longEdge: max(width, height), commandBuffer: cb)
         }
 
-        // 4 — output encoding for the screen
+        // 4 — output encoding for the screen. While the crop is drawn, the
+        //     corners levelling leaves empty are transparent.
         var encoding: Int32 = recipe.outputColorSpace == "ProPhoto RGB" ? 2 : 1
-        encode(cb, encodeDisplay, width: width, height: height) { e in
-            e.setTexture(linear, index: 0)
-            e.setTexture(display, index: 1)
+        var coverage: Int32 = wholeFrame && shaped ? 1 : 0
+        encode(cb, encodeDisplay, width: printed.width, height: printed.height) { e in
+            e.setTexture(printed, index: 0)
+            e.setTexture(screen, index: 1)
             e.setBytes(&encoding, length: MemoryLayout<Int32>.stride, index: 0)
+            e.setBytes(&coverage, length: MemoryLayout<Int32>.stride, index: 1)
+            e.setBytes(&shape, length: MemoryLayout<GeometryUniforms>.stride, index: 2)
         }
 
         cb.commit()
         cb.waitUntilCompleted()
-        return display
+        finishedLinear = printed
+        finishedDisplay = screen
+        displayHasAlpha = coverage == 1
+        outputSize = CGSize(width: printed.width, height: printed.height)
+        return screen
+    }
+
+    /// 2c — grain, in the density domain where development actually happens.
+    /// agx softens the drawn particles with a Gaussian of `blur` pixels (0.65
+    /// for every stock), which takes the noise per pixel down to under half;
+    /// without it the grain was twice as loud as agx's at any size. Only the
+    /// grain is softened here, not the image under it, so turning grain on
+    /// costs no sharpness. agx skips blurs under 0.4 px, and so does this.
+    /// The particles' size is the frame's (`imageSize`), whatever the size of
+    /// `clean`.
+    private func drawGrain(_ cb: MTLCommandBuffer, _ grain: GrainDefaults, on clean: MTLTexture,
+                           into target: MTLTexture, scratch scratch1: MTLTexture, _ scratch2: MTLTexture,
+                           setup: RenderSetup, recipe: Recipe) {
+        let width = clean.width, height = clean.height
+        var uniforms = grainUniforms(grain: grain, setup: setup, recipe: recipe)
+        encode(cb, filmGrain, width: width, height: height) { e in
+            e.setTexture(clean, index: 0)
+            e.setTexture(scratch1, index: 1)
+            e.setBytes(&uniforms, length: MemoryLayout<GrainUniforms>.stride, index: 0)
+        }
+        var deviation = scratch1
+        if grain.blur > 0.4 {
+            blur(cb, from: scratch1, to: scratch2, sigma: grain.blur)
+            deviation = scratch2
+        }
+        encode(cb, filmGrainApply, width: width, height: height) { e in
+            e.setTexture(clean, index: 0)
+            e.setTexture(deviation, index: 1)
+            e.setTexture(target, index: 2)
+        }
     }
 
     // MARK: - Effects
@@ -549,8 +687,10 @@ final class Renderer {
     private static let effectsSpace = CGColorSpace(name: CGColorSpace.extendedLinearSRGB)!
 
     /// Runs Glow's pipeline over the print and writes the result back. Float
-    /// throughout, so a 16-bit TIFF keeps its precision.
-    private func applyEffects(_ look: GlowLook, to linear: MTLTexture, commandBuffer cb: MTLCommandBuffer) {
+    /// throughout, so a 16-bit TIFF keeps its precision. `longEdge` is the
+    /// frame's, which sets the effects' sizes.
+    private func applyEffects(_ look: GlowLook, to linear: MTLTexture, longEdge: Int,
+                              commandBuffer cb: MTLCommandBuffer) {
         if effectsContext == nil {
             effectsContext = CIContext(mtlCommandQueue: queue, options: [
                 .workingColorSpace: Self.effectsSpace,
@@ -564,8 +704,7 @@ final class Renderer {
         }
         guard let context = effectsContext, let out = effectsOut,
               let image = CIImage(mtlTexture: linear, options: [.colorSpace: Self.effectsSpace]) else { return }
-        let result = GlowPipeline.apply(look, to: image,
-                                        longEdge: CGFloat(max(linear.width, linear.height)))
+        let result = GlowPipeline.apply(look, to: image, longEdge: CGFloat(longEdge))
         context.render(result, to: out, commandBuffer: cb, bounds: image.extent, colorSpace: Self.effectsSpace)
         guard let blit = cb.makeBlitCommandEncoder() else { return }
         blit.copy(from: out, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
@@ -845,18 +984,19 @@ final class Renderer {
 
     // MARK: - Readback
 
-    /// Linear working-space pixels, for export and for the parity harness.
+    /// Linear working-space pixels of the last render, `outputSize`, for
+    /// export and for the parity harness.
     func readLinear() -> [Float]? {
-        guard let linear = linearOut else { return nil }
+        guard let linear = finishedLinear ?? linearOut else { return nil }
         return readback(linear)
     }
 
     func makeDisplayImage(colorSpaceName: String) -> CGImage? {
-        guard let display = displayOut else { return nil }
+        guard let display = finishedDisplay ?? displayOut else { return nil }
         let w = display.width, h = display.height
         // A private texture cannot be read directly; stage through a shared
         // one, kept between frames rather than allocated for every one.
-        if displayStaging == nil {
+        if displayStaging?.width != w || displayStaging?.height != h {
             let d = MTLTextureDescriptor.texture2DDescriptor(
                 pixelFormat: display.pixelFormat, width: w, height: h, mipmapped: false)
             d.usage = [.shaderRead]
@@ -881,9 +1021,10 @@ final class Renderer {
         }
         let cs = Self.cgColorSpace(named: colorSpaceName)
         guard let provider = CGDataProvider(data: Data(bytes) as CFData) else { return nil }
+        let alpha: CGImageAlphaInfo = displayHasAlpha ? .premultipliedLast : .noneSkipLast
         return CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 32,
                        bytesPerRow: w * 4, space: cs,
-                       bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue),
+                       bitmapInfo: CGBitmapInfo(rawValue: alpha.rawValue),
                        provider: provider, decode: nil, shouldInterpolate: false,
                        intent: .defaultIntent)
     }
@@ -937,6 +1078,7 @@ final class Renderer {
         case "log_e_film": return logEFilm.flatMap(readback)
         case "cmy_film":   return (developedCmy ?? cmyFilm).flatMap(readback)
         case "rgb_out":    return linearOut.flatMap(readback)
+        case "shaped_cmy": return shapedNegative.flatMap(readback)
         default: return nil
         }
     }

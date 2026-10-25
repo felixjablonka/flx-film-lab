@@ -34,7 +34,7 @@ struct ParamSlider: View {
             }
             Slider(value: $value, in: range)
                 .controlSize(.mini)
-                .onTapGesture(count: 2) { withAnimation(.easeOut(duration: 0.15)) { value = defaultValue } }
+                .resetOnDoubleClick { withAnimation(.easeOut(duration: 0.15)) { value = defaultValue } }
         }
         .help(help.isEmpty ? "Double-click the slider to reset" : help + "\n\nDouble-click the slider to reset.")
         .padding(.vertical, 1)
@@ -114,7 +114,7 @@ struct ChannelTrimRow: View {
                         Slider(value: Binding(get: { trim[i] }, set: { trim[i] = $0 }), in: range)
                             .controlSize(.mini)
                             .tint(tints[i])
-                            .onTapGesture(count: 2) { trim[i] = 0 }
+                            .resetOnDoubleClick { trim[i] = 0 }
                         Text(names[i])
                             .font(.system(size: 8, design: .monospaced))
                             .foregroundStyle(.tertiary)
@@ -151,9 +151,19 @@ struct CMYRow: View {
     private func trim(_ label: String, _ tint: Color, _ binding: Binding<Double>) -> some View {
         VStack(spacing: 1) {
             Slider(value: binding, in: range).controlSize(.mini).tint(tint)
-                .onTapGesture(count: 2) { binding.wrappedValue = 0 }
+                .resetOnDoubleClick { binding.wrappedValue = 0 }
             Text(label).font(.system(size: 8, design: .monospaced)).foregroundStyle(.tertiary)
         }
+    }
+}
+
+extension View {
+    /// Runs `reset` on a double-click. A macOS slider handles its own clicks, so
+    /// a plain tap gesture on it never sees the second one; recognised
+    /// alongside the slider's own, it does. The two clicks still move the
+    /// slider first, and the reset then puts it back.
+    func resetOnDoubleClick(_ reset: @escaping () -> Void) -> some View {
+        simultaneousGesture(TapGesture(count: 2).onEnded(reset))
     }
 }
 
@@ -219,8 +229,9 @@ struct StockPicker: View {
     }
 }
 
-/// The camera filters a black-and-white stock carries (`ProfilePack.lensFilters`),
-/// each with how far it holds back a mid-grey.
+/// The camera filters a stock carries (`ProfilePack.lensFilters`): Kodak's
+/// Wratten filters on a black-and-white film, Tiffen's warming filters on a
+/// slide. Each shows how far it holds back a mid-grey.
 struct LensFilterPicker: View {
     let filters: [LensFilterRef]
     @Binding var selection: String?
@@ -229,12 +240,14 @@ struct LensFilterPicker: View {
         Picker("Filter", selection: $selection) {
             Text("None").tag(String?.none)
             ForEach(filters) { filter in
-                Text("\(filter.name) · Wratten \(filter.wratten) · \(Self.factor(filter.factor))")
+                Text("\(filter.designation) · \(Self.factor(filter.factor))")
                     .tag(String?.some(filter.id))
             }
         }
         .controlSize(.small).font(.system(size: 11))
-        .help("A coloured filter on the lens, measured from Kodak's Wratten data. It passes its own colour and holds back the rest: yellow, orange and red darken a blue sky progressively; red lightens skin and darkens foliage; green does the opposite; blue lightens skies and haze and deepens reds. Exposure is opened up by the filter factor shown, as a photographer would, so a grey card prints the same.")
+        .help(filters.contains { $0.wratten != nil }
+              ? "A coloured filter on the lens, measured from Kodak's Wratten data. It passes its own colour and holds back the rest: yellow, orange and red darken a blue sky progressively; red lightens skin and darkens foliage; green does the opposite; blue lightens skies and haze and deepens reds. Exposure is opened up by the filter factor shown, as a photographer would, so a grey card prints the same."
+              : "A warming filter on the lens, measured from Tiffen's own transmission curves, for slide film's cool shade, overcast light and flash. The 81C holds back blue and some green, a plain amber warmth; the 812 holds back violet and a little blue and lets blue and green through alike, so its warmth leans pink. Exposure is opened up by the filter factor shown, as a photographer would, so the picture keeps its brightness.")
     }
 
     /// "8.2×, 3.0 stops": how much the filter holds back from a mid-grey.

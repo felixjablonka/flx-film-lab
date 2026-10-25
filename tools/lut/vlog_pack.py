@@ -3,9 +3,10 @@
 
 Every film stock in the app, on its reference paper (a slide on its light
 table), as a table for a Lumix camera's Real Time LUT, and Tri-X through each
-of its five camera filters. Tri-X, pushed and through its filters too, and
-HP5 Plus are printed at Contrast +20, ISO R102: at the neutral R115 they
-print a little flat.
+of its five camera filters. Tri-X, pushed and through its filters too, HP5
+Plus and T-Max 100 are printed at Contrast +20, ISO R102: at the neutral
+R115 they print a little flat. A film that opens at a contrast of its own
+(Phoenix 200) is printed at it, as the app opens it.
 
     python3 tools/lut/vlog_pack.py [VERSION]
 
@@ -39,6 +40,7 @@ NAMES = {
     "fujifilm_superia_1600": "SUPR1600",
     "fujifilm_superia_reala_100": "REALA100",
     "fujifilm_xtra_400": "XTRA400",
+    "harman_phoenix_200": "PHNX200",
     "kodak_ektar_100": "EKTAR100",
     "kodak_gold_200": "GOLD200",
     "kodak_portra_160": "PORTR160",
@@ -46,7 +48,9 @@ NAMES = {
     "kodak_portra_800": "PORTR800",
     "kodak_portra_800_push1": "P800PSH1",
     "kodak_portra_800_push2": "P800PSH2",
+    "kodak_royal_gold_100": "RGOLD100",
     "kodak_ultramax_400": "UMAX400",
+    "kodak_vericolor_iii_160": "VCIII160",
     "fujifilm_eterna_500t": "ETER500T",
     "fujifilm_eterna_vivid_160t": "EVIV160T",
     "fujifilm_reala_500d": "REAL500D",
@@ -69,6 +73,7 @@ NAMES = {
     "ilford_hp5_plus": "HP5PLUS",
     "kodak_tri_x_400": "TRIX400",
     "kodak_tri_x_400_push2": "TRIXPSH2",
+    "kodak_t_max_100": "TMAX100",
 }
 # Tri-X through each camera filter flxlut knows: its name, file name and
 # Kodak Wratten number.
@@ -77,7 +82,7 @@ FILTERS = [("blue", "TRIXBLU", 47), ("green", "TRIXGRN", 58), ("yellow", "TRIXYE
            ("orange", "TRIXORG", 22), ("red", "TRIXRED", 25)]
 # Printed harder than the neutral R115, which leaves them flat. Contrast +20
 # is R115 - 20 x 0.65 (ControlVocabulary.contrast).
-HARDER = {"kodak_tri_x_400": 102, "kodak_tri_x_400_push2": 102, "ilford_hp5_plus": 102}
+HARDER = {"kodak_tri_x_400": 102, "kodak_tri_x_400_push2": 102, "ilford_hp5_plus": 102, "kodak_t_max_100": 102}
 HARDER_NOTE = "Contrast +20"
 WORDS = ["no", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"]
 
@@ -183,7 +188,7 @@ README = """\
 
 All {stocks} film stocks in FLX Film Lab {version}, with the {pushes} pushed versions, and Tri-X through each of its {filters} camera filters: {count} LUTs for a Lumix camera's Real Time LUT, which applies them to photos (JPEG and HEIF) as well as to video.
 
-Colour negatives are printed on their usual paper, black-and-white films on Ilford Multigrade, and slide films are shown as transparencies, all with the app's default settings, except that Tri-X, pushed and through its filters too, and HP5 Plus are printed at Contrast +20 (ISO R102), as they come out a little flat otherwise.
+Colour negatives are printed on their usual paper, black-and-white films on Ilford Multigrade, and slide films are shown as transparencies, all with the app's default settings, except that Tri-X, pushed and through its filters too, HP5 Plus and T-Max 100 are printed at Contrast +20 (ISO R102), as they come out a little flat otherwise. Phoenix 200 is printed at the slightly softer contrast the app opens it at, Contrast -30 on its own scale (ISO R200.5).
 
 Each is a 33-point .cube file for V-Log: full-range V-Log in, the sRGB curve out, with V-Log named as the base Photo Style. The file names are at most eight letters and digits, as the camera's card needs.
 

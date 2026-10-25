@@ -42,6 +42,9 @@ final class DocumentModel: ObservableObject {
         }
     }
     @Published private(set) var displayImage: CGImage?
+    /// Where the image on screen comes from in the frame: the print as cut,
+    /// or, while cropping, the whole frame turned and levelled.
+    @Published private(set) var displayMap: GeometryMap?
     @Published private(set) var isRendering = false
     @Published private(set) var status: String = "Open a RAW file to begin"
     @Published private(set) var errorMessage: String?
@@ -71,9 +74,20 @@ final class DocumentModel: ObservableObject {
     @Published private(set) var resolvedRecipe: Recipe?
     @Published private(set) var isDecoding = false
 
-    /// Longest edge of the interactive proxy. Big enough to judge tone and
-    /// colour, small enough that the whole graph stays under a frame.
-    var proxyMaxDimension = 2048 { didSet { syncSource() } }
+    /// Longest edge of the interactive proxy, one of `previewSizes`. At 2560,
+    /// big enough to judge tone and colour, small enough that a print control
+    /// re-renders it in 23 ms and an exposure control in 40 ms on an M4 Pro;
+    /// at 4096, 57 and 98 ms. The choice is kept between launches.
+    var proxyMaxDimension: Int {
+        didSet {
+            defaults.set(proxyMaxDimension, forKey: Self.previewSizeKey)
+            syncSource()
+        }
+    }
+    static let previewSizes = [1024, 2048, 2560, 3072, 4096]
+    static let defaultPreviewSize = 2560
+    private static let previewSizeKey = "previewSize"
+    private let defaults: UserDefaults
 
     /// One decode: the file and every option that changes its pixels.
     struct DecodeKey: Equatable {
@@ -118,10 +132,15 @@ final class DocumentModel: ObservableObject {
     private var renderInFlight = false
     private var renderAgain = false
 
-    init() {
+    init(presetStore: PresetStore = PresetStore(), defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        let saved = defaults.integer(forKey: Self.previewSizeKey)
+        proxyMaxDimension = Self.previewSizes.contains(saved) ? saved : Self.defaultPreviewSize
         let made = Result { try RenderEngine() }
         engine = try? made.get()
         if case .failure(let error) = made { errorMessage = error.localizedDescription }
+        self.presetStore = presetStore
+        presets = presetStore.load()
     }
 
     var hasImage: Bool { loaded != nil }
@@ -160,9 +179,7 @@ final class DocumentModel: ObservableObject {
     private func edits(for url: URL) -> ImageEdits {
         if url == fileURL { return currentEdits }
         if let remembered = editsByImage[url] { return remembered }
-        let fresh = recipe.carryingLook(autoExposure: prefersAuto(\.autoExposure),
-                                        autoBrightness: prefersAuto(\.autoDensity),
-                                        autoContrast: prefersAuto(\.autoGrade))
+        let fresh = recipe.carryingLook()
         return ImageEdits(recipe: fresh, whiteBalance: .filmReference,
                           customTemperature: 5500, customTint: 0)
     }
@@ -254,6 +271,7 @@ final class DocumentModel: ObservableObject {
             whiteBalance = incoming.whiteBalance
             customTemperature = incoming.customTemperature
             customTint = incoming.customTint
+            isCropping = false
             applyingEdits = false
             fileURL = key.url
             if pendingURL == key.url { pendingURL = nil }
@@ -289,28 +307,103 @@ final class DocumentModel: ObservableObject {
         recipe = recipe.loadingFilm(stock)
     }
 
-    // MARK: - Auto preferences
+    // MARK: - Copy and paste settings
 
-    /// Whether each auto is wanted on newly opened images: whatever its toggle
-    /// was last set to by hand. Taking over from a meter by moving its slider
-    /// is a decision about one frame and does not change this.
-    private static let autoPreferenceKeys: [WritableKeyPath<Recipe, Bool>: String] = [
-        \Recipe.autoExposure: "prefersAutoExposure",
-        \Recipe.autoDensity: "prefersAutoBrightness",
-        \Recipe.autoGrade: "prefersAutoContrast",
-    ]
-
-    func rememberAutoPreference(_ auto: WritableKeyPath<Recipe, Bool>, isOn: Bool) {
-        guard let key = Self.autoPreferenceKeys[auto] else { return }
-        UserDefaults.standard.set(isOn, forKey: key)
+    /// Settings copied from one image to paste onto others, with the name of
+    /// the image they came from.
+    struct CopiedSettings {
+        var edits: ImageEdits
+        var source: String
     }
 
-    private func prefersAuto(_ auto: WritableKeyPath<Recipe, Bool>) -> Bool {
-        guard let key = Self.autoPreferenceKeys[auto],
-              let stored = UserDefaults.standard.object(forKey: key) as? Bool else {
-            return Recipe()[keyPath: auto]
+    @Published private(set) var copiedSettings: CopiedSettings?
+
+    var canCopySettings: Bool { fileURL != nil && pendingURL == nil }
+    var canPasteSettings: Bool { copiedSettings != nil && canCopySettings }
+
+    func copySettings() {
+        guard canCopySettings, let name = fileURL?.lastPathComponent else { return }
+        copiedSettings = CopiedSettings(edits: currentEdits, source: name)
+    }
+
+    /// Paste the copied settings onto the image on screen.
+    func pasteSettings() {
+        guard canPasteSettings, let copied = copiedSettings?.edits else { return }
+        put(copied)
+    }
+
+    /// Put copied or saved settings on the image on screen: film, paper,
+    /// print or light table, camera filter, every slider and auto, and white
+    /// balance. Masks, gradients and the crop belong to the frame they were
+    /// made for, so this image keeps its own.
+    private func put(_ edits: ImageEdits) {
+        var pasted = edits.recipe
+        pasted.masks = recipe.masks
+        pasted.gradients = recipe.gradients
+        pasted.geometry = recipe.geometry
+        applyingEdits = true
+        recipe = pasted
+        whiteBalance = edits.whiteBalance
+        customTemperature = edits.customTemperature
+        customTint = edits.customTint
+        applyingEdits = false
+        // White balance is decoded in, and a film-reference balance follows
+        // the stock: decode again if either moved.
+        syncSource()
+        scheduleRender()
+    }
+
+    // MARK: - Presets
+
+    /// The saved presets, by name.
+    @Published private(set) var presets: [Preset] = []
+    private let presetStore: PresetStore
+
+    /// Read the presets again, for a file added or taken away in Finder.
+    func reloadPresets() { presets = presetStore.load() }
+
+    /// Save what Copy Settings would copy as a preset called `name`,
+    /// replacing one of that name.
+    func savePreset(named name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard canCopySettings, !trimmed.isEmpty else { return }
+        let preset = Preset(name: trimmed, recipe: recipe, whiteBalance: whiteBalance,
+                            customTemperature: customTemperature, customTint: customTint)
+        do {
+            try presetStore.save(preset)
+        } catch {
+            errorMessage = "Could not save the preset \(trimmed): \(error.localizedDescription)"
         }
-        return stored
+        reloadPresets()
+    }
+
+    /// Put a preset on the image on screen, as Paste Settings does.
+    func applyPreset(_ preset: Preset) {
+        guard canCopySettings else { return }
+        let films = Set(filmEntries.map(\.stock)), papers = Set(paperEntries.map(\.stock))
+        guard films.contains(preset.recipe.filmStock), papers.contains(preset.recipe.printStock) else {
+            errorMessage = "The preset \(preset.name) uses a film or paper this version does not have."
+            return
+        }
+        put(ImageEdits(recipe: preset.recipe, whiteBalance: preset.whiteBalance,
+                       customTemperature: preset.customTemperature, customTint: preset.customTint))
+    }
+
+    func deletePreset(_ preset: Preset) {
+        do {
+            try presetStore.delete(preset)
+        } catch {
+            errorMessage = "Could not delete the preset \(preset.name): \(error.localizedDescription)"
+        }
+        reloadPresets()
+    }
+
+    /// The presets' folder, made if need be.
+    func presetsFolder() -> URL? {
+        do { return try presetStore.ensuredDirectory() } catch {
+            errorMessage = "Could not make the presets folder: \(error.localizedDescription)"
+            return nil
+        }
     }
 
     // MARK: - White balance
@@ -356,10 +449,14 @@ final class DocumentModel: ObservableObject {
         isRendering = true
         let recipe = self.recipe
         let sourceID = loaded.sourceID
+        let wholeFrame = isCropping
+        let metering = shapeBeforeCropping
         Task { [weak self] in
             let result: Result<RenderEngine.Output?, Error>
-            do { result = .success(try await engine.render(recipe, for: sourceID)) }
-            catch { result = .failure(error) }
+            do {
+                result = .success(try await engine.render(recipe, for: sourceID, wholeFrame: wholeFrame,
+                                                          metering: metering))
+            } catch { result = .failure(error) }
             self?.finishRender(result, sourceID: sourceID)
         }
     }
@@ -373,6 +470,7 @@ final class DocumentModel: ObservableObject {
             // the follow-up render below draws the new one.
             if let output, sourceID == loaded?.sourceID {
                 displayImage = output.image
+                displayMap = output.map
                 resolvedRecipe = output.resolved
                 meteredExposureEV = output.metered.exposureEV
                 meteredBrightness = output.metered.brightness
@@ -416,7 +514,8 @@ final class DocumentModel: ObservableObject {
                 }
                 _ = try renderer.render(setup: setup, recipe: resolved)
                 guard let linear = renderer.readLinear() else { throw Exporter.ExportError.renderFailed }
-                try Exporter.write(linear: linear, width: full.width, height: full.height,
+                try Exporter.write(linear: linear, width: Int(renderer.outputSize.width),
+                                   height: Int(renderer.outputSize.height),
                                    to: url, format: format, colorSpace: resolved.outputColorSpace,
                                    metadata: RawLoader.metadata(of: source))
             }.value
@@ -424,6 +523,92 @@ final class DocumentModel: ObservableObject {
         } catch {
             errorMessage = error.localizedDescription
             status = statusLine
+        }
+    }
+
+    // MARK: - Crop, turn and level
+
+    /// While on, the canvas shows the whole frame, turned and levelled, with
+    /// the crop drawn on it. The meters hold the reading they had until it is
+    /// done, so the print does not change under the crop while it is drawn.
+    @Published var isCropping = false {
+        didSet {
+            guard oldValue != isCropping else { return }
+            shapeBeforeCropping = isCropping ? recipe.geometry : nil
+            if !isCropping { isLevelling = false }
+            if !applyingEdits { scheduleRender() }
+        }
+    }
+    /// The shape the print had when cropping began: what the meters read
+    /// meanwhile, and what Cancel goes back to.
+    private var shapeBeforeCropping: FrameGeometry?
+
+    /// The level tool: the next line drawn on the frame levels it.
+    @Published var isLevelling = false {
+        didSet { if isLevelling { isCropping = true } }
+    }
+
+    /// Finish cropping, keeping the crop, or going back to the one before.
+    func endCropping(keep: Bool) {
+        if !keep, let before = shapeBeforeCropping { recipe.geometry = before }
+        isCropping = false
+    }
+
+    /// The frame as it stands turned, in the proxy's pixels: what the crop's
+    /// proportions are worked out on. Its crop is normalised, so it holds at
+    /// any size.
+    var turnedFrame: CGSize? {
+        guard let loaded else { return nil }
+        return recipe.geometry.turnedSize(width: Double(loaded.width), height: Double(loaded.height))
+    }
+
+    /// Change the print's shape, worked out on the frame as it stands.
+    func editGeometry(_ change: (inout FrameGeometry, CGSize) -> Void) {
+        guard let frame = turnedFrame else { return }
+        var g = recipe.geometry
+        change(&g, frame)
+        recipe.geometry = g
+    }
+
+    func turn(clockwise: Bool) { editGeometry { g, _ in g.turn(clockwise: clockwise) } }
+    func flip(horizontal: Bool) { editGeometry { g, _ in g.flip(horizontal: horizontal) } }
+    func setCropAspect(_ aspect: CropAspect) { editGeometry { g, frame in g.setAspect(aspect, frame: frame) } }
+    func swapCropOrientation() { editGeometry { g, frame in g.swapOrientation(frame: frame) } }
+
+    func setCustomAspect(width: Double, height: Double) {
+        guard width > 0, height > 0 else { return }
+        editGeometry { g, frame in
+            g.customWidth = width
+            g.customHeight = height
+            g.setAspect(.custom, frame: frame)
+        }
+    }
+
+    func setStraighten(_ degrees: Double) { editGeometry { g, _ in g.setStraighten(degrees) } }
+
+    /// Level the picture along a line drawn on it, from `a` to `b` in the
+    /// frame as it shows while cropping (normalised): the line comes out
+    /// level, or upright if it is nearer upright.
+    func level(from a: CGPoint, to b: CGPoint) {
+        editGeometry { g, frame in
+            let dx = Double(b.x - a.x) * Double(frame.width), dy = Double(b.y - a.y) * Double(frame.height)
+            guard dx * dx + dy * dy > 4 else { return }
+            let angle = atan2(dy, dx) * 180 / .pi
+            g.setStraighten(g.straighten - (angle - 90 * (angle / 90).rounded()))
+        }
+    }
+
+    /// Back to the frame as shot.
+    func resetGeometry() { recipe.geometry = .identity }
+
+    /// Points given as fractions of the print on screen, in the frame's own
+    /// normalised coordinates, as masks and gradients store them: so a new one
+    /// starts on what the crop keeps, the way up the print stands.
+    func framePoints(_ points: [CGPoint]) -> [CGPoint] {
+        guard let map = displayMap, !map.isIdentity else { return points }
+        return points.map {
+            map.normalisedSource(fromOutput: CGPoint(x: $0.x * CGFloat(map.outputWidth),
+                                                     y: $0.y * CGFloat(map.outputHeight)))
         }
     }
 
@@ -496,7 +681,7 @@ final class DocumentModel: ObservableObject {
         r.autoGrade = defaults.autoGrade
         r.brightness = defaults.brightness
         r.density = defaults.density
-        r.grade = defaults.grade
+        r.grade = r.defaultGrade
         r.shadowGrade = defaults.shadowGrade
         r.highlightGrade = defaults.highlightGrade
         r.shadows = defaults.shadows

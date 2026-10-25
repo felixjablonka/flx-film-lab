@@ -51,6 +51,8 @@ struct ContentView: View {
     @State private var isImporting = false
     @State private var isExporting = false
     @State private var exportFormat: Exporter.Format = .tiff16
+    @State private var isNamingPreset = false
+    @State private var presetName = ""
     @AppStorage("canvasBackground") private var backgroundRaw = CanvasBackground.dark.rawValue
 
     private var background: CanvasBackground {
@@ -69,6 +71,16 @@ struct ContentView: View {
         .toolbar { toolbarContent }
         // A mask selected on one image means nothing on the next.
         .onChange(of: model.fileURL) { selectedMask = nil }
+        // A preset file may have been copied in, or taken away, in Finder.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            model.reloadPresets()
+        }
+        .sheet(isPresented: $isNamingPreset) {
+            PresetNameSheet(name: $presetName, taken: Set(model.presets.map(\.name))) { save in
+                if save { model.savePreset(named: presetName) }
+                isNamingPreset = false
+            }
+        }
         .fileImporter(isPresented: $isImporting,
                       allowedContentTypes: [.rawImage, .image, UTType(filenameExtension: "dng") ?? .image],
                       allowsMultipleSelection: false) { result in
@@ -86,10 +98,17 @@ struct ContentView: View {
             }
         }
         .background {
-            // Invisible shortcut host: ⌘B cycles the surround.
-            Button("") { backgroundRaw = background.next.rawValue }
-                .keyboardShortcut("b", modifiers: .command)
-                .opacity(0)
+            // Invisible shortcut host: ⌘B cycles the surround, ⌘[ and ⌘] turn
+            // the picture a quarter.
+            Group {
+                Button("") { backgroundRaw = background.next.rawValue }
+                    .keyboardShortcut("b", modifiers: .command)
+                Button("") { model.turn(clockwise: false) }
+                    .keyboardShortcut("[", modifiers: .command)
+                Button("") { model.turn(clockwise: true) }
+                    .keyboardShortcut("]", modifiers: .command)
+            }
+            .opacity(0)
         }
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             guard let provider = providers.first else { return false }
@@ -128,15 +147,21 @@ struct ContentView: View {
                             .shadow(color: .black.opacity(background.isLight ? 0.22 : 0.5),
                                     radius: background.isLight ? 10 : 18, y: 5)
 
-                        MaskOverlay(masks: $model.recipe.masks, gradients: $model.recipe.gradients,
-                                    selected: $selectedMask,
-                                    frame: CGRect(origin: .zero, size: fitted),
-                                    onLightBackground: background.isLight)
-                            .frame(width: fitted.width, height: fitted.height)
+                        if model.isCropping {
+                            CropOverlay(model: model, size: fitted, onLightBackground: background.isLight)
+                        } else {
+                            MaskOverlay(masks: $model.recipe.masks, gradients: $model.recipe.gradients,
+                                        selected: $selectedMask,
+                                        frame: CGRect(origin: .zero, size: fitted),
+                                        map: model.displayMap,
+                                        onLightBackground: background.isLight)
+                                .frame(width: fitted.width, height: fitted.height)
+                        }
                     }
                     .frame(width: geo.size.width, height: geo.size.height)
                 }
                 .padding(28)
+                .overlay(alignment: .top) { if model.isCropping { cropBar } }
             } else {
                 VStack(spacing: 10) {
                     Image(systemName: "camera.aperture")
@@ -165,6 +190,28 @@ struct ContentView: View {
             }
         }
         .overlay(alignment: .bottom) { statusBar }
+    }
+
+    /// While cropping: what the drags do, and the way out.
+    private var cropBar: some View {
+        HStack(spacing: 10) {
+            Text(model.isLevelling
+                 ? "Draw a line along something that should be level or upright"
+                 : "Drag a corner or an edge · drag inside to move")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            Toggle(isOn: $model.isLevelling) { Label("Level", systemImage: "level") }
+                .toggleStyle(.button).controlSize(.small)
+                .help("Draw a line on the picture along a horizon, or along an upright, and the picture is levelled to it.")
+            Button("Cancel") { model.endCropping(keep: false) }
+                .keyboardShortcut(.cancelAction).controlSize(.small)
+            Button("Done") { model.endCropping(keep: true) }
+                .keyboardShortcut(.defaultAction).controlSize(.small)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 6)
+        .background(.ultraThinMaterial, in: Capsule())
+        .colorScheme(background.isLight ? .light : .dark)
+        .padding(.top, 8)
     }
 
     private var statusBar: some View {
@@ -203,7 +250,7 @@ struct ContentView: View {
             Button { isImporting = true } label: { Label("Open", systemImage: "folder") }
                 .help("Open a RAW file")
         }
-        ToolbarItem {
+        ToolbarItem(placement: .navigation) {
             Picker("", selection: $backgroundRaw) {
                 ForEach(CanvasBackground.allCases) { option in
                     Image(systemName: option.symbol).tag(option.rawValue)
@@ -211,6 +258,28 @@ struct ContentView: View {
             }
             .pickerStyle(.segmented).labelsHidden().frame(width: 108)
             .help("Surround: dark, middle grey or white. Brightness and colour are judged against their surround — the same print reads heavy against white and washed against black. ⌘B cycles.")
+        }
+        // One group, so the presets always sit with Copy and Paste.
+        ToolbarItemGroup {
+            ControlGroup {
+                Button { model.copySettings() } label: { Label("Copy Settings", systemImage: "doc.on.doc") }
+                    .keyboardShortcut("c", modifiers: [.command, .shift])
+                    .disabled(!model.canCopySettings)
+                    .help("Copy this image's settings to paste onto another (⇧⌘C): film, paper, filter, every slider and auto, and white balance.")
+                Button { model.pasteSettings() } label: { Label("Paste Settings", systemImage: "doc.on.clipboard") }
+                    .keyboardShortcut("v", modifiers: [.command, .shift])
+                    .disabled(!model.canPasteSettings)
+                    .help(model.copiedSettings.map {
+                        "Paste the settings copied from \($0.source) (⇧⌘V). This image keeps its own masks, gradients and crop."
+                    } ?? "Copy an image's settings first (⇧⌘C), then paste them onto another.")
+            }
+            presetsMenu
+        }
+        ToolbarItem {
+            Toggle(isOn: $model.isCropping) { Label("Crop", systemImage: "crop") }
+                .keyboardShortcut("r", modifiers: .command)
+                .disabled(!model.hasImage)
+                .help("Crop, turn and level the print (⌘R): the whole frame shows with the crop on it. Return keeps the crop, Escape goes back.")
         }
         ToolbarItem {
             Picker("", selection: $exportFormat) {
@@ -223,6 +292,74 @@ struct ContentView: View {
                 .disabled(!model.canExport)
                 .help("Render at full resolution and write to disk. Waits until the image on screen has finished loading.")
         }
+    }
+
+    /// Saved settings: choose one to put it on the image on screen.
+    private var presetsMenu: some View {
+        Menu {
+            ForEach(model.presets) { preset in
+                Button(preset.name) { model.applyPreset(preset) }
+                    .disabled(!model.canCopySettings)
+            }
+            if model.presets.isEmpty {
+                Text("No presets yet")
+            }
+            Divider()
+            Button("Save Settings as Preset…") {
+                presetName = model.filmPack?.name ?? ""
+                isNamingPreset = true
+            }
+            .disabled(!model.canCopySettings)
+            if !model.presets.isEmpty {
+                Menu("Delete Preset") {
+                    ForEach(model.presets) { preset in
+                        Button(preset.name) { model.deletePreset(preset) }
+                    }
+                }
+            }
+            Button("Show Presets in Finder") {
+                if let folder = model.presetsFolder() { NSWorkspace.shared.open(folder) }
+            }
+        } label: {
+            Label("Presets", systemImage: "film.stack")
+        }
+        .help("Presets: settings saved by name, to put on any image later, in this session or another. A preset holds what Copy Settings copies; the image it is put on keeps its own masks, gradients and crop.")
+    }
+}
+
+/// The name for a new preset, and whether it replaces one, as it is typed.
+private struct PresetNameSheet: View {
+    @Binding var name: String
+    /// The presets' names.
+    let taken: Set<String>
+    let done: (_ save: Bool) -> Void
+
+    private var trimmed: String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var isEmpty: Bool { trimmed.isEmpty }
+    private var replaces: Bool { taken.contains(trimmed) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Save Settings as Preset").font(.headline)
+            Text("Film, paper, print or light table, camera filter, every slider and auto, and white balance, to put on any image later. Masks, gradients and the crop stay with their image.")
+                .font(.system(size: 11)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            TextField("Name", text: $name)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit { if !isEmpty { done(true) } }
+            Text(replaces ? "Replaces the preset of that name." : " ")
+                .font(.system(size: 10)).foregroundStyle(.orange)
+            HStack {
+                Spacer()
+                Button("Cancel") { done(false) }
+                    .keyboardShortcut(.cancelAction)
+                Button(replaces ? "Replace" : "Save") { done(true) }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(width: 360)
     }
 }
 

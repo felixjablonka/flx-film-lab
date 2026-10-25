@@ -113,9 +113,35 @@ extension Recipe {
     /// a colour negative on Multigrade are real darkroom choices, but rarely
     /// the one meant by picking a film. A paper chosen for the kind of film
     /// already loaded stays.
+    ///
+    /// Likewise "Print on paper", once set by hand, is a choice for one kind of
+    /// film: crossing between negative and slide goes back to following the
+    /// stock. Kept, it printed every later slide on RA-4 paper, where a
+    /// positive comes out as a negative.
+    /// The grade this recipe's film opens at (`ProfilePack.defaultGrade`), which
+    /// Reset and a double-click on Contrast go back to.
+    var defaultGrade: Double {
+        Double((try? PackLibrary.shared.pack(filmStock))?.defaultGrade ?? Constants.gradeReference)
+    }
+
     func loadingFilm(_ stock: String, library: PackLibrary = .shared) -> Recipe {
         var r = self
         r.filmStock = stock
+        if let film = try? library.pack(stock), let previous = try? library.pack(filmStock),
+           film.isPositive != previous.isPositive {
+            r.scanFilm = nil
+        }
+        // A camera filter the new film is not baked for would only be ignored:
+        // Tri-X's red filter means nothing to a slide, nor Tiffen's 81C to Tri-X.
+        if let id = r.lensFilter, (try? library.pack(stock))?.lensFilter(id) == nil {
+            r.lensFilter = nil
+        }
+        // A film that opens at a grade of its own (Phoenix): a grade left at the
+        // last film's default moves to this one's; one set by hand stays.
+        if let film = try? library.pack(stock), let previous = try? library.pack(filmStock),
+           r.grade == Double(previous.defaultGrade) {
+            r.grade = Double(film.defaultGrade)
+        }
         if let film = try? library.pack(stock), let previous = try? library.pack(filmStock),
            film.isMonochrome != previous.isMonochrome,
            let paper = try? library.pack(printStock), film.isMonochrome != paper.isMonochrome,

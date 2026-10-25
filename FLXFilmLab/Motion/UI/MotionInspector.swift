@@ -130,8 +130,9 @@ struct MotionInspector: View {
     private var toneSection: some View {
         Section("Tone", subtitle: "The print: paper grade and lightness moves, as in Stills.") {
             SpecSlider(spec: Controls.brightness, physical: $model.look.recipe.brightness, vocabulary: vocabulary)
-            SpecSlider(spec: Controls.contrast, physical: $model.look.recipe.grade, vocabulary: vocabulary,
-                       defaultPhysical: Double(Constants.gradeReference))
+            SpecSlider(spec: Controls.contrast(softest: film?.softestGrade ?? Constants.gradeMax),
+                       physical: $model.look.recipe.grade, vocabulary: vocabulary,
+                       defaultPhysical: model.look.recipe.defaultGrade)
             SpecSlider(spec: Controls.shadows, physical: $model.look.recipe.shadows, vocabulary: vocabulary)
             SpecSlider(spec: Controls.highlights, physical: $model.look.recipe.highlights, vocabulary: vocabulary)
             Button("Reset tone") { model.resetTone() }
@@ -218,7 +219,7 @@ struct MotionInspector: View {
                 ForEach(LogFormat.allCases) { Text($0.rawValue).tag(LogFormat?.some($0)) }
             }
             .controlSize(.small).font(.system(size: 11))
-            .help("Every curve but Apple Log is defined on the code values the camera records; Apple Log and Apple Log 2 (iPhone) on the 0–1 signal. Apple tags its log footage and a Sony camera names its curve in its own metadata. For a Lumix, Fujifilm or Canon file the camera's make decides: V-Log, F-Log2 where the camera has it (else F-Log), Canon Log 3. Anything else is taken for N-Log. A choice here holds for this clip; the next one is read from its own tags.")
+            .help("Every curve but Apple Log is defined on the code values the camera records; Apple Log and Apple Log 2 (iPhone) on the 0–1 signal. Apple tags its log footage and a Sony camera names its curve in its own metadata. For a Lumix, Fujifilm, Canon or Insta360 file the camera's make decides: V-Log, F-Log2 where the camera has it (else F-Log), Canon Log 3, I-Log. Anything else is taken for N-Log. A choice here holds for this clip; the next one is read from its own tags.")
             Picker("Levels", selection: $model.look.input.levels) {
                 ForEach(InputSettings.Levels.allCases) { Text($0.rawValue).tag($0) }
             }
@@ -238,10 +239,7 @@ struct MotionInspector: View {
 
     private var exportSection: some View {
         Section("Export") {
-            Picker("Format", selection: $model.look.export.codec) {
-                ForEach(ExportCodec.allCases) { Text($0.rawValue).tag($0) }
-            }
-            .controlSize(.small).font(.system(size: 11))
+            // The format is in the toolbar, beside Export, as in Stills.
             Picker("For", selection: $model.look.export.display) {
                 Text("Apple displays").tag(LookLUT.Output.appleDisplay)
                 Text("Rec.709 broadcast").tag(LookLUT.Output.bt1886)

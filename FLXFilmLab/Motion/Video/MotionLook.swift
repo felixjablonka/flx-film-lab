@@ -19,6 +19,7 @@ enum LogFormat: String, Codable, CaseIterable, Identifiable {
     case clog3 = "Canon Log 3"
     case slog3Cine = "Sony S-Log3 · S-Gamut3.Cine"
     case slog3 = "Sony S-Log3 · S-Gamut3"
+    case ilog = "Insta360 I-Log"
     var id: String { rawValue }
 
     var shortName: String {
@@ -33,6 +34,7 @@ enum LogFormat: String, Codable, CaseIterable, Identifiable {
         case .clog3: return "Canon Log 3"
         case .slog3Cine: return "S-Log3 · S-Gamut3.Cine"
         case .slog3: return "S-Log3 · S-Gamut3"
+        case .ilog: return "I-Log"
         }
     }
 
@@ -59,6 +61,7 @@ enum LogFormat: String, Codable, CaseIterable, Identifiable {
         case .clog3: return .clog3
         case .slog3Cine: return .slog3Cine
         case .slog3: return .slog3
+        case .ilog: return .ilog
         }
     }
 
@@ -77,6 +80,7 @@ enum LogFormat: String, Codable, CaseIterable, Identifiable {
         case .clog3: return .clog3VideoLevels
         case .slog3Cine: return .slog3CineVideoLevels
         case .slog3: return .slog3VideoLevels
+        case .ilog: return .ilogVideoLevels
         }
     }
 
@@ -91,6 +95,7 @@ enum LogFormat: String, Codable, CaseIterable, Identifiable {
         case .clog2: return "code 407"
         case .clog3: return "code 351"
         case .slog3Cine, .slog3: return "code 420"
+        case .ilog: return "code 432"
         }
     }
 
@@ -122,8 +127,9 @@ enum LogFormat: String, Codable, CaseIterable, Identifiable {
     /// What a clip says it is. Apple tags its log footage, and a Sony camera
     /// writes the curve and gamut into its own XML. Otherwise the maker
     /// decides: a Lumix records V-Log; a Fujifilm F-Log2 if it has it, else
-    /// F-Log; a Canon most often Canon Log 3; a Sony S-Log3 in S-Gamut3.Cine.
-    /// Anything else is taken for N-Log (BT.709 tags on a Zf).
+    /// F-Log; a Canon most often Canon Log 3; a Sony S-Log3 in S-Gamut3.Cine;
+    /// an Insta360 I-Log. Anything else is taken for N-Log (BT.709 tags on a
+    /// Zf).
     static func detect(_ tags: CameraTags) -> (format: LogFormat, basis: Basis) {
         switch tags.logTransfer {
         case appleLog2Tag: return (.appleLog2, .tagged)
@@ -141,6 +147,7 @@ enum LogFormat: String, Codable, CaseIterable, Identifiable {
         }
         if make.contains("canon") { return (.clog3, .make) }
         if make.contains("sony") { return (.slog3Cine, .make) }
+        if make.contains("insta360") { return (.ilog, .make) }
         return (.nlog, .assumed)
     }
 
@@ -267,8 +274,7 @@ struct MotionLook: Codable, Equatable {
     /// their defaults. The same rule the Stills mode follows for photographs.
     func carryingLook() -> MotionLook {
         var next = self
-        next.recipe = recipe.carryingLook(autoExposure: recipe.autoExposure, autoBrightness: false,
-                                          autoContrast: false)
+        next.recipe = recipe.carryingLook()
         // The log format is the clip's own: a new clip is read from its tags,
         // so an override for one camera's footage does not misread another's.
         next.input.format = nil

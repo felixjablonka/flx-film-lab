@@ -453,10 +453,11 @@ do {
     check(e.percentile(0.99) < 1.5, "a 33-point table is close enough for a camera's own rendering")
 }
 
-print("F-Log, F-Log2, Canon Log 2 and 3, S-Log3 (each maker's document, as colour-science reads it)")
+print("F-Log, F-Log2, Canon Log 2 and 3, S-Log3 and I-Log (each maker's document)")
 do {
     // colour-science 0.4.7: the 18% grey's normalised code value, and each
-    // gamut's matrix into BT.2020 (`matrix_RGB_to_RGB`).
+    // gamut's matrix into BT.2020 (`matrix_RGB_to_RGB`). colour-science has
+    // no I-Log: its grey is the white paper's own table, to its six decimals.
     struct Case {
         let name: String
         let input: LookLUT.Input, video: LookLUT.Input
@@ -464,6 +465,8 @@ do {
         let grey: Double, black: Double
         let primaries: (red: SIMD2<Double>, green: SIMD2<Double>, blue: SIMD2<Double>)?
         let toBT2020: [Double]?
+        var greyFrom = "colour-science"
+        var greyTolerance = 1e-9
     }
     let cases = [
         Case(name: "F-Log", input: .flog, video: .flogVideoLevels, encode: FLog.flog.code(linear:),
@@ -484,7 +487,12 @@ do {
              grey: 0.4105571848, black: 95.00, primaries: SLog3.sGamut3,
              toBT2020: [1.1188568767, -0.0598319380, -0.0590249386, -0.0331200219, 1.1857373958, -0.1526173739,
                         -0.0082452407, -0.0270378968, 1.0352831375]),
+        Case(name: "I-Log", input: .ilog, video: .ilogVideoLevels, encode: ILog.code(linear:),
+             grey: 0.422003, black: 92.64, primaries: nil, toBT2020: nil,
+             greyFrom: "Insta360's white paper", greyTolerance: 5e-7),
     ]
+    check(abs(ILog.code(linear: 0) - 0.0905593) < 5e-8 && abs(ILog.code(linear: 22) - 1) < 1e-6,
+          "I-Log: black and 2200% encode as the white paper's table has them, codes 93 and 1023")
     var portra = Recipe()
     portra.filmStock = "kodak_portra_800"
     portra.printStock = "kodak_portra_endura"
@@ -497,9 +505,9 @@ do {
     }
     let viaNikon = try baker.direct(scene.map(nlog), recipe: portra, input: .nlogCode, output: apple)
     for c in cases {
-        check(abs(c.encode(0.18) - c.grey) < 1e-9,
-              String(format: "%@: 18%% grey encodes to %.10f (colour-science: %.10f), code %.0f", c.name, c.encode(0.18), c.grey,
-                     c.encode(0.18) * 1023))
+        check(abs(c.encode(0.18) - c.grey) < c.greyTolerance,
+              String(format: "%@: 18%% grey encodes to %.10f (%@: %.10f), code %.0f", c.name, c.encode(0.18), c.greyFrom,
+                     c.grey, c.encode(0.18) * 1023))
         check(abs(c.encode(0) * 1023 - c.black) < 0.01, String(format: "%@: scene black at code %.2f", c.name, c.encode(0) * 1023))
         var worst = 0.0, rising = true, previous = -Double.infinity
         for code in 0...1023 {
@@ -509,7 +517,7 @@ do {
             previous = y
         }
         check(rising && worst < 1e-6, String(format: "%@: decodes rising and round-trips every code value (%.1e)", c.name, worst))
-        let greyVideo = c.video.linear((c.grey * 1023 - 64) / 876)
+        let greyVideo = c.video.linear((c.encode(0.18) * 1023 - 64) / 876)
         check(abs(greyVideo - 0.18) < 1e-9, String(format: "%@: video levels read the 18%% grey back as %.6f", c.name, greyVideo))
         let toBT2020 = c.input.gamut ?? matrix_identity_double3x3
         let white = toBT2020 * SIMD3<Double>(1, 1, 1)

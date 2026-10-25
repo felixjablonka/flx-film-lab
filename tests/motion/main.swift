@@ -527,7 +527,7 @@ func run() async throws {
     // of the light it records, and an 18% grey has to print alike whichever
     // camera recorded it.
     let nlogGrey = lab(linear: gradedPatches[TestClip.grey]).x
-    for format in [LogFormat.vlog, .appleLog, .appleLog2, .flog, .flog2, .clog2, .clog3, .slog3Cine, .slog3] {
+    for format in [LogFormat.vlog, .appleLog, .appleLog2, .flog, .flog2, .clog2, .clog3, .slog3Cine, .slog3, .ilog] {
         let url = dir.appendingPathComponent("\(format.shortName).mov")
         try TestClip.write(to: url, width: 640, height: 360, frames: 2, fps: 24, audio: false, format: format,
                            metadata: TestClip.camera(format))

@@ -4,7 +4,7 @@
 
 FLX Film Lab is a Mac app for shooting digital photos as if they were film.
 
-**Its films are physical models, not presets.** Each of its 34 stocks, whether
+**Its films are physical models, not presets.** Each of its 38 stocks, whether
 colour negative, slide, cinema or black and white, is modelled from its
 manufacturer's datasheet. That means the spectral sensitivity of each layer, its
 characteristic curves and the dyes it forms, with the development couplers that
@@ -29,8 +29,8 @@ macOS's own RAW pipeline and runs the whole film model on the GPU.
 - **The physics** is a port of [agx-emulsion / spektrafilm][agx] — real spectral
   sensitivities, characteristic curves and dye absorption spectra read off
   manufacturer datasheets, plus DIR couplers, halation and a stochastic grain
-  model. FLX Film Lab ships with 34 film stocks and 9 print stocks, among them
-  four black-and-white films and a black-and-white paper. Its slide stocks are
+  model. FLX Film Lab ships with 38 film stocks and 9 print stocks, among them
+  five black-and-white films and a black-and-white paper. Its slide stocks are
   read directly off a virtual light table rather than printed, since printing a
   positive onto RA-4 paper inverts it — and the scan is white-balanced on the
   film base, the way a projector or a scanner treats clear film, without which
@@ -64,7 +64,7 @@ video mode. That is where most of the work in this repository went.
   scatter and halation, and the stochastic grain model. It is ported to Metal
   function by function and held to the original: film exposure and negative
   density match bit for bit, the final colour to within 6e-4 (`tests/parity`).
-- **spektrafilm's data.** 14 of the 34 film stocks are spektrafilm's, used as they
+- **spektrafilm's data.** 14 of the 38 film stocks are spektrafilm's, used as they
   are: Kodak Portra 160, 400 and 800 (and Portra 800's two pushes), Ektar 100, Gold
   200, Ultramax 400, the four Vision3 stocks, Verita 200D, and Fujifilm C200,
   Pro 400H and X-TRA 400. So are all eight of its print stocks. The colour
@@ -77,7 +77,7 @@ video mode. That is where most of the work in this repository went.
 ### What is new
 
 - **A native app.** The model runs on the GPU. A slider move re-renders the
-  2048-pixel preview in about 14 to 30 ms, and a 45-megapixel NEF renders at
+  2560-pixel preview in about 23 to 40 ms, and a 45-megapixel NEF renders at
   full resolution in under a second on an M4 Pro. RAW files decode through macOS
   itself, and nothing in the app needs Python.
 - **Camera-side controls, before the negative.** spektrafilm's controls are
@@ -104,17 +104,19 @@ video mode. That is where most of the work in this repository went.
   - dodge and burn with polygon, oval and gradient masks, each with its own
     contrast;
   - print meters that read the frame the way a printer reads a negative;
-  - slides viewed on a light table and white-balanced on the film base.
+  - slides viewed on a light table and white-balanced on the film base;
+  - the print cropped, turned, mirrored and levelled, with the grain drawn on
+    the print as it is cut.
 
   spektrafilm's print side offers print exposure, the yellow and magenta
   filters, pre-flash, auto-compensation, and gamma factors that reshape the
   paper's curve, overall, per channel and per sub-layer.
-- **18 more stocks, each from its own datasheet.**
-  - 16 film stocks spektrafilm does not have: Fujifilm Astia 100F, Provia
+- **22 more stocks, each from its own datasheet.**
+  - 20 film stocks spektrafilm does not have: Fujifilm Astia 100F, Provia
     400X, Velvia 50, Superia 1600, Superia Reala 100, Eterna Vivid 160T,
-    Eterna 500T, Reala 500D and Neopan 1600; Kodak Kodachrome 25 and 200 and
-    Tri-X 400; Agfa Optima II 100, Portrait XPS 160 and APX 25; and Ilford HP5
-    Plus.
+    Eterna 500T, Reala 500D and Neopan 1600; Kodak Kodachrome 25 and 200,
+    Royal Gold 100, Vericolor III 160, Tri-X 400 and T-Max 100; Agfa Optima II
+    100, Portrait XPS 160 and APX 25; Ilford HP5 Plus; and HARMAN Phoenix 200.
   - Tri-X pushed two stops, and Ilford Multigrade paper.
 
   Each profile's characteristic curves and spectral sensitivities, and, where
@@ -139,7 +141,8 @@ video mode. That is where most of the work in this repository went.
   ProRes 422 HQ or 10-bit HEVC, with audio and metadata kept, encoded so that
   QuickTime, Photos and Safari show what the preview shows.
   - It reads N-Log, V-Log, Apple Log and Apple Log 2, F-Log and F-Log2, Canon
-    Log 2 and 3, and S-Log3, and tells the format from the file or the camera.
+    Log 2 and 3, S-Log3 and I-Log, and tells the format from the file or the
+    camera.
   - It meters each clip for slide film, and adds bloom, glow and halation
     on the print.
 
@@ -229,6 +232,7 @@ Scene light in, print out. Each stage names its origin in the shader source.
 | Film exposure | RGB → XYZ (CAT16 to the stock's reference illuminant) → chromaticity → a baked 192×192 LUT that carries the whole spectral upsampling *and* the film's 81-band sensitivity projection |
 | Scatter & halation | linear irradiance propagated through the emulsion and reflected off the base — the red bloom around bright edges |
 | Development | characteristic curves plus DIR couplers: inhibitor released as density forms, diffused, then re-developed against the pre-coupler curves |
+| The print's shape | when the print is cropped, turned or levelled, the developed negative is shaped with it, and everything after runs at the print's own size (*Crop, turn and level*) |
 | Grain | Poisson–Binomial particle model per layer, loudest in the midtones, softened by agx's 0.65 px blur. Scale follows the film format — 35 mm or 120 — because that sets the pixel pitch, and the same emulsion on 120 is enlarged less. Measured here at 35% finer. Added as texture only: every region averages to the grain-free light, so a full-size export matches the preview |
 | Enlarger | 81-band integral through the negative's dyes, a tungsten-halogen source and CMY dichroic filters, onto the paper's own sensitivities |
 | Dodge & burn | per-pixel print-exposure and local-grade map |
@@ -332,6 +336,17 @@ Exposure comes first and is authoritative: Auto Brightness meters the result of
 whatever exposure you set and corrects what is left, rather than trying to undo
 it.
 
+**Warming filters for slides.** A slide film can be shot through Tiffen's 81C or
+812 warming filter, chosen under Exposure, read off the transmission curves in
+Tiffen's *Filter Specifications* catalogue. The film sees the scene through the
+filter, and exposure opens up by the filter factor for the green-sensitive
+layer, about half a stop (Tiffen rounds both to a third; its curves pass about
+two thirds of the green), so the picture keeps its brightness while it warms.
+On Provia 100F a grey card moves a* +3.7 b* +10.9 through the 81C, a plain
+amber. The 812 lets blue and green through alike and holds back violet, so it
+adds the same red with half the yellow, a* +4.3 b* +5.2, and leans pink, as
+the two filters look on film.
+
 ## Metering
 
 Two meters, doing two different jobs — which is the point, because a single
@@ -361,6 +376,8 @@ turning garish.
 18% grey prints, by moving the same midtone curve the Brightness slider drives.
 Auto Exposure has already done most of that work on the negative, so the pull is
 gentle, and paper black and white stay where they are.
+
+All three read only what the crop keeps (*Crop, turn and level*).
 
 Each auto puts its slider where the meter reads and keeps it there as the
 frame, the stock or the controls upstream of it change. Moving the slider takes
@@ -400,16 +417,30 @@ settings.
 
 Each image's edits are remembered for the session: going back to one restores
 it exactly. An image opened for the first time keeps the *look* — film, paper,
-print or transparency, the film character, the output settings, and which autos
-are on — while everything dialled for one frame starts fresh: exposure, white
-balance, tone, colour and dodge-and-burn masks. An auto counts as "on" for new
-images if you last switched its toggle on by hand; taking over from a meter by
-moving its slider only affects that one image.
+print or transparency, the film character and the output settings — while
+everything dialled for one frame starts fresh: exposure, white balance, tone,
+colour, dodge-and-burn masks and the crop. So do the autos, whatever the last image had:
+Auto Exposure on, Auto Brightness and Auto Contrast off. A section's Reset puts
+them back the same way.
+
+**Copy Settings** and **Paste Settings**, in the toolbar or ⇧⌘C and ⇧⌘V, take
+one image's settings onto another: film, paper, print or transparency, camera
+filter, every slider and auto, and white balance. Masks, gradients and the crop
+belong to the frame they were made for, so the image pasted onto keeps its own.
+
+**Presets** keep settings for later sessions. Save Settings as Preset…, in the
+toolbar's Presets menu next to Copy and Paste, saves what Copy Settings would
+copy under a name. Choosing the preset puts it on the image on screen, as Paste
+Settings does. Each preset is a small JSON file in
+`~/Library/Application Support/FLX Film Lab/Presets` (Show Presets in Finder),
+so it can be shared by copying the file. A file copied in appears when the app
+next comes forward, and Delete Preset moves the file to the Trash.
 
 ## Black and white
 
-**Kodak Tri-X 400**, also pushed two stops, **Ilford HP5 Plus**, **Fujifilm
-Neopan 1600** and **Agfa APX 25** print on **Ilford Multigrade RC Deluxe**,
+**Kodak Tri-X 400**, also pushed two stops, **Kodak T-Max 100**, **Ilford HP5
+Plus**, **Fujifilm Neopan 1600** and **Agfa APX 25** print on **Ilford Multigrade
+RC Deluxe**,
 each built from its maker's datasheet (see *Building profiles from datasheets*). Picking one moves
 the print onto Multigrade, and picking a colour film again moves it back; a
 paper chosen on purpose for the kind of film already loaded stays.
@@ -426,7 +457,10 @@ paper chosen on purpose for the kind of film already loaded stays.
   as a photographer would, so a grey card prints the same and only colours
   move: through red, Tri-X prints that red patch at L* 80 and the blue at 30.
   The factors come out of the model — Tri-X yellow 2.4x, red 8.2x, blue 6.2x,
-  against Kodak's published 2, 8 and 6 (green 9.9 against 6).
+  against Kodak's published 2, 8 and 6 (green 9.9 against 6). T-Max 100's own
+  spectral plot gives yellow 2.5x, red 10.9x, blue 5.2x and green 8.3x, where
+  Kodak's table for it says 1.5, 8, 8 and 6: the sheet's plot and table
+  disagree, and the film is built from the plot.
 - **Contrast is Multigrade's grade.** The paper's own curve is filter grade 1,
   ISO R110 on Ilford's table, and Contrast is relative to a paper's own curve
   with 115 as neutral, so the slider reads close to Multigrade's ISO-R grades:
@@ -435,7 +469,8 @@ paper chosen on purpose for the kind of film already loaded stays.
   the picture is neutral however it is filtered, and the colour controls are
   hidden. Pre-flash still holds the highlights.
 - **Grain is the datasheet's, where the sheet gives it.** Kodak gives Tri-X a
-  diffuse RMS granularity of 17 and Agfa gives APX 25 one of 7, read the way
+  diffuse RMS granularity of 17 and T-Max 100 one of 8, and Agfa gives APX 25
+  one of 7, read the way
   the datasheets read it: net density 1.0 through a 48 um aperture, at a
   6000 px export of a 35 mm frame. Ilford publishes none for HP5 Plus, which
   takes Tri-X's 17, an emulsion of the same class; Neopan 1600 and the push
@@ -448,7 +483,8 @@ paper chosen on purpose for the kind of film already loaded stays.
   runs a colour film's DIR couplers. It and the scatter under it are fitted to
   Kodak's curve (`tools/bake/bw_mtf.py`), within 4% from 2.4 to 71 cycles/mm;
   HP5 Plus, for which Ilford publishes none, takes the same response; APX 25
-  is fitted to Agfa's own curve, up to 50 cycles/mm. A colour
+  and T-Max 100 are fitted to their makers' own curves, up to 50 cycles/mm
+  (T-Max 109% at 5, 114% at 20, 112% at 30). A colour
   film's scatter without the couplers' sharpening had left Tri-X at 36% at 24
   cycles/mm, visibly softer than any colour stock on the same file. Edge
   effects, under Film Character, sets how strong it is.
@@ -517,8 +553,8 @@ surroundings without making anything brighter. Glow adds their light on top.
 Bloom suits a soft, low-contrast look, such as a backlit portrait; glow makes
 lamps, windows and reflections shine. Used together, the bloom goes on first.
 
-Sizes are fractions of the long edge, so the preview blooms exactly as the
-full-size export does. They run in Core Image on the renderer's own texture
+Sizes are fractions of the frame's long edge, so the preview blooms exactly as
+the full-size export does, and a crop enlarges them as it enlarges the grain. They run in Core Image on the renderer's own texture
 and command buffer, in float throughout, so a 16-bit TIFF keeps its
 precision. Both are off by default and travel with the look to the next
 image. The Motion mode adds a halation effect; Stills leaves it out, since
@@ -550,6 +586,47 @@ Each mask carries stops, feather, and a **local grade** in ISO-R points —
 burning through a different filter, which on variable-contrast paper is what a
 hard-filter burn actually is.
 
+## Crop, turn and level
+
+The print's shape, in Stills. **Crop** (⌘R, in the toolbar or Crop & Straighten
+in the inspector) shows the whole frame, turned and levelled, with the crop on
+it. Drag a corner or an edge to size the crop, or inside it to move it, then
+Done (Return) keeps it and Cancel (Escape) goes back.
+
+- **Proportions:** Original, 3:2, 4:3, 5:4, 65:24, Custom (any width to height)
+  or Free. The button beside them stands the crop up or lays it down. A fixed
+  proportion holds to the pixel at any size: drawn on the preview, a 4:5 crop
+  exports at 4:5.
+- **Turns and mirrors:** a quarter turn either way (⌘[ and ⌘]), and mirrors left
+  to right and top to bottom. They move pixels without changing them.
+- **Levelling:** Straighten turns the picture up to 45° either way. With Level
+  on, a line drawn along a horizon or an upright levels the picture to it. The
+  crop shrinks as far as it must to stay inside the picture, and grows back
+  when the picture is levelled back.
+
+It is the print that is shaped, as an enlarger's easel and a trimmer would
+shape it. The film is exposed, given its halation and developed whole, so a
+light just outside the crop still haloes into it. The developed negative is
+then turned, levelled and cropped with the print, and the grain, the print and
+bloom and glow are made at the print's own size. A crop keeps the frame's
+pixels at their size, so it enlarges the grain as cropping a print does.
+
+The grain is drawn after the levelling, on the print's own pixels. Drawn on the
+frame and levelled with it, the grain was softened wherever the print's pixels
+fell between the frame's, by up to 37%, and that showed as a faint grid, every
+23 pixels at 2.5°. Levelling is bicubic, and goes no further than the four
+nearest pixels, so edges do not ring. The preview of a tight crop is the
+preview's own pixels enlarged; Preview size, under Output, goes to 4096.
+
+The meters read only what the crop keeps, turned back upright, so turning or
+mirroring a print never changes how it is printed. While a crop is being drawn
+they hold the reading they had, and read the new crop when it is done. Masks
+and gradients stay where they were drawn on the frame, and a new one starts in
+the middle of the print as it stands.
+
+The crop belongs to its frame. It stays out of Copy and Paste Settings, out of
+a newly opened image, and out of LUTs. The Motion mode has none.
+
 ## Command line
 
 The same engine, headless:
@@ -564,9 +641,10 @@ can edit and pass back with `--recipe`.
 
 ## Motion mode: log video
 
-FLX Film Lab's Motion mode (the film icon in the toolbar, or ⌘2) grades log
+FLX Film Lab's Motion mode (the video camera in the toolbar, or ⌘2) grades log
 clips — Nikon N-Log, Panasonic V-Log, Apple Log and Apple Log 2, Fujifilm
-F-Log and F-Log2, Canon Log 2 and 3, Sony S-Log3 — with the same engine,
+F-Log and F-Log2, Canon Log 2 and 3, Sony S-Log3, Insta360 I-Log — with the
+same engine,
 Portra 800 printed on Portra Endura by default, and writes the graded clip.
 It used to be a separate app, until the two became modes of one;
 `./build.sh motion` now builds FLX Film Lab.
@@ -614,14 +692,21 @@ curve to colour-science's value for an 18% grey and every matrix to
 colour-science's, and the same scene prints the same through each as through
 N-Log.
 
+Insta360's I-Log (Insta360's 10-bit I-Log white paper, June 2026) is defined
+on code values too: an 18% grey records at code 432 and scene black at 93,
+and code 1023 is 6.9 stops over grey. It records in BT.2020, so its decode is
+the curve alone. colour-science does not have it, so `lutchecks` holds it to
+the white paper's own table.
+
 Apple tags its log footage (Core Video's log transfer function), so an iPhone
 clip is recognised; a Sony camera names its curve and gamut in the
 NonRealTimeMeta XML it writes into the file. Otherwise the camera's maker
 decides: a Lumix records V-Log, a Fujifilm F-Log2 where the model has it and
 F-Log before, a Canon most often Canon Log 3 (Canon Log 2 has to be chosen),
-a Sony with no XML S-Log3 in S-Gamut3.Cine; anything else is taken for N-Log,
-which a Zf writes untagged. A real Lumix S1H clip is read as V-Log this way;
-none of it has been tried on a real Fujifilm, Canon or Sony file yet. The
+a Sony with no XML S-Log3 in S-Gamut3.Cine, an Insta360 I-Log (its clips are
+tagged BT.709 whatever they hold); anything else is taken for N-Log, which a
+Zf writes untagged. A real Lumix S1H clip is read as V-Log this way; none of
+it has been tried on a real Fujifilm, Canon, Sony or Insta360 file yet. The
 format shown under Log Input says which it was, and can be overridden for
 that clip: the next one is read from its own tags. Read as N-Log, an Apple Log
 clip's grey card would print at L* 71 instead of 49.
@@ -646,7 +731,7 @@ camera is what loading daylight film was: tungsten light then goes orange, as
 it would on Portra. Temperature and Tint correct it the way a lab would, with
 the enlarger's filters.
 
-**Black and white.** Tri-X, Tri-X Push 2, HP5 Plus, Neopan 1600 and APX 25 print on Multigrade, as in Stills:
+**Black and white.** Tri-X, Tri-X Push 2, T-Max 100, HP5 Plus, Neopan 1600 and APX 25 print on Multigrade, as in Stills:
 picking one moves the print onto silver paper, which has no colour to balance,
 and the same camera filters (Wratten 47, 58, 8, 22 and 25) sit under Exposure.
 The halation effect, red on colour film, glows grey in a black-and-white
@@ -657,8 +742,9 @@ diffusion, dodge and burn and the meters depend on neighbouring pixels or on
 the whole frame, so they are not in the look. Grain is left out for now; the
 halation effect stands in for the film's own.
 
-**Out.** ProRes 422 HQ or 10-bit HEVC, the audio copied as it is, rotation and
-metadata kept, tagged Rec.709. macOS and iOS decode Rec.709 video with a 1.961
+**Out.** ProRes 422 HQ or 10-bit HEVC, chosen beside Export in the toolbar as
+a still's format is, the audio copied as it is, rotation and metadata kept,
+tagged Rec.709. macOS and iOS decode Rec.709 video with a 1.961
 power (measured with VideoToolbox, not assumed), so *Apple displays* writes the
 values with its inverse and QuickTime, Photos and Safari show exactly what the
 preview shows; *Rec.709 broadcast* writes for a BT.1886 (2.4) reference
@@ -673,8 +759,8 @@ display, which a Mac then shows lighter and flatter.
 
 A 65-point .cube, N-Log code values / 1023 in — how DaVinci Resolve hands a
 full-range Zf clip to a LUT — and Rec.709 BT.1886 out (the app's Export LUT…
-writes the open clip's own format: V-Log, F-Log, Canon Log and S-Log3 the
-same way, Apple Log on its signal); `--input video-levels` is for video-range
+writes the open clip's own format: V-Log, F-Log, Canon Log, S-Log3 and I-Log
+the same way, Apple Log on its signal); `--input video-levels` is for video-range
 files and `--output apple` writes for Apple displays;
 `--film kodak_tri_x_400 --filter red` bakes Tri-X shot through a red filter.
 Per-pixel only, like the app's look. The app's Export LUT… follows the open
@@ -830,6 +916,14 @@ and glow land on their highlight and scale with the frame, and every output
 space survives a 16-bit TIFF round trip through ColorSync. Each of them failed
 before the fix it guards.
 
+For the crop they check the following:
+- a turned, mirrored or cropped print is the frame's pixels moved, masks and
+  all;
+- a levelled print is printed from the levelled negative, with its grain as
+  strong between the frame's pixels as on them;
+- crops keep their proportions, inside the picture;
+- the meters read only the crop.
+
 ## Performance
 
 On an M4 Pro, a 45 MP Nikon NEF:
@@ -838,8 +932,14 @@ On an M4 Pro, a 45 MP Nikon NEF:
 |---|---|
 | Full-resolution render | 0.83 s |
 | Full pipeline incl. decode and JPEG write | 4.1 s |
-| Preview frame, print or tone slider (2048 px) | ~14 ms |
-| Preview frame, exposure or film-character slider | ~25–30 ms |
+| Preview frame, print or tone slider (2560 px) | ~23 ms |
+| Preview frame, exposure or film-character slider | ~40 ms |
+
+The preview is 2560 pixels on its long side. Preview size, under Output, also
+offers 1024, 2048, 3072 and 4096, and the choice is kept between launches. At
+2048 the two sliders take about 15 and 27 ms, at 3072 about 33 and 57, and at
+4096 about 57 and 98, for a Mac with the GPU for it. A file smaller than the
+preview size is shown at its own size; the preview never enlarges it.
 
 The preview renders on its own actor (`App/RenderEngine.swift`), never on the
 main thread, so the controls stay responsive whatever a frame costs; while one
@@ -850,8 +950,9 @@ reading of the frame, and dodge-and-burn masks are redrawn only when their
 shape changes.
 
 Past 12 MP the intermediates drop to half precision, because ten image-sized
-float32 buffers would be 7 GB at full resolution. The proxy and the parity
-harness stay in float32.
+float32 buffers would be 7 GB at full resolution. The parity harness and the
+preview stay in float32, up to a 4096-pixel preview of a 3:2 frame (11.2 MP);
+one of a 4:3 frame (12.6 MP) works in half precision, as its export does.
 
 ## Building profiles from datasheets
 
@@ -1005,6 +1106,51 @@ the step Ektar makes over Portra 160, to 1.12x. Reala 500D's and Superia
 Reala's sensitivity plots draw Fujifilm's fourth, cyan-sensitive layer; the
 engine has three layers, and it is left out.
 
+**Kodak Royal Gold 100** (E-41) and **Vericolor III 160** (E-26) take more from
+their own sheets. Like Agfa's, they plot the spectral density of a midscale
+neutral and of D-min instead of single dyes. The D-min, the film's own base and
+fog, is the base, where the films above take a donor's base and orange mask.
+The dyes are those of agx's colour negative whose measured dyes best fit what
+the neutral adds over D-min (`build_profiles.py --donors`): Ektar 100's for
+Royal Gold, Kodak's own family, and Fujifilm C200's for Vericolor III, whose
+older dyes are broader than any Kodak set agx has. Each dye is moved and
+stretched about its peak until the three add up to the sheet's neutral, to
+0.010 and 0.012 in density (`build_profiles.neutral_dyes`). agx's spectral
+adaptation window, fitted to each of its own stocks' sensitivities, is left
+out. Each is metered at its rating on Kodak's absolute axis. A grey card then
+reads red 0.84 in Status M on Royal Gold, inside Kodak's 0.80 to 1.00, and 0.69
+on Vericolor III, under Kodak's 0.73 to 0.93: its curves' own ISO speed is 126,
+and Kodak notes that many photographers expose it at EI 125. They print on the
+papers their sheets name, Ektacolor Edge and Portra Endura. Vericolor III's
+"moderate color saturation" is Portra 160's chroma, its successor's line;
+Royal Gold's sheet says nothing of saturation and puts it in the Gold family,
+so it takes Gold 200's on Ektacolor Edge. Vericolor III's sheet plots its MTF,
+to which its scatter and inhibitor are fitted, as the slides' are.
+
+**HARMAN Phoenix 200**, an experimental C-41 film, has a route of its own:
+- **Its plots are bitmaps.** The characteristic curves run against relative log
+  exposure, and the spectral sensitivities on a linear "Relative Sensitivity"
+  scale. HARMAN's wedge spectrogram is read as plotted, without taking out its
+  tungsten light, as HP5 Plus's is.
+- **Speed.** Its ISO 200 was measured by the ISO method, so its curves' ISO 5800
+  speed point sits at sqrt(2) / 200 lux-seconds. It is metered at EI 125, within
+  HARMAN's EI 100 to 200 and the rating its re-release carries.
+- **Base and dyes.** It has no masking dyes: its base is its fog and stain, in
+  its dyes (G 0.91, the "magenta / purple tint" HARMAN describes). HARMAN
+  publishes no dye spectra, so it takes Kodak Gold 200's.
+- **No DIR couplers.** Its curves rise about 1.3 in density a decade, twice a
+  usual negative's. At agx's coupler strength the inhibition would take more
+  than all of that contrast, which no development reaches.
+- **Filtration.** Without an orange mask it needs about twice the usual yellow.
+  The engine's solve, started at agx's default, misses it on most papers, so
+  the bake solves it for every colour paper in agx's pipeline. It is carried in
+  the neutral-filter table (`stock_overrides.BAKED_FILTRATION`).
+- **Halation.** "Limited antihalation" and "striking halation effects" get agx's
+  strongest halation.
+- **Contrast.** It prints 2.2 times as hard as Portra 400 about mid-grey. Its
+  grades reach R400 rather than R180, as far as Contrast's soft half and Auto
+  Contrast go, and it opens at Contrast -30 (R200.5).
+
 A colour negative that agx's neutral-filtration table does not cover, which
 Superia 1600 is, has its filtration solved for a neutral mid-grey, as the
 black-and-white negatives on colour paper already were. On the pairs the table
@@ -1019,6 +1165,11 @@ carries the one layer three times, each with a third of its density.
   35 mm D-76 curve at Kodak's 8 minutes, both vector plots.
 - **Kodak Tri-X 400 (Push 2)**: the same spectral sensitivity, and a D-76 curve
   for 10 3/4 minutes interpolated between Kodak's 10 and 12 minute ones.
+- **Kodak T-Max 100** (F-4016): spectral sensitivity (D = 1.0 over D-min) and
+  the small-tank D-76 curve at Kodak's 6 1/2 minutes, interpolated between the
+  sheet's 6 and 7 1/2 minute ones: contrast index 0.585, where Kodak's own plot
+  of it gives about 0.58. Its MTF, fitted up to 50 cycles/mm, and its RMS
+  granularity, 8, are Kodak's.
 - **Ilford HP5 Plus**: spectral sensitivity and the characteristic curve,
   vector plots whose labels are drawn as outlines, so they are calibrated on
   their own tick marks and grid.

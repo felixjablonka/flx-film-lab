@@ -155,6 +155,7 @@ BW_RMS_GRANULARITY = {
     # 17 x sqrt(0.718 / 0.581).
     "kodak_tri_x_400_push2": 19.0,
     "agfa_apx_25": 7.0,         # Agfa's range sheet, REFINAL 6 min at 20 C
+    "kodak_t_max_100": 8.0,     # Kodak F-4016, D-76 at 20 C
 }
 
 
@@ -318,7 +319,7 @@ def stock_defaults(profile) -> dict:
     if profile.info.stage == "filming":
         dc = digested.film_render.dir_couplers
         hal = digested.film_render.halation
-        out["dirCouplers"] = {
+        out["dirCouplers"] = None if not dc.active else {
             "active": bool(dc.active),
             "amount": float(dc.amount),
             "inhibitionSameLayer": float(dc.inhibition_samelayer),
@@ -331,7 +332,10 @@ def stock_defaults(profile) -> dict:
             "diffusionTailUm": float(dc.diffusion_tail_um),
             "diffusionTailWeight": float(dc.diffusion_tail_weight),
         }
-        out["dirCouplers"].update({k: float(v) for k, v in extra.items()})
+        if out["dirCouplers"] is None:
+            del out["dirCouplers"]           # the engine runs a stock without one with no couplers
+        else:
+            out["dirCouplers"].update({k: float(v) for k, v in extra.items()})
         out["halation"] = {
             "active": bool(hal.active),
             "scatterCoreUm": _f(hal.scatter_core_um),
@@ -373,6 +377,7 @@ def bake_shared(out_dir: Path, illuminant_names: set[str]) -> None:
     neutral_path = _spektrafilm_data_dir() / "filters" / "neutral_print_filters.json"
     with open(neutral_path) as fh:
         neutral_print_filters = json.load(fh)
+    add_baked_filtration(neutral_print_filters)
 
     # Scan stage: XYZ under the print's viewing illuminant -> output RGB. agx does
     # this per pixel with `colour.XYZ_to_RGB(..., illuminant=illuminant_xy)`, which
@@ -412,6 +417,62 @@ def bake_shared(out_dir: Path, illuminant_names: set[str]) -> None:
     (out_dir / "shared.json").write_text(json.dumps(shared))
     print(f"  shared.json  ({(out_dir / 'shared.json').stat().st_size / 1024:.0f} KB)"
           f"  illuminants: {', '.join(illuminants)}")
+
+
+# The grade range's soft end, ISO R, and the film it is set for.
+GRADE_SOFTEST = 180.0
+GRADE_REFERENCE_FILM = "kodak_portra_400"
+
+
+def mid_grey_contrast(profile) -> float:
+    """A negative's contrast about mid-grey: its Status M densities' mean slope
+    from a stop under to a stop over, in density a decade."""
+    import build_profiles
+    d = profile.data
+    wl = np.asarray(d.wavelengths, float)
+    defined = (np.isfinite(np.asarray(d.channel_density, float)).all(axis=1)
+               & np.isfinite(np.asarray(d.base_density, float)))
+    resp = build_profiles.responsivities(profile.info.densitometer, wl) * defined[:, None]
+    dyes = np.nan_to_num(np.asarray(d.channel_density, float))
+    base = np.nan_to_num(np.asarray(d.base_density, float))
+    status = build_profiles.status_density(np.asarray(d.density_curves, float) @ dyes.T + base[None, :], resp)
+    le, stop = np.asarray(d.log_exposure, float), float(np.log10(2))
+    return float(np.mean([(np.interp(stop, le, status[:, c]) - np.interp(-stop, le, status[:, c])) / (2 * stop)
+                          for c in range(3)]))
+
+
+def softest_grade(profile) -> float:
+    """The softest paper grade for a film far harder than a colour negative
+    (`stock_overrides.WIDE_GRADES`): R180 times its contrast about mid-grey over
+    Portra 400's, whole R."""
+    ratio = mid_grey_contrast(profile) / mid_grey_contrast(read_profile(GRADE_REFERENCE_FILM))
+    return float(round(GRADE_SOFTEST * max(ratio, 1.0)))
+
+
+def default_grade(contrast: float, softest: float | None) -> float:
+    """A Contrast slider position as the grade it stands for on a film whose
+    softest grade is `softest` (`Controls.contrast(softest:)`): the hard half
+    R0.65 a step from R115, the soft half spread from R115 to the softest."""
+    reference = 115.0
+    soft = ((softest or GRADE_SOFTEST) - reference) / 100
+    return reference - contrast * (soft if contrast < 0 else 0.65)
+
+
+def add_baked_filtration(table: dict) -> None:
+    """agx's neutral-filter table, plus the filtration solved here for the stocks
+    that carry their own (`stock_overrides.BAKED_FILTRATION`): magenta and yellow
+    that print mid-grey neutral on each colour paper, in agx's pipeline as agx's
+    own values are."""
+    import print_neutral
+    for stock in stock_overrides.BAKED_FILTRATION:
+        if not (LOCAL_PROFILES / f"{stock}.json").exists():
+            continue
+        profile = read_profile(stock)
+        for paper, by_light in table.items():
+            for light in by_light:
+                m, y = print_neutral.neutral_filters(profile, paper)
+                by_light[light][stock] = [0.0, float(m), float(y)]
+                print(f"  {stock} on {paper} ({light}): magenta {m:.1f}, yellow {y:.1f}")
 
 
 def bake_profile(stock: str, out_dir: Path, tc_lut_size_note: dict) -> dict:
@@ -465,6 +526,10 @@ def bake_profile(stock: str, out_dir: Path, tc_lut_size_note: dict) -> dict:
         # the engine reads them as data instead of re-encoding the branch table.
         "defaults": stock_defaults(p),
     }
+    if stock in stock_overrides.WIDE_GRADES:
+        pack["gradeSoftest"] = softest_grade(p)
+    if stock in stock_overrides.DEFAULT_CONTRAST:
+        pack["gradeDefault"] = default_grade(stock_overrides.DEFAULT_CONTRAST[stock], pack.get("gradeSoftest"))
 
     if is_filming:
         pack["rgbToXYZ"] = _f(rgb_to_xyz_matrix(p.info.reference_illuminant))
@@ -496,42 +561,51 @@ def bake_profile(stock: str, out_dir: Path, tc_lut_size_note: dict) -> dict:
             "inputGamutCompress": "xy",
         }
         tc_lut_size_note[stock] = tc_lut.shape
-        if p.info.channel_model == "bw":
+        if p.info.channel_model == "bw" or p.info.type == "positive":
+            import lens_filters
+            filters = lens_filters.FILTERS if p.info.channel_model == "bw" else lens_filters.WARMING
             pack["lensFilters"] = bake_lens_filters(stock, sensitivity, adaptation, out_dir,
-                                                    p.info.reference_illuminant)
+                                                    p.info.reference_illuminant, filters)
 
     (out_dir / f"{stock}.json").write_text(json.dumps(pack))
     return pack
 
 
 def bake_lens_filters(stock: str, sensitivity: np.ndarray, adaptation, out_dir: Path,
-                      reference_illuminant: str) -> list[dict]:
-    """One exposure LUT per camera filter, for a black-and-white film.
+                      reference_illuminant: str, filters) -> list[dict]:
+    """One exposure LUT per camera filter: Kodak's Wratten filters for a
+    black-and-white film, Tiffen's warming filters for a slide film.
 
     The film sees the scene through the filter: its sensitivity times the
-    filter's transmittance (tools/bake/lens_filters.py, Kodak's Wratten 2
-    data). The exposure is opened up by the filter factor, as a photographer
-    does, so mid-grey still exposes 1 and only colours move: a red filter
-    darkens a blue sky without darkening the picture.
+    filter's transmittance (tools/bake/lens_filters.py). The exposure is
+    opened up by the filter factor, as a photographer does: a single factor,
+    set so mid-grey still exposes the green-sensitive layer at 1. On silver
+    every layer is that one, so only colours move: a red filter darkens a blue
+    sky without darkening the picture. On a slide the blue-sensitive layer
+    stays held back, which is what warms it.
     """
-    import lens_filters
     from spektrafilm.utils.spectral_upsampling import rgb_to_raw_hanatos2025
 
     baked = []
     grey = np.full((1, 1, 3), 0.184)
-    for lens_filter in lens_filters.FILTERS:
-        filtered = sensitivity * lens_filters.transmittance(lens_filter)[:, None]
+    for lens_filter in filters:
+        filtered = sensitivity * lens_filter.transmittance()[:, None]
         lut = compute_hanatos2025_tc_lut(filtered, adaptation, gamut_compress=InputGamutCompressSpec())
         raw = rgb_to_raw_hanatos2025(grey, filtered, color_space=WORKING_COLOR_SPACE,
                                      apply_cctf_decoding=False,
                                      reference_illuminant=reference_illuminant, tc_lut=lut)
-        factor = 1.0 / float(np.ravel(raw)[0])     # the unfiltered film's mid-grey exposes 1
+        layers = np.ravel(raw)
+        factor = 1.0 / float(layers[1])     # the unfiltered film's mid-grey exposes 1
         lut = np.ascontiguousarray(np.asarray(lut, dtype=np.float64) * factor, dtype=np.float32)
         name = f"{stock}.{lens_filter.id}.tclut"
         (out_dir / name).write_bytes(lut.tobytes())
-        baked.append({"id": lens_filter.id, "name": lens_filter.name, "wratten": lens_filter.wratten,
-                      "file": name, "factor": factor})
-        print(f"    {lens_filter.name:7s} Wratten {lens_filter.wratten:3s} filter factor {factor:5.2f}")
+        entry = {"id": lens_filter.id, "name": lens_filter.name,
+                 **({"wratten": lens_filter.wratten} if lens_filter.wratten else {}),
+                 "file": name, "factor": factor}
+        baked.append(entry)
+        r, b = layers[0] * factor, layers[2] * factor
+        print(f"    {lens_filter.name:10s} {('Wratten ' + lens_filter.wratten) if lens_filter.wratten else '':11s}"
+              f" filter factor {factor:5.2f} ({np.log2(factor):.2f} stops); grey exposes R {r:.3f} B {b:.3f}")
     return baked
 
 

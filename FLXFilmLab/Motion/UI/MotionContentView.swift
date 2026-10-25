@@ -100,20 +100,29 @@ struct MotionContentView: View {
 
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
+        // Laid out as the Stills toolbar is: the surround beside Open, the
+        // export format beside Export.
         ToolbarItem(placement: .navigation) {
             Button(action: chooseClip) { Label("Open", systemImage: "folder") }
                 .help("Open a log clip (⌘O)")
+        }
+        ToolbarItem(placement: .navigation) {
+            Picker("", selection: $model.surround) {
+                ForEach(Surround.allCases) { Image(systemName: $0.symbol).tag($0) }
+            }
+            .pickerStyle(.segmented).labelsHidden().frame(width: 108)
+            .help("Surround: dark, middle grey or white. ⌘B cycles.")
         }
         ToolbarItem {
             Toggle(isOn: $model.showLog) { Label("Log footage", systemImage: "square.split.2x1") }
                 .help("Show the untouched log footage, as QuickTime shows it (\\)")
         }
         ToolbarItem {
-            Picker("", selection: $model.surround) {
-                ForEach(Surround.allCases) { Image(systemName: $0.symbol).tag($0) }
+            Picker("", selection: $model.look.export.codec) {
+                ForEach(ExportCodec.allCases) { Text($0.rawValue).tag($0) }
             }
-            .pickerStyle(.segmented).labelsHidden().frame(width: 108)
-            .help("Surround: dark, middle grey or white. ⌘B cycles.")
+            .labelsHidden().controlSize(.small).frame(width: 130)
+            .help("The clip's format: ProRes 422 HQ for editing and grading further, HEVC 10-bit for sharing.")
         }
         ToolbarItem {
             Button(action: chooseExport) { Label("Export", systemImage: "square.and.arrow.up") }

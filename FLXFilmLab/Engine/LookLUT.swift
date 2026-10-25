@@ -2,7 +2,8 @@ import Foundation
 import simd
 
 /// A print look as a 3D lookup table: log footage (N-Log, V-Log, Apple Log,
-/// Apple Log 2, F-Log, F-Log2, Canon Log 2 and 3, or S-Log3) in, display RGB out.
+/// Apple Log 2, F-Log, F-Log2, Canon Log 2 and 3, S-Log3 or I-Log) in, display
+/// RGB out.
 ///
 /// Everything the engine does per pixel — film exposure, development, the
 /// couplers' colour effect, the enlarger, the paper and its tone controls, the
@@ -54,13 +55,16 @@ struct LookLUT {
         case slog3CineVideoLevels = "Sony S-Log3 (S-Gamut3.Cine, video levels)"
         case slog3 = "Sony S-Log3 (S-Gamut3)"
         case slog3VideoLevels = "Sony S-Log3 (S-Gamut3, video levels)"
+        /// Insta360 I-Log, in BT.2020.
+        case ilog = "Insta360 I-Log"
+        case ilogVideoLevels = "Insta360 I-Log (video levels)"
 
         /// The lattice coordinate is the video-levels signal rather than
         /// code / 1023.
         var onVideoLevels: Bool {
             switch self {
             case .nlogVideoLevels, .vlogVideoLevels, .flogVideoLevels, .flog2VideoLevels, .clog2VideoLevels,
-                 .clog3VideoLevels, .slog3CineVideoLevels, .slog3VideoLevels: return true
+                 .clog3VideoLevels, .slog3CineVideoLevels, .slog3VideoLevels, .ilogVideoLevels: return true
             default: return false
             }
         }
@@ -78,11 +82,12 @@ struct LookLUT {
             case .clog2, .clog2VideoLevels: return CanonLog.linear2(code: code)
             case .clog3, .clog3VideoLevels: return CanonLog.linear3(code: code)
             case .slog3Cine, .slog3CineVideoLevels, .slog3, .slog3VideoLevels: return SLog3.linear(code: code)
+            case .ilog, .ilogVideoLevels: return ILog.linear(code: code)
             }
         }
 
         /// The footage's primaries to the engine's BT.2020, where they differ.
-        /// N-Log and Apple Log record in BT.2020, F-Log and F-Log2 in
+        /// N-Log, Apple Log and I-Log record in BT.2020, F-Log and F-Log2 in
         /// F-Gamut, which is BT.2020.
         var gamut: simd_double3x3? {
             switch self {
@@ -115,6 +120,7 @@ struct LookLUT {
             case .clog3, .clog3VideoLevels: return "Canon Log 3, Cinema Gamut primaries, \(levels)"
             case .slog3Cine, .slog3CineVideoLevels: return "Sony S-Log3, S-Gamut3.Cine primaries, \(levels)"
             case .slog3, .slog3VideoLevels: return "Sony S-Log3, S-Gamut3 primaries, \(levels)"
+            case .ilog, .ilogVideoLevels: return "Insta360 I-Log, BT.2020 primaries, \(levels)"
             }
         }
     }
@@ -289,6 +295,7 @@ final class LookBaker {
         r.masks = []
         r.exposureGradients = nil     // they cover part of the frame
         r.effects = nil               // bloom and glow spread light between pixels
+        r.frameGeometry = nil         // the lattice is not a picture
         r.outputColorSpace = "sRGB"   // Rec.709 primaries; the encoding is the LUT's own
         return r
     }

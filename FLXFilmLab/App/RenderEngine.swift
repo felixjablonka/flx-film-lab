@@ -16,6 +16,8 @@ actor RenderEngine {
         /// The recipe as printed, every metered value filled in.
         var resolved: Recipe
         var metered: Metered
+        /// Where the image's pixels come from in the frame.
+        var map: GeometryMap
         var milliseconds: Double
     }
 
@@ -32,8 +34,11 @@ actor RenderEngine {
     /// image is never drawn from the next.
     private(set) var sourceID = 0
 
-    private var exposureReading: (stock: String, ev: Float)?
+    private var exposureReading: (stock: String, geometry: FrameGeometry, ev: Float)?
     private var printReading: (key: PrintReadingKey, reading: RenderSetupBuilder.PrintReading?)?
+    /// The part of the frame the meters last read, and the crop it was cut
+    /// for (`FrameGeometry.upright`).
+    private var meteredArea: (geometry: FrameGeometry, pixels: [Float], width: Int, height: Int)?
     private var coverages: [UUID: (geometry: MaskRasterizer.Geometry, coverage: [Float])] = [:]
     private var lastMasks: [LocalMask]?
 
@@ -48,8 +53,9 @@ actor RenderEngine {
         var filterY: Double
         var filterM: Double
         var gamma: Double
+        var geometry: FrameGeometry
 
-        init(_ r: Recipe) {
+        init(_ r: Recipe, geometry: FrameGeometry) {
             film = r.filmStock
             lensFilter = r.lensFilter
             paper = r.printStock
@@ -58,6 +64,7 @@ actor RenderEngine {
             filterY = r.filterShiftY
             filterM = r.filterShiftM
             gamma = r.densityCurveGamma
+            self.geometry = geometry
         }
     }
 
@@ -73,23 +80,28 @@ actor RenderEngine {
         sourceID += 1
         exposureReading = nil
         printReading = nil
+        meteredArea = nil
         coverages = [:]
         lastMasks = nil
         return sourceID
     }
 
     /// The recipe as it will actually print: each control whose auto is on
-    /// carries the meter's value in place of the stored one.
-    func resolve(_ recipe: Recipe) throws -> (recipe: Recipe, metered: Metered) {
-        guard let source else { return (recipe, Metered()) }
+    /// carries the meter's value in place of the stored one. The meters read
+    /// only what the print keeps of the frame: the recipe's crop, or
+    /// `metering`'s while a crop is being drawn.
+    func resolve(_ recipe: Recipe, metering: FrameGeometry? = nil) throws -> (recipe: Recipe, metered: Metered) {
+        guard source != nil else { return (recipe, Metered()) }
         var working = recipe
         var metered = Metered()
+        let geometry = (metering ?? recipe.geometry).upright
 
         if recipe.autoExposure, let film = try? PackLibrary.shared.pack(recipe.filmStock) {
-            if exposureReading?.stock != recipe.filmStock {
-                let ev = RenderSetupBuilder.autoExposureEV(pixels: source.pixels, width: source.width,
-                                                           height: source.height, film: film)
-                exposureReading = (recipe.filmStock, ev)
+            if exposureReading?.stock != recipe.filmStock || exposureReading?.geometry != geometry {
+                let area = meteredArea(geometry)
+                let ev = RenderSetupBuilder.autoExposureEV(pixels: area.pixels, width: area.width,
+                                                           height: area.height, film: film)
+                exposureReading = (recipe.filmStock, geometry, ev)
             }
             if let ev = exposureReading?.ev {
                 working.exposureEV = Double(ev)
@@ -98,10 +110,11 @@ actor RenderEngine {
         }
 
         guard working.autoDensity || working.autoGrade else { return (working, metered) }
-        let key = PrintReadingKey(working)
+        let key = PrintReadingKey(working, geometry: geometry)
         if printReading?.key != key {
-            let reading = try RenderSetupBuilder.readPrint(recipe: working, pixels: source.pixels,
-                                                           width: source.width, height: source.height,
+            let area = meteredArea(geometry)
+            let reading = try RenderSetupBuilder.readPrint(recipe: working, pixels: area.pixels,
+                                                           width: area.width, height: area.height,
                                                            exposureEV: Float(working.exposureEV))
             printReading = (key, reading)
         }
@@ -112,17 +125,31 @@ actor RenderEngine {
         return (resolved, metered)
     }
 
+    /// The part of the frame an upright crop keeps, cut once per crop.
+    private func meteredArea(_ upright: FrameGeometry) -> (pixels: [Float], width: Int, height: Int) {
+        guard let source else { return ([], 0, 0) }
+        if let area = meteredArea, area.geometry == upright { return (area.pixels, area.width, area.height) }
+        let area = upright.metered(source.pixels, width: source.width, height: source.height)
+        meteredArea = (upright, area.pixels, area.width, area.height)
+        return area
+    }
+
     /// Render `recipe` for the image `expected` — or nothing, if that image
-    /// has been replaced since the request was made.
-    func render(_ recipe: Recipe, for expected: Int) throws -> Output? {
+    /// has been replaced since the request was made. `wholeFrame` shows the
+    /// whole frame, turned and levelled, for drawing the crop on, and
+    /// `metering` is the crop the meters read meanwhile.
+    func render(_ recipe: Recipe, for expected: Int, wholeFrame: Bool = false,
+                metering: FrameGeometry? = nil) throws -> Output? {
         guard expected == sourceID, let source else { return nil }
         let start = CFAbsoluteTimeGetCurrent()
-        let (resolved, metered) = try resolve(recipe)
+        let (resolved, metered) = try resolve(recipe, metering: metering)
         let setup = try RenderSetupBuilder.build(recipe: resolved, exposureEV: Float(resolved.exposureEV))
         updateMasks(resolved.masks, width: source.width, height: source.height)
-        _ = try renderer.render(setup: setup, recipe: resolved)
+        _ = try renderer.render(setup: setup, recipe: resolved, wholeFrame: wholeFrame)
         let image = renderer.makeDisplayImage(colorSpaceName: resolved.outputColorSpace)
-        return Output(image: image, resolved: resolved, metered: metered,
+        let map = GeometryMap(resolved.geometry, sourceWidth: source.width, sourceHeight: source.height,
+                              wholeFrame: wholeFrame)
+        return Output(image: image, resolved: resolved, metered: metered, map: map,
                       milliseconds: (CFAbsoluteTimeGetCurrent() - start) * 1000)
     }
 

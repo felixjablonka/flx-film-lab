@@ -124,11 +124,12 @@ FLX Film Lab is *not* a faithful reproduction:
    The split-contrast and regional-colour zones use the same lightness scale.
    Auto Contrast fits the frame's textured shadow-to-highlight range onto the
    paper rather than NegPy's textural-range formula.
-10. **16 colour profiles are built here rather than upstream** — every
+10. **19 colour profiles are built here rather than upstream** — every
    slide film (Provia 100F, Provia 400X, Astia 100F, Velvia 50, Velvia 100,
    Ektachrome E100, Kodachrome 25, 64 and 200), Superia 1600 and Superia Reala
-   100, Agfa Optima II 100 and Portrait XPS 160, and Fujifilm's Eterna Vivid
-   160T, Eterna 500T and Reala 500D motion picture negatives, in `profiles/`;
+   100, Agfa Optima II 100 and Portrait XPS 160, Fujifilm's Eterna Vivid
+   160T, Eterna 500T and Reala 500D motion picture negatives, Kodak Royal Gold
+   100 and Vericolor III 160, and HARMAN Phoenix 200, in `profiles/`;
    for the four agx also has (Provia 100F, Velvia 100, Ektachrome E100 and
    Kodachrome 64), they replace its profiles. Their characteristic curves,
    spectral sensitivities and, where a sheet plots them, dye spectra are
@@ -155,9 +156,36 @@ FLX Film Lab is *not* a faithful reproduction:
    table, as Superia 1600 is, has the filtration solved for a neutral mid-grey,
    as item 11's black-and-white negatives on colour paper do. The Status A and
    M responsivities in `tools/bake/data/densitometer/` are agx's digitisation
-   of ISO 5-3, after Giorgianni & Madden (2009).
+   of ISO 5-3, after Giorgianni & Madden (2009). Slides can be shot through
+   Tiffen's 81C and 812 warming filters, their transmittance read off the
+   charts in Tiffen's *Filter Specifications* catalogue (pp. 13 and 16), with
+   the exposure opened up by each filter's factor for the green-sensitive
+   layer. Royal Gold 100 (Kodak E-41) and Vericolor III 160 (Kodak E-26) take
+   less from agx: their base is their sheet's own D-min spectral density rather
+   than a donor's base and mask. Their dyes are those of the agx negative that
+   best fits what the sheet's midscale neutral adds over D-min (Ektar 100;
+   Fujifilm C200), each moved and stretched about its peak until the three add
+   up to that neutral. They run without agx's per-stock spectral adaptation
+   window, which is fitted to agx's own stocks' sensitivities. HARMAN Phoenix
+   200 (technical information, Sep 2024) goes further:
+   - Its sheet plots relative log exposure, and its ISO 200 was measured by the
+     ISO method, so the curves' ISO 5800 speed point is put at sqrt(2) / 200
+     lux-seconds. It is metered at EI 125, within HARMAN's EI 100-200.
+   - Its spectral sensitivities, plotted on a linear scale, are read as
+     plotted. It has no orange mask, so its base is its fog and stain, in Kodak
+     Gold 200's dyes (HARMAN publishes no dye spectra).
+   - It runs without DIR couplers. Its curves are twice as steep as a usual
+     negative's, and at agx's coupler strength the inhibition would exceed its
+     whole contrast.
+   - Its enlarger filtration is solved at bake time in agx's pipeline for every
+     colour paper and carried in the neutral-filter table, since the engine's
+     solve does not reach its yellow from agx's default.
+   - Its paper grades reach R400 rather than R180, by its contrast over Portra
+     400's (`gradeSoftest`), and it opens at R200.5 (`gradeDefault`).
+   - Its halation is agx's preset for a film with no antihalation layer.
 11. **Black-and-white stocks are built here, from datasheets alone** — Kodak
-   Tri-X 400 (Kodak F-4017), Ilford HP5 Plus and Ilford Multigrade RC Deluxe
+   Tri-X 400 (Kodak F-4017), Kodak T-Max 100 (Kodak Alaris F-4016), Ilford HP5
+   Plus and Ilford Multigrade RC Deluxe
    (HARMAN technology technical information), Fujifilm Neopan 1600
    (Fujifilm AF3-608E) and Agfa APX 25 (Agfa's Professional range sheet), in
    `profiles/` by
@@ -189,7 +217,11 @@ FLX Film Lab is *not* a faithful reproduction:
    between the sheet's 10 and 12 minute curves along exposure at each density,
    and its mid-grey sits where a meter set to EI 1600 puts it on Kodak's
    absolute axis. Kodak gives no granularity for a push, so its grain is Tri-X's
-   17 scaled by the square root of the two curves' slopes (Selwyn), RMS 19. A
+   17 scaled by the square root of the two curves' slopes (Selwyn), RMS 19.
+   T-Max 100 takes Kodak's small-tank D-76 time, 6 1/2 minutes, interpolated
+   between the sheet's 6 and 7 1/2 minute curves the same way; its scatter and
+   edge effect are fitted to Kodak's own T-Max MTF (to 50 cycles/mm), and its
+   grain to Kodak's RMS 8. A
    black-and-white negative on colour paper, a pair agx's neutral-filtration
    table does not cover, has its filtration solved so a mid-grey prints
    neutral. Camera filters for these
@@ -220,11 +252,15 @@ FLX Film Lab is *not* a faithful reproduction:
    saturation" at Ektar 100's (1.20x), whose sheet says just that: Agfa Portrait
    XPS 160 ("restrained") x0.48, Optima II 100 ("high") x0.7, and Eterna Vivid
    160T ("high color saturation") 1.13 times Eterna 500T's chroma on 2383,
-   x1.25. The overrides are in `tools/bake/stock_overrides.py` and are applied
+   x1.25. Vericolor III 160 ("moderate color saturation", Portra 160NC its
+   successor) at Portra 160's chroma, x0.46, and Royal Gold 100, whose sheet
+   puts it in the Gold family and says nothing of saturation, at Gold 200's on
+   Ektacolor Edge, x0.59. The overrides are in `tools/bake/stock_overrides.py` and are applied
    to the parity references too, so parity still compares the engine with agx at
    equal parameters.
-13. **Slide films' sharpness is fitted to their datasheets' MTF**
-   (`tools/bake/slide_mtf.py`) rather than taken from agx's defaults, with two
+13. **Slide films' sharpness is fitted to their datasheets' MTF**, and so is
+   Vericolor III's, the one colour negative whose sheet plots one
+   (`tools/bake/slide_mtf.py`), rather than taken from agx's defaults, with two
    engine changes agx does not have. agx's DIR couplers sharpen fine detail by
    1/(1 - b), b the share of a layer's contrast its inhibition takes, which
    grows with the curve's slope, so on a slide's steep shadows the edge effect
@@ -263,7 +299,7 @@ GPLv3 with the rest. Glow's bloom is the Photoshop "Pro Mist" recipe; its glow a
 halation follow NegPy. The Stills mode uses the bloom and the glow; the Motion
 mode all three.
 
-## Log curves: N-Log, V-Log, Apple Log, Apple Log 2, F-Log, Canon Log, S-Log3
+## Log curves: N-Log, V-Log, Apple Log, Apple Log 2, F-Log, Canon Log, S-Log3, I-Log
 
 The N-Log curve (`FLXFilmLab/Engine/NLog.swift`) is Nikon's, from the *N-Log
 Specification Document* 1.0.0 (Nikon, 2018), with its constants as
@@ -288,7 +324,10 @@ from Canon's *EOS C500 Firmware Update* (2014). The S-Log3 curve and the
 S-Gamut3 and S-Gamut3.Cine primaries (`FLXFilmLab/Engine/SLog3.swift`) are
 Sony's, from the *Technical Summary for S-Gamut3.Cine/S-Log3 and
 S-Gamut3/S-Log3* (Sony), with the constants as colour-science gives them in
-`log_encoding_SLog3`. No colour-science or OpenColorIO code is included.
+`log_encoding_SLog3`. The I-Log curve (`FLXFilmLab/Engine/ILog.swift`) is
+Insta360's, from the *Insta360 10-bit I-Log White Paper* (Insta360, June
+2026), which also puts its primaries at BT.2020's. No colour-science or
+OpenColorIO code is included.
 
 ## App icon
 

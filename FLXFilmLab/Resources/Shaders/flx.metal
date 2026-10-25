@@ -35,6 +35,18 @@ constant int OFF_CMFS                 = 1215;   // NW*3
 // Uniforms
 // ---------------------------------------------------------------------------
 
+// The print's shape (Renderer.render, step 2d): GeometryMap.outputToSource,
+// a print pixel's position to the frame's, both with pixel edges on whole
+// numbers. `active` 0 is the frame as it is.
+struct GeometryUniforms {
+    float2 column0;
+    float2 column1;
+    float2 offset;
+    float2 sourceSize;
+    int    active;
+    int    pad;
+};
+
 struct FilmUniforms {
     float3x3 rgbToXYZ;        // working RGB -> XYZ, CAT16-adapted to the film's reference illuminant
     float exposureScale;      // 2^exposureEV
@@ -599,6 +611,7 @@ kernel void print_and_scan(texture2d<float, access::read>  cmyFilm    [[texture(
                            constant float *tables                     [[buffer(0)]],
                            constant PrintUniforms &u                  [[buffer(1)]],
                            constant float *toneShift                  [[buffer(2)]],
+                           constant GeometryUniforms &shape           [[buffer(3)]],
                            uint2 gid                                  [[thread_position_in_grid]])
 {
     if (gid.x >= dst.get_width() || gid.y >= dst.get_height()) return;
@@ -607,10 +620,15 @@ kernel void print_and_scan(texture2d<float, access::read>  cmyFilm    [[texture(
 
     // The map is smaller than the frame (feathered masks are low-frequency) and
     // is sampled bilinearly, so it costs the same at any output resolution.
+    // It is drawn on the frame, so a shaped print finds it through its shape.
     constexpr sampler maskSampler(coord::normalized, filter::linear, address::clamp_to_edge);
     float2 db = float2(0.0f);
     if (u.hasDodgeBurn != 0) {
         float2 uv = (float2(gid) + 0.5f) / float2(dst.get_width(), dst.get_height());
+        if (shape.active != 0) {
+            float2 o = float2(gid) + 0.5f;
+            uv = (shape.column0 * o.x + shape.column1 * o.y + shape.offset) / shape.sourceSize;
+        }
         db = dodgeBurn.sample(maskSampler, uv).rg;
     }
     float localGrade = db.y;                          // ISO-R points
@@ -733,14 +751,64 @@ kernel void grain_restore_mean(texture2d<float, access::read_write> print       
     print.write(float4(max(print.read(gid).rgb, 0.0f) * gain, 1.0f), gid);
 }
 
+
+// Catmull-Rom weights for the four taps around a sample `t` past the second.
+static inline float4 catmull_rom(float t) {
+    float t2 = t * t, t3 = t2 * t;
+    return 0.5f * float4(-t3 + 2.0f * t2 - t,
+                         3.0f * t3 - 5.0f * t2 + 2.0f,
+                         -3.0f * t3 + 4.0f * t2 + t,
+                         t3 - t2);
+}
+
+// The developed negative turned, mirrored, levelled and cropped, before the
+// grain is drawn on it. Bicubic: bilinear softens a levelled picture in
+// bands, wherever its samples fall between pixels. Turns and crops land on
+// pixel centres, where the weights are 0, 1, 0, 0 and the pixels are copied
+// exactly. Nothing goes past the four nearest pixels, so a hard edge does not
+// ring.
+kernel void apply_geometry(texture2d<float, access::read>  src [[texture(0)]],
+                           texture2d<float, access::write> dst [[texture(1)]],
+                           constant GeometryUniforms &u        [[buffer(0)]],
+                           uint2 gid                           [[thread_position_in_grid]])
+{
+    if (gid.x >= dst.get_width() || gid.y >= dst.get_height()) return;
+    float2 o = float2(gid) + 0.5f;
+    float2 p = u.column0 * o.x + u.column1 * o.y + u.offset - 0.5f;   // pixel centres on whole numbers
+    float2 nearest = round(p);
+    if (all(abs(p - nearest) < 1e-3f)) p = nearest;
+    float2 f = floor(p);
+    float4 wx = catmull_rom(p.x - f.x), wy = catmull_rom(p.y - f.y);
+    int2 base = int2(f) - 1;
+    int2 last = int2(src.get_width(), src.get_height()) - 1;
+    float3 c = 0.0f;
+    for (int j = 0; j < 4; j++) {
+        uint y = uint(clamp(base.y + j, 0, last.y));
+        float3 row = 0.0f;
+        for (int i = 0; i < 4; i++) {
+            row += wx[i] * src.read(uint2(uint(clamp(base.x + i, 0, last.x)), y)).rgb;
+        }
+        c += wy[j] * row;
+    }
+    uint2 n0 = uint2(clamp(int2(f), int2(0), last)), n1 = uint2(clamp(int2(f) + 1, int2(0), last));
+    float3 a = src.read(n0).rgb, b = src.read(uint2(n1.x, n0.y)).rgb;
+    float3 d = src.read(uint2(n0.x, n1.y)).rgb, e = src.read(n1).rgb;
+    dst.write(float4(clamp(c, min(min(a, b), min(d, e)), max(max(a, b), max(d, e))), 1.0f), gid);
+}
+
 // ---------------------------------------------------------------------------
 // Display transform — output encoding for the on-screen texture
 // ---------------------------------------------------------------------------
 
-kernel void encode_display(texture2d<float, access::read>  src [[texture(0)]],
-                           texture2d<float, access::write> dst [[texture(1)]],
-                           constant int &encoding              [[buffer(0)]],
-                           uint2 gid                           [[thread_position_in_grid]])
+// `coverage` 1 makes the parts of the print outside the frame transparent,
+// premultiplied, so the canvas shows through the empty corners of a levelled
+// frame while its crop is drawn.
+kernel void encode_display(texture2d<float, access::read>  src   [[texture(0)]],
+                           texture2d<float, access::write> dst   [[texture(1)]],
+                           constant int &encoding                [[buffer(0)]],
+                           constant int &coverage                [[buffer(1)]],
+                           constant GeometryUniforms &shape      [[buffer(2)]],
+                           uint2 gid                             [[thread_position_in_grid]])
 {
     if (gid.x >= dst.get_width() || gid.y >= dst.get_height()) return;
     float3 c = max(src.read(gid).rgb, 0.0f);
@@ -750,5 +818,12 @@ kernel void encode_display(texture2d<float, access::read>  src [[texture(0)]],
     } else if (encoding == 2) {
         c = pow(c, 1.0f / 1.80078125f);               // ProPhoto RGB (ROMM)
     }
-    dst.write(float4(clamp(c, 0.0f, 1.0f), 1.0f), gid);
+    float a = 1.0f;
+    if (coverage == 1) {
+        float2 o = float2(gid) + 0.5f;
+        float2 s = shape.column0 * o.x + shape.column1 * o.y + shape.offset;
+        float inside = min(min(s.x, s.y), min(shape.sourceSize.x - s.x, shape.sourceSize.y - s.y));
+        a = clamp(inside + 0.5f, 0.0f, 1.0f);
+    }
+    dst.write(float4(clamp(c, 0.0f, 1.0f) * a, a), gid);
 }

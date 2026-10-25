@@ -126,6 +126,30 @@ class Build:
     # instead of taken from the donor.
     neutral_greys: bool = False
     colours: tuple[tuple[float, float, float], tuple[float, float, float], tuple[float, float, float]] | None = None
+    # A sheet that plots the spectral density of a midscale neutral and of
+    # D-min (`sheet_readers.NEUTRAL_SPECTRA`): its D-min, base and fog, as the
+    # base density in place of the donor's base and mask, and its neutral
+    # stored with the profile.
+    sheet_base: bool = False
+    # And its dyes: the donor's measured shapes moved and stretched until they
+    # add up to the sheet's neutral (`neutral_dyes`).
+    fit_dyes: bool = False
+    # The antihalation agx seeds the stock's halation from ("strong", "weak",
+    # "no"), where the donor's would not do.
+    antihalation: str | None = None
+    # No Hanatos-2025 adaptation window: agx fits one to each of its own
+    # stocks' sensitivities, and cannot refit it for another film's.
+    no_window: bool = False
+    # A sheet that plots relative log exposure, placed by the ISO 5800 speed
+    # point its rating was measured at (`iso_speed_point`).
+    relative_axis: bool = False
+    # A film without an orange mask: its base is its fog and stain, the dyes in
+    # the amounts that read the curves' own D-min.
+    unmasked_base: bool = False
+    # Spectral sensitivity plotted on a linear scale, each curve falling to
+    # zero at both ends: taken as plotted, with none beyond, and no donor tails.
+    sensitivity_linear: bool = False
+    created: str = "2026-10-18"
 
 
 def _kodachrome_sensitivity(page: int, left: float, top: float) -> VectorPlot:
@@ -274,6 +298,58 @@ BUILDS = [
           "Agfa-Gevaert, AGFACOLOR PORTRAIT XPS 160 PROFESSIONAL (Agfa Professional range, Technical Data), "
           "AP 70/C-41, Status M.",
           unmix=True, source=True, metered_ei=160, paper="kodak_portra_endura"),
+    # Kodak's Royal Gold 100 (1998) and Vericolor III (1997), each built on its
+    # own sheet as far as it goes: curves, spectral sensitivities, placement on
+    # the sheet's absolute axis, and the spectral density of D-min, base and
+    # fog, as the base in place of a donor's base and mask. Neither plots
+    # single dyes, only a midscale neutral: the dyes are those of agx's colour
+    # negative that fits it best (`build_profiles.py --donors`), moved and
+    # stretched until they add up to it. agx's adaptation window, fitted to its
+    # own stocks' sensitivities, is left out. "Extremely high sharpness" and a
+    # professional portrait film: the halation of a modern colour negative.
+    # Royal Gold: Kodak's own dyes fit its neutral (Ektar 100 0.016 RMS
+    # density, Gold 200 0.027); metered at ISO 100 a grey card reads red 0.84,
+    # in Kodak's 0.80-1.00, and its curves' own ISO speed is 103. Kodak prints
+    # it on Ektacolor papers: Ektacolor Edge.
+    Build("kodak_royal_gold_100", "Kodak Royal Gold 100", "kodak_ektar_100",
+          "e41-1998_02_Kodak Royal Gold 100.pdf", 2, 100,
+          "Kodak E-41 (minor revision 2-98), KODAK ROYAL GOLD 100 Film, C-41, Status M; its spectral "
+          "sensitivities read at density 0.2 above D-min.",
+          unmix=True, source=True, metered_ei=100, paper="kodak_ektacolor_edge",
+          sheet_base=True, fit_dyes=True, no_window=True, antihalation="strong", created="2026-10-25"),
+    # Vericolor III's dyes are broader than Kodak's later ones: Fujifilm C200's
+    # fit its neutral best (0.047; X-TRA 400 0.049, Portra 160 0.104), and
+    # moved and stretched 0.012. Metered at its rated ISO 160 a grey card reads
+    # red 0.69 against Kodak's 0.73-0.93; its curves' own ISO speed is 126,
+    # and Kodak notes that many photographers expose it at EI 125. Kodak
+    # prints it on Ektacolor Portra III: Portra Endura.
+    Build("kodak_vericolor_iii_160", "Kodak Vericolor III 160", "fujifilm_c200",
+          "e26-Vericolor_III.pdf", 3, 160,
+          "Kodak E-26 (minor revision 4-97), KODAK VERICOLOR III Professional Film (5026, 6006), C-41, "
+          "Status M.",
+          unmix=True, source=True, metered_ei=160, paper="kodak_portra_endura",
+          sheet_base=True, fit_dyes=True, no_window=True, antihalation="strong", created="2026-10-25"),
+    # HARMAN Phoenix 200 (2024), an experimental C-41 film. Its sheet's bitmaps
+    # give the curves, against relative log exposure, and the spectral
+    # sensitivities, on a linear "Relative Sensitivity" scale. Its ISO 200 was
+    # measured by the ISO method, which places the relative axis; it is metered
+    # at EI 125 (Felix's pick), in HARMAN's own EI 100-200 and the rating HARMAN
+    # gives its re-release. It has no
+    # masking dyes, and its D-min is high (G 0.91, the "magenta / purple tint"):
+    # the base is that fog and stain, in the dyes. HARMAN publishes no dye
+    # spectra: the dyes and the coupler model are those of agx's other ISO 200
+    # colour negative for general use, Kodak Gold 200. "Limited antihalation" and
+    # "striking halation effects around bright light sources": agx's "no"
+    # antihalation, a rem-jet-free film's, at Felix's pick.
+    # Its wedge spectrogram is "to tungsten light (2856K)", read without taking
+    # the lamp out, as HARMAN's HP5 Plus spectrogram is (`build_bw_profiles`).
+    Build("harman_phoenix_200", "Harman Phoenix 200", "kodak_gold_200",
+          "HARMAN Phoenix Technical Data sheet 0924.pdf", 2, 200,
+          "HARMAN technology, HARMAN Phoenix 200 technical information (Sep 2024), C-41; the sheet names no "
+          "densitometry, taken as Status M.",
+          unmix=True, source=True, relative_axis=True, metered_ei=125, unmasked_base=True,
+          sensitivity_linear=True, no_window=True, antihalation="no", paper="kodak_portra_endura",
+          created="2026-10-25"),
     Build("fujifilm_superia_1600", "Fujifilm Superia 1600", "fujifilm_xtra_400",
           "superia_1600_datasheet.pdf", 5, 1600,
           "Fujifilm AF3-145E, FUJICOLOR SUPERIA 1600 [CU], CN-16, Status M.",
@@ -485,6 +561,26 @@ def channel_speed_point(log_exposure: np.ndarray, density: np.ndarray, channel: 
     target = column.min() + above_min
     order = np.argsort(column)
     return float(np.interp(target, column[order], log_exposure[order]))
+
+
+def iso_speed_point(log_exposure: np.ndarray, net: np.ndarray) -> float:
+    """ISO 5800's speed point of a colour negative, H_m: the mean log exposure
+    at which the green layer and the slowest one reach 0.15 over D-min. The
+    rated speed S puts it at sqrt(2) / S lux-seconds."""
+    points = [channel_speed_point(log_exposure, net, c, above_min=0.15) for c in range(3)]
+    return 0.5 * (points[1] + max(points))
+
+
+def linear_log_sensitivity(wl: np.ndarray, traced: dict[str, np.ndarray]) -> np.ndarray:
+    """Sensitivities plotted on a linear scale, as log sensitivity: each layer as
+    plotted, none (NaN) where it is zero and beyond its ends. Each layer's level
+    is arbitrary here: `balance` sets it."""
+    out = np.full((wl.size, 3), np.nan)
+    for c, name in enumerate("RGB"):
+        curve = traced[name][np.argsort(traced[name][:, 0])]
+        y = np.interp(wl, curve[:, 0], curve[:, 1], left=0.0, right=0.0)
+        out[y > 0, c] = np.log10(y[y > 0])
+    return out
 
 
 def align_channel_balance(sheet_grid: np.ndarray, density: np.ndarray,
@@ -740,6 +836,13 @@ def own_dyes(traced: dict[str, np.ndarray], wl: np.ndarray, valid: np.ndarray,
         curve = traced[name][np.argsort(traced[name][:, 0])]
         out[:, j] = np.clip(np.interp(wl, curve[:, 0], curve[:, 1]), 0, None)
     out[~valid] = 0.0
+    return scaled_like(out, like, resp)
+
+
+def scaled_like(dyes: np.ndarray, like: np.ndarray, resp: np.ndarray) -> np.ndarray:
+    """Each dye scaled so a unit amount reads the same density in its own
+    channel as `like`'s does: the dye-amount scale the couplers work in."""
+    out = dyes.copy()
     for j in range(3):
         target = status_density(like[:, j][None, :], resp)[0, j]
         lo, hi = 0.2, 5.0
@@ -749,6 +852,44 @@ def own_dyes(traced: dict[str, np.ndarray], wl: np.ndarray, valid: np.ndarray,
             lo, hi = (mid, hi) if density < target else (lo, mid)
         out[:, j] *= 0.5 * (lo + hi)
     return out
+
+
+def neutral_dyes(stock: str, wl: np.ndarray, donor_cd: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """The donor's dye spectra made the sheet's own, as far as it measures them.
+
+    A sheet that plots the spectral density of a midscale neutral and of D-min
+    fixes what its three dyes add up to, if not each one. Each of the donor's
+    measured dyes is moved along the spectrum and stretched about its peak, by
+    at most 20 nm and 25% and held to small moves, until in the amounts that
+    fit best the three add up to the neutral less D-min. Returns the dyes (C,
+    M, Y columns, as agx stores them; NaN where a moved dye leaves the donor's
+    measured range) and the fit (amounts, shifts in nm, stretches).
+    """
+    import sheet_readers
+    from scipy.optimize import nnls
+    sheet = sheet_readers.neutral_spectra(stock)
+    inside = (wl >= max(c[0, 0] for c in sheet.values())) & (wl <= min(c[-1, 0] for c in sheet.values()))
+    target = np.interp(wl, sheet["mid"][:, 0], sheet["mid"][:, 1]) - np.interp(wl, sheet["min"][:, 0], sheet["min"][:, 1])
+
+    def moved(dye, shift, stretch):
+        ok = np.isfinite(dye)
+        peak = wl[ok][np.argmax(dye[ok])]
+        return np.interp(peak + (wl - peak - shift) / stretch, wl[ok], dye[ok], left=np.nan, right=np.nan)
+
+    def dyes(q):
+        return np.stack([moved(donor_cd[:, j], q[3 + j], q[6 + j]) for j in range(3)], axis=-1)
+
+    def residual(q):
+        d = dyes(q)
+        # A dye moved off where the sheet measures costs as much as a bad fit.
+        r = np.where(np.isfinite(d).all(axis=1), np.nan_to_num(d) @ q[:3] - target, 0.3)[inside]
+        return np.concatenate([r, 0.002 * np.asarray(q[3:6]), 0.2 * np.log(q[6:9])])
+
+    ok = inside & np.isfinite(donor_cd).all(axis=1)
+    amounts, _ = nnls(donor_cd[ok], target[ok])
+    q = least_squares(residual, np.concatenate([amounts, [0.0] * 3, [1.0] * 3]),
+                      bounds=([0] * 3 + [-20] * 3 + [0.8] * 3, [3] * 3 + [20] * 3 + [1.25] * 3)).x
+    return dyes(q), q
 
 
 def _lab(xyz: np.ndarray, white: np.ndarray) -> np.ndarray:
@@ -789,6 +930,51 @@ def neutral_layer_shifts(grid, amounts, cd, bd, defined, viewing) -> np.ndarray:
     return np.array([p[0], 0.0, p[1]])
 
 
+# agx's colour negatives: the dye sets and bases a negative built from its sheet
+# can take (`donor_fit`).
+NEGATIVE_DONORS = ("kodak_gold_200", "kodak_ultramax_400", "kodak_portra_160", "kodak_portra_400", "kodak_portra_800",
+                   "kodak_ektar_100", "fujifilm_c200", "fujifilm_xtra_400", "fujifilm_pro_400h", "kodak_vision3_50d",
+                   "kodak_vision3_200t", "kodak_vision3_250d", "kodak_vision3_500t", "kodak_verita_200d")
+
+
+def donor_fit(stock: str, candidates=NEGATIVE_DONORS) -> list[tuple[str, float, float, float]]:
+    """How well each candidate's dyes and base reproduce a sheet that plots the
+    spectral density of a midscale neutral and of D-min instead of single dyes
+    (`sheet_readers.NEUTRAL_SPECTRA`): (stock, dyes RMS, neutral RMS, D-min
+    RMS), best dyes first.
+
+    The dyes are fitted to what the neutral adds over D-min, in the
+    non-negative amounts that fit it best: what a build that takes its base
+    from the sheet's D-min (`Build.sheet_base`) borrows. A build that keeps the
+    donor's base (Agfa's) was chosen by the other two: the neutral and D-min
+    each as the candidate's base plus its dyes, at D-min the fog. All over the
+    wavelengths the sheet and every candidate define, within 400-700 nm.
+    """
+    import sheet_readers
+    from scipy.optimize import nnls
+    sheet = sheet_readers.neutral_spectra(stock)
+    profiles = {name: load_profile(name) for name in candidates}
+    wl = np.asarray(next(iter(profiles.values())).data.wavelengths, float)
+    ok = (wl >= 400) & (wl <= 700)
+    for curve in sheet.values():
+        ok &= (wl >= curve[0, 0]) & (wl <= curve[-1, 0])
+    for profile in profiles.values():
+        ok &= (np.isfinite(np.asarray(profile.data.channel_density, float)).all(axis=1)
+               & np.isfinite(np.asarray(profile.data.base_density, float)))
+    mid = np.interp(wl[ok], sheet["mid"][:, 0], sheet["mid"][:, 1])
+    dmin = np.interp(wl[ok], sheet["min"][:, 0], sheet["min"][:, 1])
+    out = []
+    for name, profile in profiles.items():
+        cd = np.asarray(profile.data.channel_density, float)[ok]
+        bd = np.asarray(profile.data.base_density, float)[ok]
+        rms = []
+        for target, base in ((mid - dmin, 0.0), (mid, bd), (dmin, bd)):
+            amounts, _ = nnls(cd, target - base)
+            rms.append(float(np.sqrt(np.mean((cd @ amounts + base - target) ** 2))))
+        out.append((name, *rms))
+    return sorted(out, key=lambda t: t[1])
+
+
 def build_unmixed(build: Build) -> Path:
     """A profile from the datasheet's curves, taken as the integral densities they are.
 
@@ -815,6 +1001,28 @@ def build_unmixed(build: Build) -> Path:
     base = status_density(bd[None, :], resp)[0]
     donor_net = status_density(np.asarray(d.density_curves, float) @ cd.T + bd[None, :], resp) - base
     donor_cd = np.asarray(d.channel_density, float)
+    measured = {}
+    if build.sheet_base or build.fit_dyes:
+        # What the sheet measures in place of the donor's: its D-min as the
+        # base, the donor's dyes moved until they add up to its neutral. Both
+        # are read where each is defined.
+        import sheet_readers
+        sheet = sheet_readers.neutral_spectra(build.stock)
+        stored_cd, stored_bd = donor_cd, np.asarray(d.base_density, float)
+        if build.fit_dyes:
+            stored_cd, measured["dye fit"] = neutral_dyes(build.stock, wl, donor_cd)
+        if build.sheet_base:
+            stored_bd = np.interp(wl, sheet["min"][:, 0], sheet["min"][:, 1], left=np.nan, right=np.nan)
+            measured["neutral"] = np.interp(wl, sheet["mid"][:, 0], sheet["mid"][:, 1], left=np.nan, right=np.nan)
+        defined = np.isfinite(stored_cd).all(axis=1) & np.isfinite(stored_bd)
+        resp = responsivities(donor.info.densitometer, wl) * defined[:, None]
+        cd = np.nan_to_num(stored_cd)
+        if build.fit_dyes:
+            cd = scaled_like(cd, np.nan_to_num(donor_cd), resp)
+        bd = np.where(defined, np.nan_to_num(stored_bd), 0.0)
+        base = status_density(bd[None, :], resp)[0]
+        measured["dyes"] = np.where(defined[:, None], cd, np.nan)
+        measured["base"] = np.where(defined, bd, np.nan)
     sourced = {}
     if build.source:
         import sheet_readers
@@ -834,6 +1042,17 @@ def build_unmixed(build: Build) -> Path:
                          smooth=9 if build.raster is not None else 1,
                          trim=0.02 if build.raster is not None else 0.0)
     sheet_net = sheet_dc - sheet_dc.min(axis=0, keepdims=True)
+    if build.unmasked_base:
+        # No orange mask: the base is the film's fog and stain, its dyes in the
+        # amounts that read the curves' own D-min.
+        defined = np.isfinite(donor_cd).all(axis=1)
+        resp = responsivities(donor.info.densitometer, wl) * defined[:, None]
+        fog, _ = unmix(sheet_dc.min(axis=0)[None, :], cd, np.zeros_like(bd), resp)
+        bd = fog[0] @ cd.T
+        base = status_density(bd[None, :], resp)[0]
+        measured["dyes"] = np.where(defined[:, None], cd, np.nan)
+        measured["base"] = np.where(defined, bd, np.nan)
+        measured["fog"] = base
 
     if build.stop_axis:
         offset = 0.0
@@ -843,6 +1062,15 @@ def build_unmixed(build: Build) -> Path:
         offset = -(point + build.normal_above_speed)
         placement = (f"Mid-grey {build.normal_above_speed:.2f} decades above the green layer's D-min + 0.1 speed "
                      f"point (log H {point:.3f} on the sheet's axis).")
+    elif build.relative_axis:
+        point = iso_speed_point(sheet_grid, sheet_net)
+        ei = build.metered_ei or build.iso
+        above = float(np.log10(0.65 * 12.5 * build.iso / (np.sqrt(2) * ei)))
+        offset = -(point + above)
+        placement = (f"The sheet plots relative log exposure, and its ISO {build.iso} was measured by the ISO "
+                     f"method: the curves' ISO 5800 speed point (0.15 over D-min, green and slowest layer) is "
+                     f"taken as sqrt(2) / {build.iso} lux-seconds, and mid-grey goes where a meter set to EI "
+                     f"{ei} puts it, {above:.3f} decades above.")
     elif build.metered_ei is not None:
         metered = float(np.log10(0.65 * 12.5 / build.metered_ei))
         offset = -metered
@@ -913,6 +1141,14 @@ def build_unmixed(build: Build) -> Path:
     if build.dyes is not None or build.dyes_raster is not None or "dyes" in sourced:
         profile.update_data(channel_density=np.where(np.isnan(donor_cd), np.nan, cd))
         own.append("dye spectra")
+    if measured:
+        profile.update_data(channel_density=measured["dyes"], base_density=measured["base"])
+        if "neutral" in measured:
+            profile.update_data(midscale_neutral_density=measured["neutral"])
+    if build.antihalation is not None:
+        profile.update_info(antihalation=build.antihalation)
+    if build.no_window:
+        profile.update_data(hanatos2025_adaptation_window_params=np.zeros(0))
     if build.sensitivity is not None or build.sensitivity_raster is not None or "sensitivity" in sourced:
         traced = (sourced["sensitivity"] if "sensitivity" in sourced else
                   raster_spectra(SHEETS / build.pdf, build.page, build.sensitivity_raster)
@@ -920,8 +1156,8 @@ def build_unmixed(build: Build) -> Path:
                   vector_plots.by_colour(build.sensitivity, dict(zip("RGB", build.colours)))
                   if build.colours is not None else
                   vector_plots.by_position(build.sensitivity, ("B", "G", "R")))
-        profile.update_data(log_sensitivity=own_log_sensitivity(
-            np.asarray(d.log_sensitivity, float), wl, traced))
+        profile.update_data(log_sensitivity=linear_log_sensitivity(wl, traced) if build.sensitivity_linear
+                            else own_log_sensitivity(np.asarray(d.log_sensitivity, float), wl, traced))
         balance(profile)
         own.insert(0, "spectral sensitivities")
     profile.data.density_curves_model.centers = centers
@@ -935,17 +1171,49 @@ def build_unmixed(build: Build) -> Path:
            else "read from the vector plot, each layer by where it lies")
     inherited = [n for n in ("spectral sensitivities", "dye spectra") if n not in own]
     inherited += ["base density", "Hanatos-2025 adaptation parameters", "DIR couplers"]
-    profile.metadata.datasource = (
-        f"Characteristic curves{''.join(', ' + n for n in own)} from {build.notes} The curves were {how}, "
-        f"and converted from {donor.info.densitometer.replace('_', ' ').title()} densities into dye amounts "
-        f"with the {'sheet' if 'dye spectra' in own else 'donor'}'s dye spectra and the base density of the "
-        f"agx reference profile '{build.donor}'. {placement}"
-        + (" The sheet's sensitivity shapes continue on the donor's tails beyond the plotted range and are "
-           "balanced so an 18% grey exposes every layer equally." if "spectral sensitivities" in own else "")
-        + f" {', '.join(inherited)[0].upper() + ', '.join(inherited)[1:]} inherited from '{build.donor}', which shares this stock's "
-        f"dye set and process."
-    )
-    profile.metadata.created = "2026-10-18"
+    densitometer = donor.info.densitometer.replace('_', ' ').title()
+    if measured or build.no_window:
+        sensitivities = ("" if "spectral sensitivities" not in own else
+                         " The sheet plots relative sensitivity on a linear scale, each layer falling to zero at both "
+                         "ends: taken as plotted, with none beyond, and balanced so an 18% grey exposes every layer "
+                         "equally." if build.sensitivity_linear else
+                         " The sheet's sensitivity shapes continue on the donor's tails beyond the plotted range and "
+                         "are balanced so an 18% grey exposes every layer equally.")
+        base_note = (" The base density is the sheet's own D-min spectral density, base and fog, and the profile "
+                     "keeps its midscale neutral." if build.sheet_base else
+                     " The film has no orange mask: its base is its fog and stain, the dyes in the amounts that read "
+                     "the curves' own D-min (" + ", ".join(f"{n} {v:.2f}" for n, v in zip("RGB", measured["fog"]))
+                     + ")." if build.unmasked_base else "")
+        dyes_note = ""
+        if build.fit_dyes:
+            q = measured["dye fit"]
+            dyes_note = (f" The sheet plots no single-dye spectra: the dyes are those of the agx reference profile "
+                         f"'{build.donor}', of agx's colour negatives the best fit to the sheet's neutral over D-min, "
+                         f"each moved and stretched about its peak until the three add up to it: cyan {q[3]:+.1f} nm "
+                         f"x{q[6]:.3f}, magenta {q[4]:+.1f} nm x{q[7]:.3f}, yellow {q[5]:+.1f} nm x{q[8]:.3f}.")
+        window_note = (" No spectral adaptation window: agx fits one to each of its own stocks' sensitivities."
+                       if build.no_window else "")
+        borrowed = ([] if build.fit_dyes or "dye spectra" in own else ["dye spectra"]) \
+            + ([] if build.sheet_base or build.unmasked_base else ["base density"]) \
+            + ([] if build.no_window else ["Hanatos-2025 adaptation parameters"]) + ["DIR coupler model"]
+        profile.metadata.datasource = (
+            f"Characteristic curves{''.join(', ' + n for n in own)} from {build.notes} The curves were {how}, "
+            f"and converted from {densitometer} densities into dye amounts. {placement}{sensitivities}{base_note}"
+            f"{dyes_note}{window_note} {', '.join(borrowed)[0].upper() + ', '.join(borrowed)[1:]} from "
+            f"'{build.donor}'."
+        )
+    else:
+        profile.metadata.datasource = (
+            f"Characteristic curves{''.join(', ' + n for n in own)} from {build.notes} The curves were {how}, "
+            f"and converted from {densitometer} densities into dye amounts "
+            f"with the {'sheet' if 'dye spectra' in own else 'donor'}'s dye spectra and the base density of the "
+            f"agx reference profile '{build.donor}'. {placement}"
+            + (" The sheet's sensitivity shapes continue on the donor's tails beyond the plotted range and are "
+               "balanced so an 18% grey exposes every layer equally." if "spectral sensitivities" in own else "")
+            + f" {', '.join(inherited)[0].upper() + ', '.join(inherited)[1:]} inherited from '{build.donor}', which shares this stock's "
+            f"dye set and process."
+        )
+    profile.metadata.created = build.created
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     path = OUT_DIR / f"{build.stock}.json"
@@ -1041,8 +1309,21 @@ def build_one(build: Build) -> Path:
 
 
 def main() -> int:
-    print(f"building {len(BUILDS)} profiles from datasheets -> {OUT_DIR}")
-    for build in BUILDS:
+    import argparse
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--only", nargs="*", help="build only these stocks")
+    ap.add_argument("--donors", metavar="STOCK",
+                    help="rank agx's negatives as donors for a sheet that plots neutral spectra, and stop")
+    args = ap.parse_args()
+    if args.donors:
+        print(f"{args.donors}: RMS density of the dyes against the neutral over D-min; and of base + dyes "
+              f"against the neutral and D-min")
+        for name, dyes, neutral, dmin in donor_fit(args.donors):
+            print(f"  {name:22s} dyes {dyes:.3f}   base + dyes: neutral {neutral:.3f}  D-min {dmin:.3f}")
+        return 0
+    builds = [b for b in BUILDS if not args.only or b.stock in args.only]
+    print(f"building {len(builds)} profiles from datasheets -> {OUT_DIR}")
+    for build in builds:
         (build_unmixed if build.unmix else build_one)(build)
     return 0
 

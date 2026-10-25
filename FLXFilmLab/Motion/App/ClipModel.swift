@@ -222,7 +222,7 @@ final class ClipModel: ObservableObject {
 
     func resetTone() {
         look.recipe.brightness = 0
-        look.recipe.grade = Double(Constants.gradeReference)
+        look.recipe.grade = look.recipe.defaultGrade
         look.recipe.shadows = 0
         look.recipe.highlights = 0
     }
@@ -370,8 +370,8 @@ final class ClipModel: ObservableObject {
             "Per-pixel only: diffusion, glow and halation are not in a LUT",
         ]
         if let filter = (try? PackLibrary.shared.pack(recipe.filmStock))?.lensFilter(recipe.lensFilter) {
-            comments.insert(String(format: "Camera filter: %@, Wratten %@, %.1fx (exposure opened %.1f stops)",
-                                   filter.name, filter.wratten, filter.factor, log2(max(filter.factor, 1))), at: 1)
+            comments.insert(String(format: "Camera filter: %@, %.1fx (exposure opened %.1f stops)",
+                                   filter.designation, filter.factor, log2(max(filter.factor, 1))), at: 1)
         }
         Task {
             do {

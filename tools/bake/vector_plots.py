@@ -132,10 +132,12 @@ def calibration_report(plot: VectorPlot) -> str:
     return f"rules fit to {ex:.3g} (x) and {ey:.3g} (y) in data units"
 
 
-def by_dashes(plot: VectorPlot, patterns: dict[str, tuple[float, ...]]) -> dict[str, np.ndarray]:
-    """Curves drawn alike but for their dash pattern (`()` for solid)."""
+def by_dashes(plot: VectorPlot, patterns: dict[str, tuple[float, ...]],
+              polylines: bool = False) -> dict[str, np.ndarray]:
+    """Curves drawn alike but for their dash pattern (`()` for solid); with
+    `polylines`, also curves drawn as long chains of straight segments."""
     out: dict[str, np.ndarray] = {}
-    for path, items in _curve_paths(plot):
+    for path, items in _curve_paths(plot, polylines):
         text = path.get("dashes") or "[] 0"
         dash = tuple(round(float(v), 1) for v in text[text.index("[") + 1:text.index("]")].split())
         for name, want in patterns.items():
@@ -145,6 +147,70 @@ def by_dashes(plot: VectorPlot, patterns: dict[str, tuple[float, ...]]) -> dict[
     if missing:
         raise ValueError(f"{plot.pdf} page {plot.page + 1}: no curve dashed as {sorted(missing)}")
     return out
+
+
+def joined(plot: VectorPlot, tolerance: float = 0.3) -> list[np.ndarray]:
+    """Every curve in the plot as data, its strokes joined end to end.
+
+    Kodak's sheets of the 1990s draw a curve in several strokes — part of one
+    in the same path as part of another, the steep end of a sensitivity as a
+    path of its own — so strokes are collected wherever they lie and chained
+    where one ends within `tolerance` points of another's end. Straight rules
+    and ticks, which have no extent across one axis, are left out; so are
+    dots.
+    """
+    page = pymupdf.open(plot.pdf)[plot.page]
+    strokes = []
+    for path in page.get_drawings():
+        if path.get("type") != "s" or not _inside(plot, path["rect"]):
+            continue
+        for run in _subpaths([i for i in path["items"] if i[0] in ("l", "c")]):
+            points = _flatten_path(run, steps=32)
+            if np.ptp(points[:, 0]) >= 0.5 and np.ptp(points[:, 1]) >= 0.5:
+                strokes.append(points)
+
+    def near(p, q):
+        return float(np.hypot(*(p - q))) < tolerance
+
+    merged = True
+    while merged:
+        merged = False
+        for i in range(len(strokes)):
+            for j in range(len(strokes)):
+                a, b = strokes[i], strokes[j]
+                if i == j:
+                    continue
+                if near(a[-1], b[0]):
+                    chain = np.concatenate([a, b[1:]])
+                elif near(a[-1], b[-1]):
+                    chain = np.concatenate([a, b[::-1][1:]])
+                elif near(a[0], b[0]):
+                    chain = np.concatenate([a[::-1], b[1:]])
+                else:
+                    continue
+                strokes = [s for k, s in enumerate(strokes) if k not in (i, j)] + [chain]
+                merged = True
+                break
+            if merged:
+                break
+    curves = [_to_data(plot, s) for s in strokes]
+    return [c[np.argsort(c[:, 0], kind="stable")] for c in curves]
+
+
+def joined_by_value(plot: VectorPlot, names: tuple[str, ...], at_x: float) -> dict[str, np.ndarray]:
+    """Joined curves (`joined`) named top to bottom by their value at `at_x`."""
+    curves = [c for c in joined(plot) if c[0, 0] <= at_x <= c[-1, 0]]
+    if len(curves) != len(names):
+        raise ValueError(f"{plot.pdf} page {plot.page + 1}: {len(curves)} curves at x={at_x}, expected {len(names)}")
+    return dict(zip(names, sorted(curves, key=lambda c: float(np.interp(at_x, c[:, 0], c[:, 1])), reverse=True)))
+
+
+def joined_by_peak(plot: VectorPlot, names: tuple[str, ...]) -> dict[str, np.ndarray]:
+    """Joined curves (`joined`) named in order of where they peak along x."""
+    curves = joined(plot)
+    if len(curves) != len(names):
+        raise ValueError(f"{plot.pdf} page {plot.page + 1}: {len(curves)} curves, expected {len(names)}")
+    return dict(zip(names, sorted(curves, key=lambda c: c[np.argmax(c[:, 1]), 0])))
 
 
 def by_order(plot: VectorPlot, names: tuple[str, ...], at_x: float, polylines: bool = False) -> dict[str, np.ndarray]:

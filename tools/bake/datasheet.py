@@ -151,21 +151,22 @@ def _numeric_ticks(page, *, horizontal: bool, frame, band: float = 26.0):
 def _restore_signs(ticks, ascending: bool):
     """Kodak draws minus signs as a separate overbar glyph, so the text of a
     negative tick is just its magnitude. Recover the signs by requiring the
-    axis to be monotonic: the leading run that would otherwise decrease is the
-    negative half.
+    axis to be monotonic: the run that would otherwise turn back is the
+    negative half — the leading run along an axis that rises in reading
+    order, the trailing one along an axis that falls, such as a log
+    sensitivity axis read top to bottom.
     """
     values = [v for _, v in ticks]
     n = len(values)
-    best = None
-    for split in range(n + 1):
-        candidate = [-v for v in values[:split]] + values[split:]
-        ok = all((b > a) if ascending else (b < a)
-                 for a, b in zip(candidate, candidate[1:]))
-        if ok:
-            best = candidate
-            break
+
+    def monotonic(candidate):
+        return all((b > a) if ascending else (b < a) for a, b in zip(candidate, candidate[1:]))
+
+    candidates = ([[-v for v in values[:split]] + values[split:] for split in range(n + 1)]
+                  + [values[:split] + [-v for v in values[split:]] for split in range(n, -1, -1)])
+    best = next((c for c in candidates if monotonic(c)), None)
     if best is None:
-        best = values
+        raise ValueError(f"tick labels {values} make no monotonic axis")
     return [(pos, val) for (pos, _), val in zip(ticks, best)]
 
 

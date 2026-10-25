@@ -89,10 +89,6 @@ func run() async throws {
     try writeImage(b, width: 300, height: 450, colour: (0.8, 1.0, 1.2))
     try writeImage(c, width: 500, height: 500, colour: (1.0, 1.0, 1.0))
     try Data("not an image".utf8).write(to: bad)
-    // Start from the shipped auto preferences.
-    for key in ["prefersAutoExposure", "prefersAutoBrightness", "prefersAutoContrast"] {
-        UserDefaults.standard.removeObject(forKey: key)
-    }
 
     let m = DocumentModel()
 
@@ -131,17 +127,18 @@ func run() async throws {
           "B starts without A's adjustments (brightness \(m.recipe.brightness), \(m.recipe.masks.count) masks, \(m.recipe.gradients.count) gradients)")
     check(m.whiteBalance == .filmReference, "B starts at film-reference white balance, not A's 4000 K")
 
-    print("a preference for an auto carries to new images")
-    m.rememberAutoPreference(\.autoGrade, isOn: true)
+    print("a new image starts with the default autos, whatever the last one had")
     var rb = m.recipe
+    rb.autoExposure = false
+    rb.autoDensity = true
     rb.autoGrade = true
     rb.shadows = 0.3
     m.recipe = rb
     _ = await settle(m)
     m.open(url: c)
     check(await settle(m) && m.fileURL == c, "C is on screen")
-    check(m.recipe.autoGrade && m.meteredGrade != nil,
-          "C opens with Auto Contrast on, metered at R\(m.meteredGrade.map { String(format: "%.0f", $0) } ?? "-")")
+    check(m.recipe.autoExposure && !m.recipe.autoDensity && !m.recipe.autoGrade && m.meteredExposureEV != nil,
+          "C opens with Auto Exposure on, metered at \(m.meteredExposureEV.map { String(format: "%+.2f EV", $0) } ?? "-"), and Auto Brightness and Auto Contrast off, though B had them the other way round")
 
     print("go back to the first image")
     m.open(url: a)
@@ -258,6 +255,64 @@ func run() async throws {
     check(m.recipe.printStock == "kodak_portra_endura", "back to colour film, back to its colour paper")
     check(await settle(m) && m.displayImage != nil, "and it renders")
 
+    print("pick a slide after setting \"Print on paper\" by hand")
+    // Set by hand on a negative, it stayed pinned, and every slide picked
+    // afterwards printed on RA-4 paper, as a negative.
+    var pinned = m.recipe
+    pinned.filmStock = "kodak_portra_400"
+    pinned.scanFilm = false
+    m.recipe = pinned
+    m.selectFilm("fujifilm_velvia_50")
+    check(m.isTransparency && m.recipe.scanFilm == nil, "the slide goes on the light table, as its stock does")
+    var printedSlide = m.recipe
+    printedSlide.scanFilm = false
+    m.recipe = printedSlide
+    m.selectFilm("kodak_ektachrome_100")
+    check(!m.isTransparency, "slides printed on paper by choice: another slide is printed too")
+    m.selectFilm("kodak_portra_400")
+    check(!m.isTransparency && m.recipe.scanFilm == nil, "and a negative after it prints, as its stock does")
+    check(await settle(m) && m.displayImage != nil, "and it renders")
+
+    print("a camera filter goes when the new film has none like it")
+    var filtered = m.recipe
+    filtered.filmStock = "kodak_tri_x_400"
+    filtered.printStock = "ilford_multigrade_rc_deluxe"
+    filtered.lensFilter = "red"
+    m.recipe = filtered
+    m.selectFilm("fujifilm_velvia_50")
+    check(m.recipe.lensFilter == nil, "Tri-X's red filter is not carried to a slide")
+    var warmed = m.recipe
+    warmed.lensFilter = "812"
+    m.recipe = warmed
+    m.selectFilm("fujifilm_provia_100f")
+    check(m.recipe.lensFilter == "812", "a slide's warming filter stays on another slide")
+    m.selectFilm("kodak_portra_400")
+    check(m.recipe.lensFilter == nil, "and goes on a colour negative")
+    check(await settle(m) && m.displayImage != nil, "and it renders")
+
+    print("Phoenix opens a little softer, at Contrast -30 on its own scale")
+    // Its curves print 2.2 times as hard as Portra 400's; it opens at R200.5
+    // (Felix's pick), and Reset goes back there. A grade left at a film's own
+    // default moves with the film; one set by hand stays.
+    var neutral = m.recipe
+    neutral.filmStock = "kodak_portra_400"
+    neutral.grade = Double(Constants.gradeReference)
+    m.recipe = neutral
+    m.selectFilm("harman_phoenix_200")
+    check(m.recipe.grade == 200.5, String(format: "an untouched grade moves to Phoenix's R%.1f", m.recipe.grade))
+    m.selectFilm("kodak_gold_200")
+    check(m.recipe.grade == Double(Constants.gradeReference), "and back to R115 on the next film")
+    var handSet = m.recipe
+    handSet.grade = 130
+    m.recipe = handSet
+    m.selectFilm("harman_phoenix_200")
+    check(m.recipe.grade == 130, "a grade set by hand stays")
+    m.resetTone()
+    check(m.recipe.grade == 200.5 && m.recipe.carryingLook().grade == 200.5,
+          "Reset, and the next image, open Phoenix at R200.5")
+    check(await settle(m) && m.displayImage != nil, "and it renders")
+    m.selectFilm("kodak_portra_400")
+
     print("motion picture stocks have a group of their own")
     func stocks(_ groups: [(title: String, entries: [PackIndexEntry])], _ title: String) -> [String] {
         groups.first { $0.title == title }?.entries.map { $0.stock } ?? []
@@ -365,6 +420,186 @@ func run() async throws {
     check((manualMeta[kCGImagePropertyExifDictionary] as? [CFString: Any])?[kCGImagePropertyExifLensModel] as? String
           == "90.0 mm f/2.8", "a manual lens is named in the standard lens tag")
     check(manualMeta[kCGImagePropertyGPSDictionary] == nil, "a GPS block without a fix is left out, not placed at 0°, 0°")
+
+    print("copy one image's settings and paste them onto another")
+    check(!m.canPasteSettings, "nothing to paste before anything is copied")
+    m.open(url: a)
+    _ = await settle(m)
+    var source = m.recipe
+    source.filmStock = "fujifilm_pro_400h"
+    source.printStock = "fujifilm_crystal_archive_typeii"
+    source.brightness = 0.07
+    source.autoExposure = false
+    source.exposureEV = 0.6
+    var sourceMask = LocalMask()
+    sourceMask.shape = .oval
+    sourceMask.points = [CGPoint(x: 0.3, y: 0.3), CGPoint(x: 0.4, y: 0.3), CGPoint(x: 0.3, y: 0.4)]
+    source.masks = [sourceMask]
+    m.recipe = source
+    m.whiteBalance = .custom
+    m.customTemperature = 3800
+    _ = await settle(m)
+    m.copySettings()
+    m.open(url: b)
+    _ = await settle(m)
+    var own = LocalMask()
+    own.shape = .oval
+    own.points = [CGPoint(x: 0.6, y: 0.6), CGPoint(x: 0.7, y: 0.6), CGPoint(x: 0.6, y: 0.7)]
+    var target = m.recipe
+    target.masks = [own]
+    m.recipe = target
+    _ = await settle(m)
+    m.pasteSettings()
+    check(await settle(m) && m.fileURL == b && m.recipe.filmStock == "fujifilm_pro_400h"
+              && m.recipe.printStock == "fujifilm_crystal_archive_typeii" && m.recipe.brightness == 0.07
+              && !m.recipe.autoExposure && m.recipe.exposureEV == 0.6,
+          "B takes A's film, paper, sliders and autos")
+    check(m.whiteBalance == .custom && m.customTemperature == 3800, "and its white balance, 3800 K")
+    check(m.recipe.masks.map(\.id) == [own.id], "but keeps its own mask, not A's")
+    check(m.displayImage != nil && m.resolvedRecipe?.filmStock == "fujifilm_pro_400h", "and renders with them")
+
+    print("crop, turn and level a print")
+    m.open(url: a)
+    _ = await settle(m)
+    var auto = m.recipe
+    auto.autoExposure = true
+    auto.masks = []
+    m.recipe = auto
+    m.setCropAspect(.fiveFour)
+    check(await settle(m) && size(m.displayImage) == "500x400", "5:4 on A's 3:2 frame is \(size(m.displayImage))")
+    m.swapCropOrientation()
+    check(await settle(m) && size(m.displayImage) == "320x400", "stood upright, \(size(m.displayImage))")
+    m.turn(clockwise: true)
+    check(await settle(m) && size(m.displayImage) == "400x320",
+          "turned a quarter, the crop turns with the picture: \(size(m.displayImage))")
+    let cropped = dir.appendingPathComponent("cropped.tif")
+    await m.export(to: cropped, format: .tiff16)
+    let croppedImage = CGImageSourceCreateWithURL(cropped as CFURL, nil).flatMap { CGImageSourceCreateImageAtIndex($0, 0, nil) }
+    check(croppedImage?.width == 400 && croppedImage?.height == 320, "and exports so: \(size(croppedImage))")
+
+    // A brightens to the right, so a crop of its right side meters darker.
+    m.isCropping = true
+    check(await settle(m) && size(m.displayImage) == "400x600", "cropping shows the whole turned frame, \(size(m.displayImage))")
+    let before = m.meteredExposureEV
+    m.editGeometry { g, f in
+        g.setAspect(.free, frame: f)
+        g.setCrop(CGRect(x: 0, y: 400, width: 400, height: 200), frame: f)   // the frame's right side, turned
+    }
+    check(await settle(m) && m.meteredExposureEV == before, "the meters hold their reading while the crop is drawn")
+    m.endCropping(keep: true)
+    check(await settle(m) && size(m.displayImage) == "400x200" && (m.meteredExposureEV ?? 0) < (before ?? 0) - 0.1,
+          String(format: "and read only the crop once it is done: %+.2f EV, from %+.2f",
+                 m.meteredExposureEV ?? .nan, before ?? .nan))
+    let kept = m.recipe.geometry
+    m.isCropping = true
+    m.setStraighten(20)
+    m.endCropping(keep: false)
+    check(await settle(m) && m.recipe.geometry == kept && size(m.displayImage) == "400x200",
+          "Cancel goes back to the crop there was")
+
+    var oval = LocalMask()
+    oval.shape = .oval
+    oval.points = m.framePoints([CGPoint(x: 0.5, y: 0.5), CGPoint(x: 0.72, y: 0.5), CGPoint(x: 0.5, y: 0.72)])
+    check(abs(oval.points[0].x - 5.0 / 6) < 1e-9 && abs(oval.points[0].y - 0.5) < 1e-9,
+          String(format: "a new mask starts in the middle of the print, on the frame at (%.3f, %.3f)",
+                 oval.points[0].x, oval.points[0].y))
+
+    m.copySettings()
+    m.open(url: c)
+    _ = await settle(m)
+    m.pasteSettings()
+    check(await settle(m) && m.recipe.frameGeometry == nil && size(m.displayImage) == "500x500",
+          "pasted settings leave C uncropped, \(size(m.displayImage))")
+    let d = dir.appendingPathComponent("D.tif")
+    try writeImage(d, width: 640, height: 480, colour: (1.0, 1.0, 1.0))
+    m.open(url: a)
+    _ = await settle(m)
+    m.open(url: d)
+    check(await settle(m) && m.recipe.frameGeometry == nil && size(m.displayImage) == "640x480",
+          "an image opened for the first time starts uncropped, \(size(m.displayImage))")
+    m.open(url: a)
+    check(await settle(m) && size(m.displayImage) == "400x200", "and going back to A, its crop is still there")
+
+    print("save settings as a preset, and put it on an image in a later session")
+    // The suite's own folder, and deletes that do not go to the Trash.
+    var store = PresetStore(directory: dir.appendingPathComponent("Presets"))
+    store.discard = { try FileManager.default.removeItem(at: $0) }
+    let first = DocumentModel(presetStore: store)
+    check(first.presets.isEmpty, "no presets to begin with")
+    first.open(url: b)
+    _ = await settle(first)
+    var look = first.recipe
+    look.filmStock = "kodak_ektar_100"
+    look.printStock = "kodak_portra_endura"
+    look.brightness = 0.05
+    look.autoGrade = true
+    var dodge = LocalMask()
+    dodge.shape = .oval
+    dodge.points = [CGPoint(x: 0.4, y: 0.4), CGPoint(x: 0.5, y: 0.4), CGPoint(x: 0.4, y: 0.5)]
+    look.masks = [dodge]
+    first.recipe = look
+    first.whiteBalance = .custom
+    first.customTemperature = 4200
+    first.setCropAspect(.fourThree)
+    _ = await settle(first)
+    first.savePreset(named: "  Ektar, warm  ")
+    let file = dir.appendingPathComponent("Presets/Ektar, warm.json")
+    check(first.presets.map(\.name) == ["Ektar, warm"] && FileManager.default.fileExists(atPath: file.path),
+          "saved under its name, as a file: \(first.presets.map(\.name))")
+    check(first.presets.first.map { $0.recipe.masks.isEmpty && $0.recipe.frameGeometry == nil } == true,
+          "without the mask or the crop")
+
+    let later = DocumentModel(presetStore: store)
+    check(later.presets.map(\.name) == ["Ektar, warm"], "a new session finds it")
+    later.open(url: c)
+    _ = await settle(later)
+    var withBurn = later.recipe
+    var burn = LocalMask()
+    burn.shape = .oval
+    burn.points = [CGPoint(x: 0.7, y: 0.7), CGPoint(x: 0.8, y: 0.7), CGPoint(x: 0.7, y: 0.8)]
+    withBurn.masks = [burn]
+    later.recipe = withBurn
+    later.turn(clockwise: true)
+    _ = await settle(later)
+    later.applyPreset(later.presets[0])
+    check(await settle(later) && later.recipe.filmStock == "kodak_ektar_100"
+              && later.recipe.printStock == "kodak_portra_endura" && later.recipe.brightness == 0.05
+              && later.recipe.autoGrade && later.whiteBalance == .custom && later.customTemperature == 4200,
+          "C takes the preset's film, paper, sliders, autos and white balance")
+    check(later.recipe.masks.map(\.id) == [burn.id] && later.recipe.geometry.quarterTurns == 1
+              && later.resolvedRecipe?.filmStock == "kodak_ektar_100",
+          "keeps its own mask and its turn, and renders with the preset")
+    later.recipe.brightness = 0.1
+    later.savePreset(named: "Ektar, warm")
+    let files = (try? FileManager.default.contentsOfDirectory(atPath: dir.appendingPathComponent("Presets").path)) ?? []
+    check(later.presets.count == 1 && later.presets[0].recipe.brightness == 0.1 && files.count == 1,
+          "saving under the same name replaces it")
+    later.deletePreset(later.presets[0])
+    check(later.presets.isEmpty && !FileManager.default.fileExists(atPath: file.path), "and Delete takes it away")
+
+    print("the preview size is kept between launches")
+    // Preferences of the suite's own, not the app's.
+    let suite = "flx-apptest-\(getpid())"
+    let prefs = UserDefaults(suiteName: suite)!
+    defer { prefs.removePersistentDomain(forName: suite) }
+    let launched = DocumentModel(presetStore: store, defaults: prefs)
+    check(launched.proxyMaxDimension == 2560, "2560 to begin with")
+    let big = dir.appendingPathComponent("big.tif")
+    try writeImage(big, width: 4600, height: 3000, colour: (1.0, 1.0, 1.0))
+    launched.open(url: big)
+    check(await settle(launched) && size(launched.displayImage) == "2560x1669", "so a large image previews at \(size(launched.displayImage))")
+    launched.proxyMaxDimension = 4096
+    check(await settle(launched) && size(launched.displayImage) == "4096x2671", "and at \(size(launched.displayImage)) once 4096 is chosen")
+    let smaller = dir.appendingPathComponent("smaller.tif")
+    try writeImage(smaller, width: 3000, height: 2000, colour: (1.0, 1.0, 1.0))
+    launched.open(url: smaller)
+    check(await settle(launched) && size(launched.displayImage) == "3000x2000",
+          "a file smaller than that previews at its own size, \(size(launched.displayImage)), never enlarged")
+    let relaunched = DocumentModel(presetStore: store, defaults: prefs)
+    check(relaunched.proxyMaxDimension == 4096, "which is still the choice after a relaunch")
+    prefs.set(5000, forKey: "previewSize")
+    check(DocumentModel(presetStore: store, defaults: prefs).proxyMaxDimension == 2560,
+          "and a size the app does not offer goes back to 2560")
 }
 
 try await run()

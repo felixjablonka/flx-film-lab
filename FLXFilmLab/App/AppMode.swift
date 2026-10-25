@@ -14,7 +14,7 @@ enum AppMode: String, CaseIterable, Identifiable {
     var symbol: String {
         switch self {
         case .stills: return "camera"
-        case .motion: return "film"
+        case .motion: return "video"
         }
     }
 

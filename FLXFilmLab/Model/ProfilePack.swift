@@ -56,16 +56,23 @@ struct HalationDefaults: Decodable {
     let protectEV: Float
 }
 
-/// A camera filter a black-and-white film can be shot through, with its own
-/// exposure LUT baked from the filter's transmittance (tools/bake/lens_filters.py).
+/// A camera filter a film can be shot through, with its own exposure LUT
+/// baked from the filter's transmittance (tools/bake/lens_filters.py): Kodak's
+/// Wratten filters for black and white, Tiffen's warming filters for slides.
 struct LensFilterRef: Decodable, Hashable, Identifiable {
     let id: String
     let name: String
-    let wratten: String
+    /// The Wratten number, for Kodak's filters; a Tiffen filter's name is its
+    /// own designation.
+    let wratten: String?
     let file: String
     /// How much the filter cuts a mid-grey's exposure on this film. The LUT
     /// already opens up by it, as a photographer would.
     let factor: Float
+
+    /// "Red, Wratten 25", or a Tiffen filter's own name, "Tiffen 81C". Plain
+    /// ASCII, as it goes into a .cube's comments.
+    var designation: String { wratten.map { "\(name), Wratten \($0)" } ?? name }
 }
 
 struct GrainDefaults: Decodable {
@@ -121,8 +128,20 @@ struct ProfilePack: Decodable {
     let tcLut: TcLutRef?
     /// Black-and-white films only.
     let lensFilters: [LensFilterRef]?
+    /// The softest paper grade, ISO R, that Contrast and Auto Contrast may
+    /// reach with this film: absent for all but a film far harder than a
+    /// colour negative (HARMAN Phoenix 200), whose softest grade is scaled by
+    /// how much harder (`tools/bake/bake_packs.py`, `softest_grade`).
+    let gradeSoftest: Float?
+    /// The grade, ISO R, this film opens at, where it is not R115: Phoenix
+    /// 200's, a little softer than its curves print (Felix's pick).
+    let gradeDefault: Float?
 
     var isPositive: Bool { type == "positive" }
+    /// `gradeSoftest`, or the grade range's own soft end.
+    var softestGrade: Float { gradeSoftest ?? Constants.gradeMax }
+    /// `gradeDefault`, or the neutral R115.
+    var defaultGrade: Float { gradeDefault ?? Constants.gradeReference }
     var isFilmStage: Bool { stage == "filming" }
     /// One silver layer: the picture is neutral whatever the filtration, and
     /// there are no dyes for couplers or colour controls to act on.

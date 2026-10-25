@@ -1,4 +1,4 @@
-"""Each slide film's sharpness, from its own datasheet's MTF.
+"""Each slide film's sharpness, and Vericolor III's, from its own datasheet's MTF.
 
 Sharpness in the engine comes from two of agx's stages (`bw_mtf.py` works
 through both): light scattering in the emulsion blurs, and the DIR couplers'
@@ -38,7 +38,7 @@ from scipy.optimize import least_squares
 
 from bw_mtf import TAIL_SIGMA_PER_LAMBDA, _gauss
 from datasheet import _flatten_path
-from vector_plots import VectorPlot, _curve_paths, _to_data, by_position
+from vector_plots import VectorPlot, _curve_paths, _to_data, by_position, joined
 
 SHEETS = Path(__file__).resolve().parents[2] / "film spec sheets"
 REFERENCE_LOG_EXPOSURE = float(np.log10(0.5))     # one stop under mid-grey
@@ -101,6 +101,22 @@ KODACHROME = {"kodak_kodachrome_25": _kodachrome(2, 368.2, 399.6),
               "kodak_kodachrome_64": _kodachrome(3, 350.6, 385.6),
               "kodak_kodachrome_200": _kodachrome(4, 362.6, 385.6)}
 
+# Kodak's Vericolor III (E-26 page 4), the one colour negative here whose sheet
+# plots an MTF: one curve, diffuse visual, drawn as a polyline; rules read off
+# its gridlines.
+VERICOLOR_III = _log_plot("e26-Vericolor_III.pdf", 3, (71.5, 373.2, 276.5, 543.9),
+                          ((93.4, 2), (106.2, 3), (115.7, 4), (122.4, 5), (144.1, 10), (167.0, 20), (196.3, 50),
+                           (218.2, 100), (239.9, 200)),
+                          ((394.7, 100), (406.4, 70), (417.2, 50), (433.7, 30), (446.8, 20), (469.3, 10),
+                           (480.7, 7), (492.2, 5), (508.0, 3), (522.1, 2), (543.9, 1)))
+
+
+def vericolor_iii() -> np.ndarray:
+    curves = joined(VERICOLOR_III)
+    if len(curves) != 1:
+        raise ValueError(f"E-26 MTF: {len(curves)} curves, expected 1")
+    return _as_curve(curves[0])
+
 
 def _single(plot: VectorPlot) -> np.ndarray:
     return _as_curve(by_position(plot, ("mtf",))["mtf"])
@@ -160,6 +176,7 @@ SHEET_MTF = {
     "fujifilm_velvia_100": lambda: _single(VELVIA_100),
     "kodak_ektachrome_100": ektachrome_100_green,
     **{stock: (lambda plot=plot: _single(plot)) for stock, plot in KODACHROME.items()},
+    "kodak_vericolor_iii_160": vericolor_iii,
 }
 
 

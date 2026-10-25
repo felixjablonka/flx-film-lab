@@ -74,6 +74,19 @@ COLOUR: dict[str, dict] = {
     # 1.13 times Eterna 500T's 0.99x on 2383, 1.12x. On Vision3 200T's
     # couplers it printed 1.00x, no more than Eterna 500T.
     "fujifilm_eterna_vivid_160t": {"interlayer": 1.25},
+    # Kodak's Vericolor III: "moderate contrast and color saturation" and
+    # "excellent flesh-to-neutral color reproduction", and Kodak names Portra
+    # 160NC its successor: Portra 160's chroma on Portra Endura (1.048x the
+    # scene's, measured with the films below in one harness). On agx's coupler
+    # strength, with its own curves, sensitivities, base and dyes, it printed
+    # 1.29x.
+    "kodak_vericolor_iii_160": {"interlayer": 0.46},
+    # Kodak's Royal Gold 100: its sheet puts its colour in no more words than
+    # "outstanding flesh-tone and color reproduction", and the film in the Gold
+    # family, processed "along with other KODAK GOLD and ROYAL GOLD Films":
+    # Gold 200's chroma on the same Ektacolor Edge, 1.19x. On agx's coupler
+    # strength it printed 1.36x, beyond any film agx's set has.
+    "kodak_royal_gold_100": {"interlayer": 0.59},
 }
 
 # Each stock's reference paper, where it is not agx's `target_print`: what
@@ -86,6 +99,35 @@ PAPER: dict[str, str] = {
     "kodak_gold_200": "kodak_ektacolor_edge",
     "kodak_ultramax_400": "kodak_ektacolor_edge",
 }
+
+
+# Stocks run without DIR couplers. HARMAN Phoenix 200's curves rise about 1.3
+# in density a decade, twice a usual colour negative's: at agx's coupler
+# strength the inhibition would take more than all of that contrast (b = 1.31,
+# where agx's own negatives reach 0.45-0.67), which no development reaches, and
+# a film held back as theirs are would not print that hard. It has no masking
+# couplers either.
+NO_COUPLERS = {"harman_phoenix_200"}
+
+# Stocks whose enlarger filtration is solved at bake time for every colour
+# paper and carried in the neutral-filter table (`bake_packs.bake_shared`,
+# `print_neutral.neutral_filters`), as agx's own pairs are. Phoenix's unmasked
+# base wants twice the usual yellow, and the engine's own solve, started at
+# agx's default filtration, does not reach it on most papers.
+BAKED_FILTRATION = ("harman_phoenix_200",)
+
+# Films far harder than a colour negative, whose softest paper grade is scaled
+# by how much (`bake_packs.softest_grade`), so that Contrast and Auto Contrast
+# can print them as softly, for their contrast, as any other film: Phoenix 200
+# prints 2.2 times as hard as Portra 400 about mid-grey, and at the usual
+# softest grade, R180, still about 40% harder than Portra at R115.
+WIDE_GRADES = ("harman_phoenix_200",)
+
+# Films that open at a contrast of their own, as a position of the app's
+# Contrast slider on the film's own grade scale (`bake_packs.default_grade`).
+# Felix's pick: Phoenix a little softer than its curves print, Contrast -30
+# (R200.5), short of the -49 that would print it as hard as Portra 400.
+DEFAULT_CONTRAST = {"harman_phoenix_200": -30}
 
 
 def colour_matrix(stock: str, dir_couplers) -> None:
@@ -114,13 +156,15 @@ def apply(stock: str, profile, film_render) -> dict:
     """Set a digested `film_render` in place to the stock's departures; returns
     the pack fields agx has no parameter for.
 
-    Any stock in `COLOUR`: its colour. Slide films (`slide_mtf.SHEET_MTF`)
-    also: the blur, the inhibitor's reach and the share of it that spreads,
-    from the sheet's MTF. A scatter agx has switched off (its LUT mode, which
+    Any stock in `COLOUR`: its colour; in `NO_COUPLERS`: none. Stocks whose sheets plot an MTF
+    (`slide_mtf.SHEET_MTF`: the slides and Vericolor III) also: the blur, the
+    inhibitor's reach and the share of it that spreads, from the sheet's MTF. A scatter agx has switched off (its LUT mode, which
     the parity references run in) stays off; the colour, a single pixel's, is
     set there as well.
     """
     colour_matrix(stock, film_render.dir_couplers)
+    if stock in NO_COUPLERS:
+        film_render.dir_couplers.active = False
     if stock not in slide_mtf.SHEET_MTF:
         return {}
     fit = slide_spatial(stock)

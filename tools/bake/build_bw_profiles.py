@@ -1,11 +1,14 @@
 #!/usr/bin/env python
 """Build black-and-white film and paper profiles from manufacturer datasheets.
 
-Five stocks, each from its maker's own sheet in `film spec sheets/`:
+Six stocks, each from its maker's own sheet in `film spec sheets/`:
 
 - Kodak Tri-X 400 (F-4017): spectral sensitivity and the D-76 characteristic
   curves, both vector plots, read exactly. Also pushed two stops: Kodak's D-76
   time for EI 1600, interpolated between the sheet's 10 and 12 minute curves.
+- Kodak T-Max 100 (F-4016): spectral sensitivity and the D-76 characteristic
+  curves, vector plots. Kodak's small-tank time, 6 1/2 minutes, lies between
+  the sheet's 6 and 7 1/2 minute curves and is interpolated like Tri-X's push.
 - Ilford HP5 Plus: spectral sensitivity and the characteristic curve, vector
   plots, calibrated on their own tick marks and grid.
 - Fujifilm Neopan 1600 (AF3-608E): spectral sensitivity and the D-76
@@ -93,7 +96,8 @@ MID_GREY_REFLECTION_DENSITY = float(-np.log10(0.18))               # 0.745
 TRIX_DEVELOPMENT_MINUTES = 8      # D-76 stock, large tank, 20 C: Kodak's standard time
 TRIX_PUSH2_MINUTES = 10.75        # D-76 stock, large tank, 20 C: Kodak's time for EI 1600 (2-stop push)
 TRIX_PUSH2_EI = 1600
-NEOPAN_EI = 1600                  # D-76 stock, small tank, 7 1/2 min at 20 C: Fujifilm's time for EI 1600
+TMAX_DEVELOPMENT_MINUTES = 6.5    # D-76 stock, small tank, 20 C: Kodak's time
+NEOPAN_EI = 1600                 # D-76 stock, small tank, 7 1/2 min at 20 C: Fujifilm's time for EI 1600
 FILM_CURVE_EXTENSION = 0.8        # decades past each sheet's last plotted exposure (see characteristic)
 MULTIGRADE_NATIVE_GRADE = "1"     # ISO R110 on Ilford's table
 
@@ -114,6 +118,10 @@ TRIX_PUSH2 = Film("kodak_tri_x_400_push2", "Kodak Tri-X 400 (Push 2)", TRIX_PUSH
                   f"D-76 developer, large tank, {TRIX_PUSH2_MINUTES:g} min at 20 C, Kodak's time for EI 1600 "
                   "(2-stop push), interpolated between the published 10 and 12 minute curves along "
                   "exposure at each density; diffuse visual density.")
+TMAX = Film("kodak_t_max_100", "Kodak T-Max 100", 100,
+            "Kodak Alaris F-4016 (rev. 6-18), KODAK PROFESSIONAL T-MAX 100 Film / 100TMX, D-76 developer, "
+            f"small tank, {TMAX_DEVELOPMENT_MINUTES:g} min at 20 C (Kodak's time), interpolated between the "
+            "published 6 and 7 1/2 minute curves along exposure at each density; diffuse visual density.")
 HP5 = Film("ilford_hp5_plus", "Ilford HP5 Plus", 400,
            "HARMAN technology, ILFORD HP5 PLUS technical information, 35 mm, "
            "ILFOTEC HC (1+31) 6.5 min at 20 C.")
@@ -170,19 +178,48 @@ def tri_x_sheet() -> tuple[np.ndarray, np.ndarray]:
 
 
 def tri_x_push_curve(minutes: float) -> np.ndarray:
-    """Tri-X in D-76 at a development time between two of Kodak's published ones.
+    """Tri-X in D-76 at a development time between two of Kodak's published
+    ones (Kodak's contrast index 0.58 at 8 minutes, 0.68 at 10, 0.79 at 12)."""
+    return between_times(_tri_x_development_curves(), minutes, np.linspace(-3.6, 0.6, 841))
+
+
+def _t_max_development_curves() -> dict[float, np.ndarray]:
+    """Page 8, upper right: T-MAX 100 in D-76, small tank, at 6, 7 1/2 and 10
+    minutes. They separate cleanly by density at log H = 0."""
+    pdf = str(SHEETS / "f4016_tmax_100-2018.pdf")
+    _, curves = _vector_plot(pdf, 7, (-4, 1), n_curves=3)
+    return dict(zip((10.0, 7.5, 6.0), ds.order_curves(curves, at_x=0.0, descending=True)))
+
+
+def t_max_sheet() -> tuple[np.ndarray, np.ndarray]:
+    """(wavelength, log sensitivity) and (log H in lux-seconds, density).
+
+    Kodak's contrast index for T-MAX 100 in D-76 (page 9, small tank) runs
+    from 0.56 at 6.3 minutes to 0.82 at 9.1, about 0.58 at its 6 1/2 minutes;
+    the curve interpolated here measures 0.585, and the sheet's 6 and 7 1/2
+    minute curves 0.54 and 0.69.
+    """
+    pdf = str(SHEETS / "f4016_tmax_100-2018.pdf")
+    # Page 8, "Spectral Sensitivity Curves", each curve labelled on the plot:
+    # the upper one D = 0.3 over D-min, the lower D = 1.0, the conventional
+    # one. It stops at 670 nm, two decades down.
+    _, curves = _vector_plot(pdf, 7, (250, 750))
+    spectral = min(curves, key=lambda c: c[:, 1].max())
+    curve = between_times(_t_max_development_curves(), TMAX_DEVELOPMENT_MINUTES, np.linspace(-3.15, 0.65, 761))
+    return spectral, curve
+
+
+def between_times(by_time: dict[float, np.ndarray], minutes: float, grid: np.ndarray) -> np.ndarray:
+    """A development time between two of a sheet's published curves.
 
     Interpolated along exposure at each net density, base + fog alike: the
     curves move steadily with time, the toe gaining speed and the slope
-    rising (Kodak's contrast index 0.58 at 8 minutes, 0.68 at 10, 0.79 at 12),
-    and a time between two of them sits between them.
+    rising, and a time between two of them sits between them.
     """
-    by_time = _tri_x_development_curves()
     times = sorted(by_time)
     lo = max(t for t in times if t <= minutes)
     hi = min(t for t in times if t >= minutes)
     w = 0.0 if hi == lo else (minutes - lo) / (hi - lo)
-    grid = np.linspace(-3.6, 0.6, 841)
     dens = {t: ds.resample(by_time[t], grid) for t in (lo, hi)}
     top = min((d - d.min()).max() for d in dens.values())
     levels = np.linspace(0.0, top, 400)
@@ -546,11 +583,11 @@ def characteristic(curve: np.ndarray, anchor, extend: float = 0.0) -> tuple[np.n
     return fitted, base, shift, model
 
 
-def metadata(datasource: str) -> ProfileMetadata:
+def metadata(datasource: str, created: str = "2026-10-14") -> ProfileMetadata:
     return ProfileMetadata(
         version="0.3.4",
         copyright="FLX Film Lab. Profile data measured off the manufacturer's published datasheet.",
-        created="2026-10-14",
+        created=created,
         license="Profile format: spektrafilm (https://github.com/andreavolpato/spektrafilm), CC BY-SA 4.0. "
                 "The values are the datasheet's own published measurements.",
         citation="Format and model: spektrafilm, https://github.com/andreavolpato/spektrafilm.",
@@ -559,7 +596,7 @@ def metadata(datasource: str) -> ProfileMetadata:
 
 
 def assemble(info: ProfileInfo, log_sensitivity: np.ndarray, base_density: float,
-             net: np.ndarray, model: dict, datasource: str) -> Profile:
+             net: np.ndarray, model: dict, datasource: str, created: str = "2026-10-14") -> Profile:
     """One silver layer, carried as three identical channels a third each."""
     centers, amplitudes, sigmas = model["centers"], model["amplitudes"], model["sigmas"]
     data = ProfileData(
@@ -573,11 +610,11 @@ def assemble(info: ProfileInfo, log_sensitivity: np.ndarray, base_density: float
         density_curves_model=DensityCurvesModel(model_type="cdfs", centers=centers,
                                                 amplitudes=amplitudes, sigmas=sigmas),
     )
-    return Profile(metadata=metadata(datasource), info=info, data=data)
+    return Profile(metadata=metadata(datasource, created), info=info, data=data)
 
 
 def build_film(film: Film, spectral: np.ndarray, curve: np.ndarray, sensitivity_note: str,
-               cross_check=None, metered_at: int | None = None) -> Profile:
+               cross_check=None, metered_at: int | None = None, created: str = "2026-10-14") -> Profile:
     """`metered_at`: place mid-grey where a meter set to that exposure index
     puts it on the sheet's absolute lux-second axis, for a film whose rating
     is not its ISO speed. Otherwise mid-grey is 1.007 decades above the ISO
@@ -611,7 +648,7 @@ def build_film(film: Film, spectral: np.ndarray, curve: np.ndarray, sensitivity_
         f"{FILM_CURVE_EXTENSION} decades past the last plotted exposure. {sensitivity_note} "
         "One silver layer, carried as three identical channels."
     )
-    profile = assemble(info, log_s, base, net, model, datasource)
+    profile = assemble(info, log_s, base, net, model, datasource, created)
     dmax = net[:, 0].max()
     msg = (f"  {film.stock:28s} base+fog {base:.3f}  D-max net {dmax:.2f}  "
            f"axis shift {shift:+.3f}  fit RMS {model['rms']:.4f}")
@@ -706,6 +743,14 @@ def main() -> int:
     write(build_film(TRIX_PUSH2, spectral, tri_x_push_curve(TRIX_PUSH2_MINUTES),
                      "Spectral sensitivity: as Tri-X 400, the D = 1.0 over gross fog curve.",
                      metered_at=TRIX_PUSH2_EI))
+    spectral, curve = t_max_sheet()
+    absolute = float(np.log10(0.65 * 12.5 / TMAX.iso))
+    write(build_film(TMAX, spectral, curve,
+                     "Spectral sensitivity: the D = 1.0 over D-min curve (equal-energy, erg/cm^2, effective "
+                     "exposure 1.4 s), which stops at 670 nm.",
+                     cross_check=lambda shift: f"Kodak's absolute axis puts mid-grey {(-shift) - absolute:+.3f} "
+                                               f"decades from ISO {TMAX.iso}'s",
+                     created="2026-10-25"))
     spectral, curve = hp5_sheet()
     write(build_film(HP5, spectral, curve,
                      "Spectral sensitivity: Ilford's wedge spectrogram read as relative log "

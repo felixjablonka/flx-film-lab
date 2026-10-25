@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.1.0 (2026-10-25)
+
+Crop and straighten, presets, copy and paste settings, and four new film
+stocks: 38 film stocks and 9 print stocks in all.
+
+### New
+- **Crop & straighten** (⌘R): aspect presets (3:2, 4:3, 5:4, 65:24, custom,
+  free), quarter turns and mirrors, and levelling by slider or by drawing
+  along the horizon. The meters read only the crop.
+- **Presets:** save settings by name and apply them to any image later.
+- **Copy and paste settings** between images (⇧⌘C, ⇧⌘V).
+- **New film stocks:** Kodak T-Max 100, Royal Gold 100 and Vericolor III 160,
+  and HARMAN Phoenix 200, each built from its own datasheet.
+- **Tiffen 81C and 812 warming filters** for slide film.
+- **Insta360 I-Log** in the Motion mode and LUT export.
+- **V-Log LUT pack:** now 46 tables, with the new stocks.
+
+### Changed
+- Sharper preview: 2560 px by default, up to 4096, remembered between launches.
+- New images start with Auto Exposure on, and Auto Brightness and Auto Contrast off.
+- Toolbar reorganised; in Motion mode the export format now sits beside Export.
+
+### Fixed
+- Slides could show as negatives after "Print on paper" had been set on a negative.
+- Double-clicking a slider now resets it.
+
 ## 1.0.0 (2026-10-23)
 
 The first public release.

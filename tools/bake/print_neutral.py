@@ -17,6 +17,7 @@ import dataclasses
 import colour
 import numpy as np
 
+import stock_overrides
 from spektrafilm import init_params
 from spektrafilm.runtime.params_builder import digest_params
 from spektrafilm.runtime.pipeline import SimulationPipeline
@@ -36,10 +37,17 @@ def _pipeline(profile, paper: str, filters):
     params.io.output_gamut_compress = dataclasses.replace(params.io.output_gamut_compress, algorithm="off")
     params.debug.lut_mode = True
     params.settings.neutral_print_filters_from_database = False
+    # A profile built here may have no adaptation window (agx fits one to each
+    # of its own stocks), and runs without, as the bake does.
+    params.settings.apply_hanatos2025_adaptation_window = np.asarray(
+        profile.data.hanatos2025_adaptation_window_params).size > 0
     params.enlarger.c_filter_neutral = 0.0
     params.enlarger.m_filter_neutral = float(filters[0])
     params.enlarger.y_filter_neutral = float(filters[1])
-    return SimulationPipeline(digest_params(params))
+    digested = digest_params(params)
+    if profile.info.stock in stock_overrides.NO_COUPLERS:
+        digested.film_render.dir_couplers.active = False
+    return SimulationPipeline(digested)
 
 
 def _lab(rgb: np.ndarray) -> np.ndarray:
@@ -56,10 +64,12 @@ def printed(profile, paper: str, filters, stops) -> np.ndarray:
 
 
 def neutral_filters(profile, paper: str, start=(65.0, 55.0)) -> np.ndarray:
-    """Magenta and yellow that print mid-grey neutral: Newton from agx's defaults."""
+    """Magenta and yellow that print mid-grey neutral: Newton from agx's
+    defaults, a step cut short wherever the whole one would print less neutral
+    (from far off, as Phoenix's unmasked base starts, it overshoots)."""
     my = np.array(start, float)
-    for _ in range(12):
-        f = printed(profile, paper, my, [0.0])[0, 1:]
+    f = printed(profile, paper, my, [0.0])[0, 1:]
+    for _ in range(30):
         if np.hypot(*f) < 0.005:
             break
         step = 0.5
@@ -68,7 +78,16 @@ def neutral_filters(profile, paper: str, start=(65.0, 55.0)) -> np.ndarray:
         jac = np.stack([dm, dy], axis=1)
         if abs(np.linalg.det(jac)) < 1e-12:
             break
-        my = np.clip(my - np.linalg.solve(jac, f), 0, 400)
+        move, t = np.linalg.solve(jac, f), 1.0
+        while t > 1e-3:
+            trial = np.clip(my - t * move, 0, 400)
+            g = printed(profile, paper, trial, [0.0])[0, 1:]
+            if np.hypot(*g) < np.hypot(*f):
+                my, f = trial, g
+                break
+            t /= 2
+        else:
+            break
     return my
 
 
