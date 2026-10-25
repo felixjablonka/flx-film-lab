@@ -46,6 +46,9 @@ func render(_ renderer: Renderer, _ recipe: Recipe, exposureEV: Float? = nil) th
 
 func baseRecipe(film: String) throws -> Recipe {
     var r = Recipe()
+    // The sheets' MTF and granularity are measured on 35 mm, and the checks
+    // that compare against them work out their pixel pitch for it.
+    r.filmFormat = .thirtyFiveMM
     r.filmStock = film
     if let target = try PackLibrary.shared.pack(film).targetPrint { r.printStock = target }
     r.autoExposure = false

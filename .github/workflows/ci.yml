@@ -7,7 +7,11 @@ on:
 
 jobs:
   build:
-    runs-on: macos-15
+    # macOS 26 and its Xcode 26, the SDK the app is developed and tested
+    # with: SwiftUI behaves as the SDK an app is built with, and 1.1.0, built
+    # on macOS 15 with its SDK, lost the sliders' double-click reset. Named,
+    # not macos-latest, so a new default cannot change the SDK unnoticed.
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v5
 

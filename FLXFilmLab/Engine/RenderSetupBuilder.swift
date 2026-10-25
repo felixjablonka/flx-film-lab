@@ -351,9 +351,13 @@ enum RenderSetupBuilder {
         let lamp = FilmMath.enlargerIlluminant(source: shared.illuminant(paper.referenceIlluminant),
                                                dichroics: shared.dichroicFilters, cc: filters)
         var raw = SIMD3<Float>(repeating: 0)
+        // In typed steps: Xcode 26's compiler gave up type-checking this as
+        // one expression.
         for l in 0..<Constants.wavelengths where film.spectralValid[l] != 0 {
-            raw += pow(10, -midDensity[l]) * lamp[l]
-                * SIMD3(paper.sensitivity[l * 3], paper.sensitivity[l * 3 + 1], paper.sensitivity[l * 3 + 2])
+            let light: Float = pow(10, -midDensity[l]) * lamp[l]
+            let sensitivity = SIMD3<Float>(paper.sensitivity[l * 3], paper.sensitivity[l * 3 + 1],
+                                           paper.sensitivity[l * 3 + 2])
+            raw += light * sensitivity
         }
         raw = simd_max(raw, SIMD3(repeating: 1e-20))
         let mean = (log10(raw.x) + log10(raw.y) + log10(raw.z)) / 3
@@ -365,9 +369,14 @@ enum RenderSetupBuilder {
         let viewing = shared.illuminant(paper.viewingIlluminant)
         var xyz = SIMD3<Float>(repeating: 0)
         for l in 0..<Constants.wavelengths where paper.spectralValid[l] != 0 {
-            let d = cmy.x * paper.channelDensity[l * 3] + cmy.y * paper.channelDensity[l * 3 + 1]
-                + cmy.z * paper.channelDensity[l * 3 + 2] + (paper.baseDensity.isEmpty ? 0 : paper.baseDensity[l])
-            xyz += pow(10, -d) * viewing[l] * SIMD3(shared.cmfs[l * 3], shared.cmfs[l * 3 + 1], shared.cmfs[l * 3 + 2])
+            let c: Float = cmy.x * paper.channelDensity[l * 3]
+            let m: Float = cmy.y * paper.channelDensity[l * 3 + 1]
+            let y: Float = cmy.z * paper.channelDensity[l * 3 + 2]
+            let base: Float = paper.baseDensity.isEmpty ? 0 : paper.baseDensity[l]
+            let d: Float = c + m + y + base
+            let light: Float = pow(10, -d) * viewing[l]
+            let cmf = SIMD3<Float>(shared.cmfs[l * 3], shared.cmfs[l * 3 + 1], shared.cmfs[l * 3 + 2])
+            xyz += light * cmf
         }
         xyz /= shared.cmfNormalization(viewing: paper.viewingIlluminant)
         let t = xyz / shared.illuminantXYZ(viewing: paper.viewingIlluminant)

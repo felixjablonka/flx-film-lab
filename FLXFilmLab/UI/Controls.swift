@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// A labelled slider with a numeric readout, a tick at its default, and
 /// double-click-to-reset. Every tone control in the inspector is one of these,
@@ -32,9 +33,10 @@ struct ParamSlider: View {
                     .foregroundStyle(.secondary)
                     .contentTransition(.numericText())
             }
-            Slider(value: $value, in: range)
-                .controlSize(.mini)
-                .resetOnDoubleClick { withAnimation(.easeOut(duration: 0.15)) { value = defaultValue } }
+            ResettingSlider(value: $value, range: range) {
+                withAnimation(.easeOut(duration: 0.15)) { value = defaultValue }
+            }
+            .controlSize(.mini)
         }
         .help(help.isEmpty ? "Double-click the slider to reset" : help + "\n\nDouble-click the slider to reset.")
         .padding(.vertical, 1)
@@ -111,10 +113,11 @@ struct ChannelTrimRow: View {
             HStack(spacing: 6) {
                 ForEach(0..<3, id: \.self) { i in
                     VStack(spacing: 1) {
-                        Slider(value: Binding(get: { trim[i] }, set: { trim[i] = $0 }), in: range)
-                            .controlSize(.mini)
-                            .tint(tints[i])
-                            .resetOnDoubleClick { trim[i] = 0 }
+                        ResettingSlider(value: Binding(get: { trim[i] }, set: { trim[i] = $0 }), range: range) {
+                            trim[i] = 0
+                        }
+                        .controlSize(.mini)
+                        .tint(tints[i])
                         Text(names[i])
                             .font(.system(size: 8, design: .monospaced))
                             .foregroundStyle(.tertiary)
@@ -150,20 +153,44 @@ struct CMYRow: View {
 
     private func trim(_ label: String, _ tint: Color, _ binding: Binding<Double>) -> some View {
         VStack(spacing: 1) {
-            Slider(value: binding, in: range).controlSize(.mini).tint(tint)
-                .resetOnDoubleClick { binding.wrappedValue = 0 }
+            ResettingSlider(value: binding, range: range) { binding.wrappedValue = 0 }
+                .controlSize(.mini).tint(tint)
             Text(label).font(.system(size: 8, design: .monospaced)).foregroundStyle(.tertiary)
         }
     }
 }
 
-extension View {
-    /// Runs `reset` on a double-click. A macOS slider handles its own clicks, so
-    /// a plain tap gesture on it never sees the second one; recognised
-    /// alongside the slider's own, it does. The two clicks still move the
-    /// slider first, and the reset then puts it back.
-    func resetOnDoubleClick(_ reset: @escaping () -> Void) -> some View {
-        simultaneousGesture(TapGesture(count: 2).onEnded(reset))
+/// A slider that goes back to its neutral value on a double-click.
+///
+/// A slider tracks the mouse itself, and whether a SwiftUI gesture on it sees
+/// the clicks depends on the SDK the app is built with: a tap gesture
+/// alongside the slider's own worked built with the macOS 26 SDK, and not in
+/// the 1.1.0 release, built with the macOS 15 SDK. Nor can an event monitor
+/// find the slider: SwiftUI places the AppKit views inside a scroll view
+/// where AppKit's own coordinates do not say where they are on screen. The
+/// slider's own editing calls work with any of them: when editing starts on
+/// the second click of a double-click, or ends on its mouse-up (AppKit counts
+/// the clicks), the slider has taken both clicks as moves, and `reset` puts
+/// it back once it ends. Either is enough, in case one is reported after a
+/// later event.
+struct ResettingSlider: View {
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    let reset: () -> Void
+    @State private var startedOnDoubleClick = false
+
+    var body: some View {
+        Slider(value: $value, in: range, onEditingChanged: { editing in
+            let event = NSApp.currentEvent
+            let isClick = event?.type == .leftMouseDown || event?.type == .leftMouseUp
+            let doubleClick = isClick && (event?.clickCount ?? 0) >= 2
+            if editing {
+                startedOnDoubleClick = doubleClick
+            } else if startedOnDoubleClick || doubleClick {
+                startedOnDoubleClick = false
+                reset()
+            }
+        })
     }
 }
 

@@ -218,6 +218,11 @@ compiled once into `build/core` and again only when one of its sources
 changes, so after the first each builds in seconds. `UNIVERSAL=0 ./build.sh`
 builds the app for Apple Silicon only, in half the time.
 
+`./build.sh strict` typechecks every source as the older Swift on GitHub's
+macOS runners does. A newer Swift accepts some long expressions that one gives
+up on; with its newer constraint-solver shortcuts turned off, it gives up on
+the same ones. It needs Swift 6.4 or newer.
+
 With only the Command Line Tools installed, `build.sh` compiles against the
 newest SDK whose SwiftUI does not need Xcode's macro plugin (the macOS 27 SDK
 does), and says so when it falls back.
@@ -233,7 +238,7 @@ Scene light in, print out. Each stage names its origin in the shader source.
 | Scatter & halation | linear irradiance propagated through the emulsion and reflected off the base — the red bloom around bright edges |
 | Development | characteristic curves plus DIR couplers: inhibitor released as density forms, diffused, then re-developed against the pre-coupler curves |
 | The print's shape | when the print is cropped, turned or levelled, the developed negative is shaped with it, and everything after runs at the print's own size (*Crop, turn and level*) |
-| Grain | Poisson–Binomial particle model per layer, loudest in the midtones, softened by agx's 0.65 px blur. Scale follows the film format — 35 mm or 120 — because that sets the pixel pitch, and the same emulsion on 120 is enlarged less. Measured here at 35% finer. Added as texture only: every region averages to the grain-free light, so a full-size export matches the preview |
+| Grain | Poisson–Binomial particle model per layer, loudest in the midtones, softened by agx's 0.65 px blur. Scale follows the film format — 120, by default, or 35 mm — because that sets the pixel pitch, and the same emulsion on 120 is enlarged less. Measured here at 35% finer. Added as texture only: every region averages to the grain-free light, so a full-size export matches the preview |
 | Enlarger | 81-band integral through the negative's dyes, a tungsten-halogen source and CMY dichroic filters, onto the paper's own sensitivities |
 | Dodge & burn | per-pixel print-exposure and local-grade map |
 | Paper | the paper's characteristic curve, reshaped by the tone controls |

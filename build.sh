@@ -23,7 +23,7 @@ cd "$(dirname "$0")"
 
 APP_NAME="FLX Film Lab"
 # The version a release is built as; the release workflow sets it from the tag.
-VERSION="${VERSION:-1.1.0}"
+VERSION="${VERSION:-1.1.1}"
 # UNIVERSAL=0 builds the app for Apple Silicon only, in half the time. CI does:
 # a failed Intel slice is only reported, never an error, and releases build it.
 UNIVERSAL="${UNIVERSAL:-1}"
@@ -244,6 +244,29 @@ build_motiontest() {
   "./$BUILD_DIR/motiontest"
 }
 
+# Every source typechecked as GitHub's compiler would: this Mac's newer Swift
+# with its constraint solver's newer shortcuts turned off. Xcode 26's compiler
+# on the macos-26 runners gave up on expressions the newer one took in its
+# stride; with these flags the newer one gives up on the same ones. Run it
+# before publishing. It needs a compiler that knows the flags (Swift 6.4).
+build_strict() {
+  build_core
+  local strict=(-Xfrontend -solver-disable-prune-disjunctions -Xfrontend -solver-disable-prepared-overloads
+                -Xfrontend -solver-disable-optimize-operator-defaults -Xfrontend -solver-disable-performance-hacks)
+  echo "==> typechecking as GitHub's compiler would"
+  swiftc -typecheck -parse-as-library -sdk "$SDK" -target "arm64-apple-macosx$DEPLOYMENT_TARGET" "${strict[@]}" \
+    "${APP_SOURCES[@]}" 2>&1 | { grep -E "error:" || true; }
+  local sources
+  for sources in "tests/checks/main.swift" "tests/app/main.swift" "tests/parity/main.swift" \
+                 "tests/common/Colour.swift tests/lut/main.swift" \
+                 "tests/common/Colour.swift tests/motion/TestClip.swift tests/motion/main.swift" \
+                 "tests/motion/TestClip.swift tests/motionapp/main.swift" \
+                 "tools/render/main.swift" "tools/lut/main.swift"; do
+    # shellcheck disable=SC2086
+    swiftc -typecheck -sdk "$SDK" -I "$CORE_DIR" "${strict[@]}" $sources 2>&1 | { grep -E "error:" || true; }
+  done
+}
+
 build_app() {
   refuse_if_running "$APP_DIR" "$EXECUTABLE"
   echo "==> building $APP_NAME.app"
@@ -424,6 +447,9 @@ case "${1:-app}" in
            echo "The Motion mode is part of FLX Film Lab (the toolbar's switch, or ⌘2)."
            build_app; [[ "$1" == motionrun ]] && open "$APP_DIR" ;;
   render)  build_render ;;
+  strict)  out="$(build_strict)"; echo "$out"
+           if grep -q "error:" <<< "$out"; then exit 1; fi
+           echo "==> every source typechecks as GitHub's compiler would" ;;
   dmg)     build_dmg ;;
   run)     build_app; open "$APP_DIR" ;;
   install) refuse_if_running "/Applications/$APP_DIR" "$EXECUTABLE"

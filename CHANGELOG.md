@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.1.1 (2026-10-25)
+
+A small update.
+
+### Fixed
+- Double-clicking a slider resets it again; in 1.1.0 it didn't.
+
+### Changed
+- Film format defaults to 120, so grain is finer out of the box.
+- Built with Xcode 26: on macOS 26 the app takes the system's current look.
+
 ## 1.1.0 (2026-10-25)
 
 Crop and straighten, presets, copy and paste settings, and four new film

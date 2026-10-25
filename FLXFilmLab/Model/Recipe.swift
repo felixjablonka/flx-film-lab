@@ -242,7 +242,7 @@ struct Recipe: Codable, Equatable {
     /// Film format drives the pixel pitch, which is what sets the scale of
     /// grain, halation and coupler diffusion. Only the two formats anyone
     /// actually shoots: a 35 mm frame and a 6x6 on 120.
-    var filmFormat: FilmFormat = .thirtyFiveMM
+    var filmFormat: FilmFormat = .mediumFormat
     var filmFormatMM: Double { filmFormat.frameWidthMM }
 
     /// The recipe a newly opened image starts from: this one's look — film,
