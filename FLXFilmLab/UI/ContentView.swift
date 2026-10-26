@@ -282,10 +282,8 @@ struct ContentView: View {
                 .help("Crop, turn and level the print (⌘R): the whole frame shows with the crop on it. Return keeps the crop, Escape goes back.")
         }
         ToolbarItem {
-            Picker("", selection: $exportFormat) {
-                ForEach(Exporter.Format.allCases) { Text($0.rawValue).tag($0) }
-            }
-            .labelsHidden().controlSize(.small).frame(width: 130)
+            ToolbarChoice(selection: $exportFormat)
+                .help("The format Export writes.")
         }
         ToolbarItem {
             Button { isExporting = true } label: { Label("Export", systemImage: "square.and.arrow.up") }

@@ -25,7 +25,8 @@ struct MotionInspector: View {
             .padding(.bottom, 24)
         }
         .frame(width: 296)
-        .background(.ultraThinMaterial)
+        // Not under the toolbar, as in Stills.
+        .background(.ultraThinMaterial, ignoresSafeAreaEdges: [])
     }
 
     private var film: ProfilePack? { try? PackLibrary.shared.pack(model.look.recipe.filmStock) }

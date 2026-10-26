@@ -194,6 +194,61 @@ struct ResettingSlider: View {
     }
 }
 
+/// A toolbar control that shows its choice by name and lists the others when
+/// clicked: a button that pops up a menu, the choice ticked.
+///
+/// A Menu or a Picker in the toolbar shows no text at all in an app built with
+/// the macOS 26 SDK and run on macOS 27, as 1.1.1 was: a capsule with only its
+/// chevron. A button's own label shows in either. The label is one text, the
+/// chevron inside it: with an image beside the text, macOS 26 merged the
+/// button with its neighbours into one capsule.
+struct ToolbarChoice<Value: CaseIterable & Hashable & RawRepresentable>: View
+    where Value.RawValue == String, Value.AllCases: RandomAccessCollection {
+    @Binding var selection: Value
+    var width: CGFloat = 130
+
+    var body: some View {
+        Button(action: popUp) {
+            (Text(selection.rawValue + " ")
+                + Text(Image(systemName: "chevron.down")).font(.system(size: 9, weight: .semibold)))
+                .frame(width: width)
+        }
+    }
+
+    /// The choices, the current one ticked and placed under the pointer, as a
+    /// pop-up button places it.
+    private func popUp() {
+        let menu = NSMenu()
+        let target = MenuTarget { selection = $0 }
+        var current: NSMenuItem?
+        for value in Value.allCases {
+            let item = NSMenuItem(title: value.rawValue, action: #selector(MenuTarget<Value>.choose(_:)),
+                                  keyEquivalent: "")
+            item.target = target
+            item.representedObject = value
+            if value == selection {
+                item.state = .on
+                current = item
+            }
+            menu.addItem(item)
+        }
+        // Returns once the menu has closed, so `target` lives as long as it.
+        if let event = NSApp.currentEvent, event.type == .leftMouseUp, let view = event.window?.contentView {
+            menu.popUp(positioning: current, at: view.convert(event.locationInWindow, from: nil), in: view)
+        } else {
+            menu.popUp(positioning: current, at: NSEvent.mouseLocation, in: nil)
+        }
+    }
+}
+
+private final class MenuTarget<Value>: NSObject {
+    let chosen: (Value) -> Void
+    init(_ chosen: @escaping (Value) -> Void) { self.chosen = chosen }
+    @objc func choose(_ item: NSMenuItem) {
+        if let value = item.representedObject as? Value { chosen(value) }
+    }
+}
+
 struct ToggleRow: View {
     let title: String
     @Binding var isOn: Bool

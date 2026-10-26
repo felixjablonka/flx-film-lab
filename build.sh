@@ -23,16 +23,14 @@ cd "$(dirname "$0")"
 
 APP_NAME="FLX Film Lab"
 # The version a release is built as; the release workflow sets it from the tag.
-VERSION="${VERSION:-1.1.1}"
-# UNIVERSAL=0 builds the app for Apple Silicon only, in half the time. CI does:
-# a failed Intel slice is only reported, never an error, and releases build it.
-UNIVERSAL="${UNIVERSAL:-1}"
+VERSION="${VERSION:-1.1.2}"
 # The binary inside the bundle, which refuse_if_running looks for.
 EXECUTABLE="FLXFilmLab"
-# The oldest macOS this is built to run on. swiftc otherwise targets whatever
-# the build machine runs, which quietly produced a binary that refused to launch
-# on anything older — while the Info.plist still advertised macOS 14.
-DEPLOYMENT_TARGET="14.0"
+# The oldest macOS this is built to run on, on Apple Silicon only (since 1.1.2;
+# 1.1.1 and before also ran on macOS 14 and 15, and on Intel). swiftc otherwise
+# targets whatever the build machine runs, which once quietly produced a binary
+# that refused to launch on anything older while the Info.plist advertised it.
+DEPLOYMENT_TARGET="26.0"
 # The first launch under this identifier takes over the settings saved under
 # the app's previous one, studio.agx.AgXStudio (FLXFilmLabApp.takeOverSettings).
 BUNDLE_ID="lab.flx.FLXFilmLab"
@@ -162,6 +160,12 @@ resolve_sdk() {
     exit 1
   fi
   [[ "$SDK" != "$default_sdk" ]] && echo "    using $(basename "$SDK") (the default SDK needs Xcode's SwiftUI macro plugin)"
+  # The linker records the SDK a binary was built with, and macOS runs SwiftUI
+  # and AppKit as that SDK's version behaves. Given only -sdk, it recorded the
+  # default SDK (27.0) here while compiling against 26.5, so this Mac's builds
+  # ran as 27 apps and GitHub's as 26 ones: 1.1.1's empty format field showed
+  # only in the release. Naming the SDK here makes both record the same.
+  export SDKROOT="$SDK"
   return 0
 }
 
@@ -272,34 +276,16 @@ build_app() {
   echo "==> building $APP_NAME.app"
   resolve_sdk
 
-  # Universal: an Apple Silicon slice and an Intel one, so the app runs on any
-  # Mac that can run the deployment target.
-  local arm_bin="$BUILD_DIR/$EXECUTABLE-arm64"
-  local intel_bin="$BUILD_DIR/$EXECUTABLE-x86_64"
-  local universal_bin="$BUILD_DIR/$EXECUTABLE-universal"
+  # Apple Silicon only. Compiled before touching the existing bundle, so a
+  # failed build leaves the last working app in place instead of an empty folder.
+  local bin="$BUILD_DIR/$EXECUTABLE-arm64"
   mkdir -p "$BUILD_DIR"
-
-  # Compile before touching the existing bundle, so a failed build leaves the
-  # last working app in place instead of an empty folder.
   swiftc -O -parse-as-library -sdk "$SDK" -target "arm64-apple-macosx$DEPLOYMENT_TARGET" \
-    -o "$arm_bin" "${APP_SOURCES[@]}"
-
-  if [[ "$UNIVERSAL" == 0 ]]; then
-    cp "$arm_bin" "$universal_bin"
-    echo "    Apple Silicon only (UNIVERSAL=0)"
-  elif swiftc -O -parse-as-library -sdk "$SDK" -target "x86_64-apple-macosx$DEPLOYMENT_TARGET" \
-       -o "$intel_bin" "${APP_SOURCES[@]}" 2>/dev/null; then
-    lipo -create "$arm_bin" "$intel_bin" -output "$universal_bin"
-    echo "    universal: $(lipo -archs "$universal_bin")"
-  else
-    cp "$arm_bin" "$universal_bin"
-    echo "    (Intel slice unavailable; Apple Silicon only)"
-  fi
-  rm -f "$arm_bin" "$intel_bin"
+    -o "$bin" "${APP_SOURCES[@]}"
 
   rm -rf "$APP_DIR"
   mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
-  mv "$universal_bin" "$APP_DIR/Contents/MacOS/$EXECUTABLE"
+  mv "$bin" "$APP_DIR/Contents/MacOS/$EXECUTABLE"
 
   cp -R FLXFilmLab/Resources/packs "$APP_DIR/Contents/Resources/"
   cp FLXFilmLab/Resources/AppIcon.icns "$APP_DIR/Contents/Resources/" 2>/dev/null || \
@@ -417,8 +403,7 @@ the manufacturers' datasheets, not a filter or a preset.
 
 Drop a RAW onto the window, or use Open.
 
-Requires macOS 14 or later. Built for Apple Silicon and Intel; tried on Apple
-Silicon only.
+Requires macOS 26 or later, on a Mac with Apple Silicon.
 
 FLX Film Lab is free software under the GNU GPL v3. Film modelling powered by
 spektrafilm (github.com/andreavolpato/spektrafilm); darkroom controls after

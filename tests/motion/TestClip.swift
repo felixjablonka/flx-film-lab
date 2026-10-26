@@ -286,7 +286,7 @@ enum TestClip {
                 var buffer: CVPixelBuffer?
                 CVPixelBufferPoolCreatePixelBuffer(nil, adaptor.pixelBufferPool!, &buffer)
                 fill(buffer!, layout: layout, frame: frame, format: format)
-                if format == .appleLog || format == .appleLog2, #available(macOS 14.2, *) {
+                if format == .appleLog || format == .appleLog2 {
                     let tag = format == .appleLog ? LogFormat.appleLogTag : LogFormat.appleLog2Tag
                     CVBufferSetAttachment(buffer!, kCVImageBufferLogTransferFunctionKey, tag as CFString, .shouldPropagate)
                 }

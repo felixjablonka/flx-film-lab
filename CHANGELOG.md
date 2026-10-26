@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.1.2 (2026-10-26)
+
+A small update, now for macOS 26 and Apple Silicon.
+
+### Fixed
+- The export format in the toolbar shows its name again; in 1.1.1 it was an
+  empty field.
+- The toolbar is one tone across.
+
+### Changed
+- Needs macOS 26 or later and a Mac with Apple Silicon. 1.1.1 remains for
+  macOS 14 and 15, and for Intel Macs.
+
 ## 1.1.1 (2026-10-25)
 
 A small update.

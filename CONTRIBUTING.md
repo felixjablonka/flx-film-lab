@@ -6,7 +6,7 @@ under its licences.
 
 ## Building and testing
 
-Everything builds with the Command Line Tools on macOS 14 or later; see *Build
+Everything builds with the Command Line Tools on macOS 26 or later, on Apple Silicon; see *Build
 and run* in the README. These suites cover what a change can break:
 
 ```bash

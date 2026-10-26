@@ -118,11 +118,8 @@ struct MotionContentView: View {
                 .help("Show the untouched log footage, as QuickTime shows it (\\)")
         }
         ToolbarItem {
-            Picker("", selection: $model.look.export.codec) {
-                ForEach(ExportCodec.allCases) { Text($0.rawValue).tag($0) }
-            }
-            .labelsHidden().controlSize(.small).frame(width: 130)
-            .help("The clip's format: ProRes 422 HQ for editing and grading further, HEVC 10-bit for sharing.")
+            ToolbarChoice(selection: $model.look.export.codec)
+                .help("The clip's format: ProRes 422 HQ for editing and grading further, HEVC 10-bit for sharing.")
         }
         ToolbarItem {
             Button(action: chooseExport) { Label("Export", systemImage: "square.and.arrow.up") }

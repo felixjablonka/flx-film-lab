@@ -172,8 +172,8 @@ developer. Run this once in Terminal, then open it normally:
 xattr -cr "/Applications/FLX Film Lab.app"
 ```
 
-It needs macOS 14 or later. The app is universal, for Apple Silicon and Intel,
-but has only been tried on Apple Silicon.
+It needs macOS 26 or later, on a Mac with Apple Silicon. FLX Film Lab 1.1.1,
+the last for macOS 14 and 15 and for Intel Macs, stays on the releases page.
 
 Releases also carry a V-Log LUT pack, `FLX-Film-Lab-V-Log-LUTs-<version>.zip`,
 for a Lumix camera's Real Time LUT: every film stock on its usual paper,
@@ -182,7 +182,7 @@ onto the camera and shoot without the app. Its read-me says how.
 
 ## Build and run
 
-Needs macOS 14+ and the Command Line Tools. **Xcode is not required** — there is no `.xcodeproj`, and Metal shaders are compiled at runtime
+Needs macOS 26+ on Apple Silicon, and the Command Line Tools. **Xcode is not required** — there is no `.xcodeproj`, and Metal shaders are compiled at runtime
 from `FLXFilmLab/Resources/Shaders/flx.metal`.
 
 ```bash
@@ -215,8 +215,7 @@ through opening, editing and switching images, on generated test files.
 
 The tools and the test suites build against one module of the shared code,
 compiled once into `build/core` and again only when one of its sources
-changes, so after the first each builds in seconds. `UNIVERSAL=0 ./build.sh`
-builds the app for Apple Silicon only, in half the time.
+changes, so after the first each builds in seconds.
 
 `./build.sh strict` typechecks every source as the older Swift on GitHub's
 macOS runners does. A newer Swift accepts some long expressions that one gives
@@ -225,7 +224,10 @@ the same ones. It needs Swift 6.4 or newer.
 
 With only the Command Line Tools installed, `build.sh` compiles against the
 newest SDK whose SwiftUI does not need Xcode's macro plugin (the macOS 27 SDK
-does), and says so when it falls back.
+does), and says so when it falls back. It also names that SDK to the linker,
+which otherwise recorded the toolchain's default in the binary. macOS runs an
+app as the SDK it records behaves, so a build here now behaves as the release,
+built on GitHub with Xcode 26, does.
 
 ## The pipeline
 

@@ -15,11 +15,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # Apple Silicon only: the Intel slice doubles the app's build, and the
-      # release workflow builds it.
       - name: Build the app and the command-line tools
         run: |
-          UNIVERSAL=0 ./build.sh
+          ./build.sh
           ./build.sh lut
           ./build.sh render
 

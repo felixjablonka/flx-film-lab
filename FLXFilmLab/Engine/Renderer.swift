@@ -254,11 +254,7 @@ final class Renderer {
         let library: MTLLibrary
         do {
             let options = MTLCompileOptions()
-            if #available(macOS 15.0, *) {
-                options.mathMode = .fast
-            } else {
-                options.fastMathEnabled = true
-            }
+            options.mathMode = .fast
             library = try device.makeLibrary(source: source, options: options)
         } catch {
             throw RendererError.shaderCompilation("\(error)")

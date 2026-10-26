@@ -26,7 +26,9 @@ struct InspectorView: View {
             .padding(.bottom, 24)
         }
         .frame(width: 296)
-        .background(.ultraThinMaterial)
+        // Not under the toolbar: there the material lightened the bar over the
+        // inspector only, a break between Paste and Presets.
+        .background(.ultraThinMaterial, ignoresSafeAreaEdges: [])
     }
 
     /// `Recipe.scanFilm` is a tri-state (nil follows the stock); the toggle
