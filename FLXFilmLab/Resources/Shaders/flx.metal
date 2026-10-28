@@ -356,13 +356,20 @@ kernel void accumulate_scaled(texture2d<float, access::read>       src   [[textu
 }
 
 // ---------------------------------------------------------------------------
-// Grain — agx model/grain.layer_particle_model
+// Grain — per emulsion layer, from each stock's datasheet (tools/bake/grain.py)
 //
-// Development is a counting process: each pixel holds a finite number of silver
-// halide particles, a Poisson draw sets how many are available, and a Binomial
-// draw sets how many actually develop at that exposure. Grain is therefore
-// loudest in the midtones and quiet at both ends, which is what film does and
-// what an additive noise layer does not.
+// Every colour record, and a black-and-white film's one silver record, is a
+// fast, a medium and a slow emulsion. Each holds part of the developed
+// density, and its grain follows Selwyn's law: the density fluctuation over
+// an area A has variance S / A, where S — the pack's `selwynUm2`, against the
+// record's net density — is what the datasheet's RMS granularity says. So a
+// pixel draws zero-mean noise of variance S / (its area on the film), and the
+// noise is spread over the layer's dye clouds (or silver clumps), whose size
+// is micrometres on the film whatever the pixel pitch. That keeps the grain's
+// structure, and its strength at any viewing size, the same in the preview and
+// the export. Which layer holds a density's grain is in S too: the coarse
+// fast emulsion in the thin parts of a negative, the fine slow ones in the
+// dense parts.
 // ---------------------------------------------------------------------------
 
 // Counter-based hashing (Wang / PCG style): deterministic per pixel, so the
@@ -380,90 +387,94 @@ inline float uniformFrom(thread uint &state) {
     return float(state >> 8) * (1.0f / 16777216.0f);
 }
 
-// Box-Muller, used for the normal approximations below.
+// Box-Muller.
 inline float normalFrom(thread uint &state) {
     float u1 = max(uniformFrom(state), 1e-7f);
     float u2 = uniformFrom(state);
     return sqrt(-2.0f * log(u1)) * cos(6.2831853f * u2);
 }
 
-inline float poissonSample(float lambda, thread uint &state) {
-    if (lambda <= 0.0f) return 0.0f;
-    if (lambda < 30.0f) {
-        // Knuth: exact, and cheap while lambda is small
-        float target = exp(-lambda);
-        float product = uniformFrom(state);
-        float k = 0.0f;
-        while (product > target && k < 200.0f) { k += 1.0f; product *= uniformFrom(state); }
-        return k;
-    }
-    return max(round(lambda + sqrt(lambda) * normalFrom(state)), 0.0f);
-}
-
-inline float binomialSample(float n, float p, thread uint &state) {
-    if (n <= 0.0f || p <= 0.0f) return 0.0f;
-    if (p >= 1.0f) return n;
-    if (n < 25.0f) {
-        float count = 0.0f;
-        for (float i = 0.0f; i < n; i += 1.0f) { if (uniformFrom(state) < p) count += 1.0f; }
-        return count;
-    }
-    float mean = n * p;
-    float sd = sqrt(max(n * p * (1.0f - p), 1e-9f));
-    return clamp(round(mean + sd * normalFrom(state)), 0.0f, n);
-}
-
-struct GrainUniforms {
-    float3 particlesPerPixel;
-    float3 densityMin;
-    float3 densityMax;      // curve D-max plus densityMin, as agx computes it
-    float3 uniformity;
-    float amount;           // creative scale on the deviation from the clean density
+struct GrainLayerUniforms {
+    float3 tableTop;        // net density at the table's last sample, per record
+    float pixelArea;        // um^2 of film per pixel
+    float sizeSquared;      // Grain size, squared: the Selwyn coefficient grows with the clouds' area
+    float amount;           // creative scale on the noise
     uint  seed;
-    uint  monochrome;       // one silver layer: every channel draws the same grains
-    float _pad1;
+    uint  monochrome;       // one silver record: every channel draws the same grain
+    uint  layer;            // 0 fast, 1 medium, 2 slow
+    uint  samples;          // table samples per record
 };
 
-kernel void film_grain(texture2d<float, access::read>  src [[texture(0)]],
-                       texture2d<float, access::write> dst [[texture(1)]],
-                       constant GrainUniforms &u           [[buffer(0)]],
-                       uint2 gid                           [[thread_position_in_grid]])
+// One emulsion layer's grain, as a deviation from the clean density.
+kernel void film_grain_layer(texture2d<float, access::read>  clean  [[texture(0)]],
+                             texture2d<float, access::write> dst    [[texture(1)]],
+                             constant GrainLayerUniforms &u          [[buffer(0)]],
+                             constant float *selwyn                  [[buffer(1)]],   // [record][sample][layer]
+                             uint2 gid                               [[thread_position_in_grid]])
 {
     if (gid.x >= dst.get_width() || gid.y >= dst.get_height()) return;
-    float3 density = src.read(gid).rgb + u.densityMin;
+    float3 density = clean.read(gid).rgb;
     float3 out;
+    uint pixel = hashCombine(gid.x, gid.y);
+    float shared = 0.0f;
     for (int c = 0; c < 3; ++c) {
-        float dMax = max(u.densityMax[c], 1e-4f);
-        float n = max(u.particlesPerPixel[c], 1e-4f);
-        float p = clamp(density[c] / dMax, 1e-6f, 1.0f - 1e-6f);
-        float odParticle = dMax / n;
-
-        // A black-and-white film's three channels are one layer: drawing them
-        // from one random field keeps the grain itself neutral.
-        uint layer = u.monochrome != 0 ? 0u : uint(c);
-        uint state = hashCombine(hashCombine(gid.x, gid.y), u.seed + layer * 7919u);
-        float saturation = 1.0f - p * u.uniformity[c] * (1.0f - 1e-6f);
-        float seeds = poissonSample(n / saturation, state);
-        float developed = binomialSample(seeds, p, state);
-        float grained = developed * odParticle * saturation;
-
-        // `amount` scales only the deviation, so 0 returns the clean density
-        // exactly and 2 doubles the visible granularity without shifting tone.
-        out[c] = (grained - density[c]) * u.amount;
+        float x = clamp(max(density[c], 0.0f) / max(u.tableTop[c], 1e-4f), 0.0f, 1.0f) * float(u.samples - 1);
+        uint i = min(uint(x), u.samples - 2);
+        float t = x - float(i);
+        uint row = uint(c) * u.samples;
+        float s = mix(selwyn[(row + i) * 3 + u.layer], selwyn[(row + i + 1) * 3 + u.layer], t);
+        float sigma = sqrt(max(s, 0.0f) * u.sizeSquared / u.pixelArea) * u.amount;
+        // A black-and-white film's three channels are one record: one random
+        // field keeps its grain neutral.
+        if (u.monochrome == 0 || c == 0) {
+            uint state = hashCombine(pixel, u.seed + uint(c) * 7919u + u.layer * 104729u);
+            shared = normalFrom(state);
+        }
+        out[c] = shared * sigma;
     }
-    // The grain alone, as a deviation from the clean density: it is softened
-    // before it is laid on (film_grain_apply).
     dst.write(float4(out, 1.0f), gid);
 }
 
-// The softened grain on the clean density.
-kernel void film_grain_apply(texture2d<float, access::read>  clean [[texture(0)]],
-                             texture2d<float, access::read>  grain [[texture(1)]],
-                             texture2d<float, access::write> dst   [[texture(2)]],
-                             uint2 gid                             [[thread_position_in_grid]])
+// One pass of a separable convolution, along x (`axis` 0) or y, with a kernel
+// per channel: weights[i] for the tap at i - radius.
+kernel void grain_convolve(texture2d<float, access::read>  src     [[texture(0)]],
+                           texture2d<float, access::write> dst     [[texture(1)]],
+                           constant float4 *weights               [[buffer(0)]],
+                           constant int2 &radiusAxis              [[buffer(1)]],
+                           uint2 gid                              [[thread_position_in_grid]])
 {
-    if (gid.x >= dst.get_width() || gid.y >= dst.get_height()) return;
-    dst.write(float4(clean.read(gid).rgb + grain.read(gid).rgb, 1.0f), gid);
+    int w = int(dst.get_width()), h = int(dst.get_height());
+    if (int(gid.x) >= w || int(gid.y) >= h) return;
+    int radius = radiusAxis.x;
+    int2 step = radiusAxis.y == 0 ? int2(1, 0) : int2(0, 1);
+    float4 sum = 0.0f;
+    for (int i = -radius; i <= radius; ++i) {
+        int2 p = clamp(int2(gid) + step * i, int2(0), int2(w - 1, h - 1));
+        sum += weights[i + radius] * src.read(uint2(p));
+    }
+    dst.write(float4(sum.rgb, 1.0f), gid);
+}
+
+// The convolution's second pass, laid on the negative: the clean density
+// plus the first layer's grain, then each further layer's added in place.
+kernel void grain_convolve_add(texture2d<float, access::read>       src     [[texture(0)]],
+                               texture2d<float, access::read>       clean   [[texture(1)]],
+                               texture2d<float, access::read_write> grainy  [[texture(2)]],
+                               constant float4 *weights                     [[buffer(0)]],
+                               constant int3 &radiusAxisFirst               [[buffer(1)]],
+                               uint2 gid                                    [[thread_position_in_grid]])
+{
+    int w = int(grainy.get_width()), h = int(grainy.get_height());
+    if (int(gid.x) >= w || int(gid.y) >= h) return;
+    int radius = radiusAxisFirst.x;
+    int2 step = radiusAxisFirst.y == 0 ? int2(1, 0) : int2(0, 1);
+    float4 sum = 0.0f;
+    for (int i = -radius; i <= radius; ++i) {
+        int2 p = clamp(int2(gid) + step * i, int2(0), int2(w - 1, h - 1));
+        sum += weights[i + radius] * src.read(uint2(p));
+    }
+    float3 base = radiusAxisFirst.z != 0 ? clean.read(gid).rgb : grainy.read(gid).rgb;
+    grainy.write(float4(base + sum.rgb, 1.0f), gid);
 }
 
 // ---------------------------------------------------------------------------
@@ -749,6 +760,27 @@ kernel void grain_restore_mean(texture2d<float, access::read_write> print       
     float3 gain = clamp(max(meanGrainFree.read(gid).rgb, 0.0f) / max(meanGrainy.read(gid).rgb, 1e-6f),
                         0.25f, 4.0f);
     print.write(float4(max(print.read(gid).rgb, 0.0f) * gain, 1.0f), gid);
+}
+
+// The grain turned the other way: the clean density less the grain.
+kernel void grain_mirror(texture2d<float, access::read>  clean  [[texture(0)]],
+                         texture2d<float, access::read>  grainy [[texture(1)]],
+                         texture2d<float, access::write> dst    [[texture(2)]],
+                         uint2 gid                              [[thread_position_in_grid]])
+{
+    if (gid.x >= dst.get_width() || gid.y >= dst.get_height()) return;
+    dst.write(float4(2.0f * clean.read(gid).rgb - grainy.read(gid).rgb, 1.0f), gid);
+}
+
+// The mean of the prints of the grain and of its mirror: the grain-free print
+// and the even part of the print's response to the grain, its mean shift.
+kernel void grain_even_mean(texture2d<float, access::read>  a   [[texture(0)]],
+                            texture2d<float, access::read>  b   [[texture(1)]],
+                            texture2d<float, access::write> dst [[texture(2)]],
+                            uint2 gid                           [[thread_position_in_grid]])
+{
+    if (gid.x >= dst.get_width() || gid.y >= dst.get_height()) return;
+    dst.write(float4(0.5f * (a.read(gid).rgb + b.read(gid).rgb), 1.0f), gid);
 }
 
 

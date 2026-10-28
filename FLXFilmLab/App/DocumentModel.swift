@@ -640,8 +640,8 @@ final class DocumentModel: ObservableObject {
         recipe = r
     }
 
-    /// Couplers, halation, grain, glare and development gamma — back to the
-    /// stock's own measured defaults.
+    /// Couplers, halation, grain, glare, camera sharpness and development
+    /// gamma — back to the stock's own measured defaults.
     func resetFilmCharacter() {
         var r = recipe
         let defaults = Recipe()
@@ -653,6 +653,7 @@ final class DocumentModel: ObservableObject {
         r.halationScale = defaults.halationScale
         r.scatterAmount = defaults.scatterAmount
         r.scatterScale = defaults.scatterScale
+        r.cameraSharpness = defaults.cameraSharpness
         r.grainEnabled = defaults.grainEnabled
         r.grainAmount = defaults.grainAmount
         r.grainScale = defaults.grainScale

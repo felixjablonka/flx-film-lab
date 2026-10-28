@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.2.0 (2026-10-28)
+
+### Added
+- Sharpness, Film or Camera, under Film & Paper. Camera keeps the camera
+  file's own detail, with the film's colour, halation and grain. Film, the
+  default, gives the film's own detail, softer at the finest scale on 35 mm,
+  as the film is.
+
+### Changed
+- Grain, rebuilt. Each stock's grain is its datasheet's — Fujifilm's and
+  Agfa's RMS granularity, Kodak's Print Grain Index, and Kodak's Vision3
+  curves for each layer — where every colour stock had the same before.
+  It is coarsest where a negative is thin, as film's is, and its dye clouds
+  and silver clumps have a real size on the film, so the preview shows the
+  grain the export has. No more per-pixel colour speckle.
+- 120 is a 6×9 frame, 84 × 56 mm, where it was 56 mm on the long side, so
+  grain, halation and edge effects are finer on it, as on the real negative.
+- A 4:3 picture — Fuji GFX, Micro Four Thirds — spans the frame's short side,
+  24 mm on 35 mm and 56 mm on 120, rather than its long side, so it sits on
+  the film as large as it fits, as a 3:2 one does.
+- Film format sits under Film & Paper, next to Sharpness.
+
 ## 1.1.2 (2026-10-26)
 
 A small update, now for macOS 26 and Apple Silicon.

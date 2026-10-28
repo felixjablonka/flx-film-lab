@@ -31,12 +31,15 @@ enum FilmFormat: String, Codable, CaseIterable, Identifiable {
     case mediumFormat = "120"
     var id: String { rawValue }
 
-    /// Long edge of the frame. A 6x6 negative is roughly 2.5x the area of a
-    /// 35 mm one, which is why the same emulsion looks so much finer on 120.
-    var frameWidthMM: Double {
+    /// The frame, long side by short: 36 x 24 mm on 35 mm, and 84 x 56 mm on
+    /// 120, a 6x9 across the film's 56 mm. A 6x9 is enlarged 2.3 times less
+    /// than a 35 mm frame for the same print, which is why the same emulsion
+    /// looks so much finer on 120. An image is laid on the frame as large as
+    /// it fits (`Renderer.pixelSizeUm`).
+    var frameMM: (long: Double, short: Double) {
         switch self {
-        case .thirtyFiveMM: return 36
-        case .mediumFormat: return 56
+        case .thirtyFiveMM: return (36, 24)
+        case .mediumFormat: return (84, 56)
         }
     }
 }
@@ -208,6 +211,15 @@ struct Recipe: Codable, Equatable {
     var halationScale: Double = 1.0
     var scatterAmount: Double = 1.0
     var scatterScale: Double = 1.0
+    /// The camera file's own sharpness, with the film's colour, tone,
+    /// halation and grain: no scattering inside the emulsion and no
+    /// development edge effects. nil is the film's own sharpness. Optional,
+    /// so settings saved before it existed still load.
+    var cameraSharpness: Bool?
+    var keepsCameraSharpness: Bool {
+        get { cameraSharpness ?? false }
+        set { cameraSharpness = newValue ? true : nil }
+    }
     var grainEnabled: Bool = true
     var grainAmount: Double = 1.0
     var grainScale: Double = 1.0
@@ -240,10 +252,9 @@ struct Recipe: Codable, Equatable {
     var outputColorSpace: String = "sRGB"
     var gamutCompress: Bool = true
     /// Film format drives the pixel pitch, which is what sets the scale of
-    /// grain, halation and coupler diffusion. Only the two formats anyone
-    /// actually shoots: a 35 mm frame and a 6x6 on 120.
+    /// grain, halation and coupler diffusion. Two formats: a 35 mm frame and
+    /// a 6x9 on 120.
     var filmFormat: FilmFormat = .mediumFormat
-    var filmFormatMM: Double { filmFormat.frameWidthMM }
 
     /// The recipe a newly opened image starts from: this one's look — film,
     /// paper, how it is printed, the film character and the output — with
@@ -267,6 +278,7 @@ struct Recipe: Codable, Equatable {
         r.halationScale = halationScale
         r.scatterAmount = scatterAmount
         r.scatterScale = scatterScale
+        r.cameraSharpness = cameraSharpness
         r.grainEnabled = grainEnabled
         r.grainAmount = grainAmount
         r.grainScale = grainScale

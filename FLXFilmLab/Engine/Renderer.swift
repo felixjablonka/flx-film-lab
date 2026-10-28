@@ -107,6 +107,7 @@ struct FilmStageKey: Equatable {
     var couplers: [Double]
     var halation: [Double]
     var grain: [Double]
+    var cameraSharpness: Bool
     var filmFormat: FilmFormat
     /// The grain is drawn on the frame, unless the print is shaped: then it
     /// is drawn on the print's own pixels (`Renderer.render`, step 2d).
@@ -122,6 +123,7 @@ struct FilmStageKey: Equatable {
         halation = [recipe.halationEnabled ? 1 : 0, recipe.halationAmount, recipe.halationScale,
                     recipe.scatterAmount, recipe.scatterScale]
         grain = [recipe.grainEnabled ? 1 : 0, recipe.grainAmount, recipe.grainScale]
+        cameraSharpness = recipe.keepsCameraSharpness
         filmFormat = recipe.filmFormat
         self.grainOnFrame = grainOnFrame
     }
@@ -183,13 +185,16 @@ final class Renderer {
     private let scatterMix: MTLComputePipelineState
     private let halationAdd: MTLComputePipelineState
     private let accumulateScaled: MTLComputePipelineState
-    private let filmGrain: MTLComputePipelineState
-    private let filmGrainApply: MTLComputePipelineState
+    private let filmGrainLayer: MTLComputePipelineState
     private let filmDevelop: MTLComputePipelineState
     private let couplersAmount: MTLComputePipelineState
     private let filmDevelopCouplers: MTLComputePipelineState
     private let printAndScan: MTLComputePipelineState
     private let grainRestoreMean: MTLComputePipelineState
+    private let grainMirror: MTLComputePipelineState
+    private let grainEvenMean: MTLComputePipelineState
+    private let grainConvolve: MTLComputePipelineState
+    private let grainConvolveAdd: MTLComputePipelineState
     private let encodeDisplay: MTLComputePipelineState
     private let applyGeometry: MTLComputePipelineState
 
@@ -269,13 +274,16 @@ final class Renderer {
         scatterMix = try pipeline("scatter_mix")
         halationAdd = try pipeline("halation_add")
         accumulateScaled = try pipeline("accumulate_scaled")
-        filmGrain = try pipeline("film_grain")
-        filmGrainApply = try pipeline("film_grain_apply")
+        filmGrainLayer = try pipeline("film_grain_layer")
         filmDevelop = try pipeline("film_develop")
         couplersAmount = try pipeline("couplers_amount")
         filmDevelopCouplers = try pipeline("film_develop_couplers")
         printAndScan = try pipeline("print_and_scan")
         grainRestoreMean = try pipeline("grain_restore_mean")
+        grainMirror = try pipeline("grain_mirror")
+        grainEvenMean = try pipeline("grain_even_mean")
+        grainConvolve = try pipeline("grain_convolve")
+        grainConvolveAdd = try pipeline("grain_convolve_add")
         encodeDisplay = try pipeline("encode_display")
         applyGeometry = try pipeline("apply_geometry")
 
@@ -592,20 +600,36 @@ final class Renderer {
         // measured curves, which are large-area densities with the grain
         // already in them.
         //
-        // So the grain-free print is rendered as well, and each pixel is scaled
-        // so that its neighbourhood holds the grain-free light: grain keeps
-        // its texture, and every region averages to the grain-free colour at
-        // any size. The neighbourhood is a 3 px Gaussian — wide enough to
-        // average per-pixel grain, narrow enough to follow the image. It is a
-        // gain, not an offset: subtracting the grain's local average left up
-        // to 15% of a full-size frame's red pixels below zero, in its teals,
-        // and the file clipped them, lifting that red by up to 1.5 stops. The
-        // average is of light: what the eye adds up, and what macOS Preview
-        // appears to average when it fits an image to its window. The
-        // film-stage scratch textures are free by now.
+        // So the shift is taken out, and only the shift. The grain's mirror —
+        // the clean density less the grain — is printed too. Grain is
+        // symmetric, so in the mean of the two prints its texture, the odd
+        // part of the print's response, cancels, and what is left is the
+        // grain-free print and the even part: the shift. Each pixel is scaled
+        // so that its neighbourhood of that mean holds the grain-free light.
+        // The neighbourhood is a 3 px Gaussian, wide enough to average the
+        // shift's own noise, narrow enough to follow the image. Scaling
+        // against the grainy print's own neighbourhood, as 1.0-1.1 did, took
+        // the grain's coarse structure out with the shift: the print kept 40%
+        // of the negative's grain at 0.1 mm. It is a gain, not an offset:
+        // subtracting the shift left some of a full-size frame's red pixels
+        // below zero, in its teals, and the file clipped them. The average is
+        // of light: what the eye adds up, and what macOS Preview appears to
+        // average when it fits an image to its window. The film-stage scratch
+        // textures are free by now.
         if let grainFree {
+            encode(cb, grainMirror, width: grainFree.width, height: grainFree.height) { e in
+                e.setTexture(grainFree, index: 0)
+                e.setTexture(negative, index: 1)
+                e.setTexture(printScratchB, index: 2)
+            }
+            printNegative(printScratchB, into: printScratch)
+            encode(cb, grainEvenMean, width: printed.width, height: printed.height) { e in
+                e.setTexture(printed, index: 0)
+                e.setTexture(printScratch, index: 1)
+                e.setTexture(printScratchB, index: 2)
+            }
+            blur(cb, from: printScratchB, to: grainyBlur, sigma: 3)
             printNegative(grainFree, into: printScratch)
-            blur(cb, from: printed, to: grainyBlur, sigma: 3)
             blur(cb, from: printScratch, to: printScratchB, sigma: 3)
             encode(cb, grainRestoreMean, width: printed.width, height: printed.height) { e in
                 e.setTexture(printed, index: 0)
@@ -644,33 +668,62 @@ final class Renderer {
         return screen
     }
 
-    /// 2c — grain, in the density domain where development actually happens.
-    /// agx softens the drawn particles with a Gaussian of `blur` pixels (0.65
-    /// for every stock), which takes the noise per pixel down to under half;
-    /// without it the grain was twice as loud as agx's at any size. Only the
-    /// grain is softened here, not the image under it, so turning grain on
-    /// costs no sharpness. agx skips blurs under 0.4 px, and so does this.
-    /// The particles' size is the frame's (`imageSize`), whatever the size of
-    /// `clean`.
+    /// 2c — grain, in the density domain where development happens: per
+    /// emulsion layer, fast, medium and slow, each drawn at the strength the
+    /// stock's datasheet gives it and spread over its own dye clouds, then
+    /// laid on the clean density (`film_grain_layer`). Only the grain is
+    /// spread, not the image under it, so turning grain on costs no sharpness.
+    /// Its scale is the film's: the pitch is the frame's (`imageSize`), on the
+    /// frame and on a shaped print alike, so a crop enlarges the grain as it
+    /// enlarges the picture. Grain size scales the clouds, and with them the
+    /// Selwyn coefficient, which grows with a cloud's area.
     private func drawGrain(_ cb: MTLCommandBuffer, _ grain: GrainDefaults, on clean: MTLTexture,
                            into target: MTLTexture, scratch scratch1: MTLTexture, _ scratch2: MTLTexture,
                            setup: RenderSetup, recipe: Recipe) {
         let width = clean.width, height = clean.height
-        var uniforms = grainUniforms(grain: grain, setup: setup, recipe: recipe)
-        encode(cb, filmGrain, width: width, height: height) { e in
-            e.setTexture(clean, index: 0)
-            e.setTexture(scratch1, index: 1)
-            e.setBytes(&uniforms, length: MemoryLayout<GrainUniforms>.stride, index: 0)
-        }
-        var deviation = scratch1
-        if grain.blur > 0.4 {
-            blur(cb, from: scratch1, to: scratch2, sigma: grain.blur)
-            deviation = scratch2
-        }
-        encode(cb, filmGrainApply, width: width, height: height) { e in
-            e.setTexture(clean, index: 0)
-            e.setTexture(deviation, index: 1)
-            e.setTexture(target, index: 2)
+        let pitch = Self.pixelSizeUm(width: Int(imageSize.width), height: Int(imageSize.height),
+                                     format: recipe.filmFormat)
+        let size = Float(recipe.grainScale)
+        let top = grain.tableDensityMax
+        var table = grain.selwynUm2
+        for layer in 0..<3 {
+            var uniforms = GrainLayerUniforms(tableTop: SIMD3(top[0], top[1], top[2]),
+                                              pixelArea: pitch * pitch, sizeSquared: size * size,
+                                              amount: Float(recipe.grainAmount), seed: 0x5EED_1234,
+                                              monochrome: setup.film.isMonochrome ? 1 : 0,
+                                              layer: UInt32(layer), samples: UInt32(grain.tableSamples))
+            encode(cb, filmGrainLayer, width: width, height: height) { e in
+                e.setTexture(clean, index: 0)
+                e.setTexture(scratch1, index: 1)
+                e.setBytes(&uniforms, length: MemoryLayout<GrainLayerUniforms>.stride, index: 0)
+                e.setBytes(&table, length: MemoryLayout<Float>.stride * table.count, index: 1)
+            }
+            // each record's clouds for this layer, in pixels, padded to one radius
+            let kernels = (0..<3).map {
+                Self.cloudFilter(sigma: Double(grain.cloudUm[$0 * 3 + layer] * size / pitch))
+            }
+            let radius = kernels.map { $0.count / 2 }.max() ?? 0
+            var taps = (0...(2 * radius)).map { i in
+                SIMD4<Float>((0..<3).map { c -> Float in
+                    let k = kernels[c], j = i - radius + k.count / 2
+                    return j >= 0 && j < k.count ? Float(k[j]) : 0
+                } + [0])
+            }
+            var first = SIMD2<Int32>(Int32(radius), 0)
+            encode(cb, grainConvolve, width: width, height: height) { e in
+                e.setTexture(scratch1, index: 0)
+                e.setTexture(scratch2, index: 1)
+                e.setBytes(&taps, length: MemoryLayout<SIMD4<Float>>.stride * taps.count, index: 0)
+                e.setBytes(&first, length: MemoryLayout<SIMD2<Int32>>.stride, index: 1)
+            }
+            var second = SIMD3<Int32>(Int32(radius), 1, layer == 0 ? 1 : 0)
+            encode(cb, grainConvolveAdd, width: width, height: height) { e in
+                e.setTexture(scratch2, index: 0)
+                e.setTexture(clean, index: 1)
+                e.setTexture(target, index: 2)
+                e.setBytes(&taps, length: MemoryLayout<SIMD4<Float>>.stride * taps.count, index: 0)
+                e.setBytes(&second, length: MemoryLayout<SIMD3<Int32>>.stride, index: 1)
+            }
         }
     }
 
@@ -723,15 +776,15 @@ final class Renderer {
         var renormalize: Int32
     }
 
-    struct GrainUniforms {
-        var particlesPerPixel: SIMD3<Float>
-        var densityMin: SIMD3<Float>
-        var densityMax: SIMD3<Float>
-        var uniformity: SIMD3<Float>
+    struct GrainLayerUniforms {
+        var tableTop: SIMD3<Float>
+        var pixelArea: Float
+        var sizeSquared: Float
         var amount: Float
         var seed: UInt32
-        var monochrome: UInt32 = 0
-        var pad1: Float = 0
+        var monochrome: UInt32
+        var layer: UInt32
+        var samples: UInt32
     }
 
     /// agx `model/diffusion.apply_halation_um`: scatter first (energy-preserving
@@ -751,11 +804,11 @@ final class Renderer {
                                 recipe: Recipe,
                                 width: Int, height: Int) -> MTLTexture {
         let pixelSizeUm = Self.pixelSizeUm(width: width, height: height,
-                                           filmFormatMM: recipe.filmFormatMM)
+                                           format: recipe.filmFormat)
         var current = source
 
-        // --- scatter ---
-        let scatterAmount = Float(recipe.scatterAmount)
+        // --- scatter --- (none with Camera sharpness: the file's own detail)
+        let scatterAmount = recipe.keepsCameraSharpness ? 0 : Float(recipe.scatterAmount)
         let coreSigma = mean(halation.scatterCoreUm) * Float(recipe.scatterScale) / pixelSizeUm
         let tailLambda = mean(halation.scatterTailUm) * Float(recipe.scatterScale) / pixelSizeUm
         if scatterAmount > 0 && (coreSigma > 0.05 || tailLambda > 0.05) {
@@ -818,34 +871,54 @@ final class Renderer {
         return result
     }
 
-    /// agx `model/grain.apply_grain_to_density`, single-layer path.
-    private func grainUniforms(grain: GrainDefaults, setup: RenderSetup, recipe: Recipe) -> GrainUniforms {
-        let pixelSizeUm = Self.pixelSizeUm(width: Int(imageSize.width),
-                                           height: Int(imageSize.height),
-                                           filmFormatMM: recipe.filmFormatMM)
-        let pixelArea = pixelSizeUm * pixelSizeUm
-        let scale = Float(recipe.grainScale)
-        var particles = SIMD3<Float>(repeating: 0)
-        var densityMin = SIMD3<Float>(repeating: 0)
-        var uniformity = SIMD3<Float>(repeating: 0)
-        for c in 0..<3 {
-            // Larger particles mean fewer per pixel, which is what makes grain
-            // coarser rather than merely louder.
-            let particleArea = max(grain.particleAreaUm2 * grain.particleScale[c] * scale * scale, 1e-6)
-            particles[c] = pixelArea / particleArea
-            densityMin[c] = grain.densityMin[c]
-            uniformity[c] = grain.uniformity[c]
+    /// The filter that spreads a layer's per-pixel noise over its clouds of
+    /// `sigma` pixels, one axis of it. The film's grain is the clouds over a
+    /// continuous film, and each pixel averages it over its own area, so
+    /// neighbouring pixels share some of it: for Gaussian clouds, pixels n
+    /// apart covary by a triangle (two pixel-wide boxes) convolved with the
+    /// Gaussian at sigma times root 2. The filter is the square root of that
+    /// covariance, in frequency, so the noise has it exactly, whatever the
+    /// pitch: spreading each pixel's noise by the clouds alone, sampled at the
+    /// pixels, missed some of the sharing, and a 12 MP frame seen at the
+    /// preview's size had 13% less grain than a 45 MP one. It sums to one, so
+    /// the grain over large areas is Selwyn's, and it is a single tap for
+    /// clouds much smaller than a pixel.
+    static func cloudFilter(sigma: Double) -> [Double] {
+        guard sigma > 0.02 else { return [1] }
+        // Psi(z) = integral of the normal CDF: z Phi(z) + phi(z)
+        func psi(_ z: Double) -> Double {
+            z * 0.5 * (1 + erf(z / 2.0.squareRoot())) + exp(-z * z / 2) / (2 * Double.pi).squareRoot()
         }
-        let normalizedMax = SIMD3<Float>(setup.film.densityMax[0] - setup.film.densityMin[0],
-                                         setup.film.densityMax[1] - setup.film.densityMin[1],
-                                         setup.film.densityMax[2] - setup.film.densityMin[2])
-        return GrainUniforms(particlesPerPixel: particles,
-                             densityMin: densityMin,
-                             densityMax: normalizedMax + densityMin,
-                             uniformity: uniformity,
-                             amount: Float(recipe.grainAmount),
-                             seed: 0x5EED_1234,
-                             monochrome: setup.film.isMonochrome ? 1 : 0)
+        let s = sigma * 2.0.squareRoot()
+        let reach = Int((4 * s + 2).rounded(.up))
+        // Pixels n apart covary by (triangle * Gaussian)(n): a box by (a box by
+        // the Gaussian), whose second integral gives it in closed form
+        func covariance(_ n: Int) -> Double {
+            let x = Double(n)
+            return s * (psi((x + 1) / s) - 2 * psi(x / s) + psi((x - 1) / s))
+        }
+        let c = (-reach...reach).map(covariance)
+        // the square root in frequency, on a grid wide enough not to wrap
+        let m = 8 * reach + 8
+        var spectrum = [Double](repeating: 0, count: m)
+        for k in 0..<m {
+            let w = 2 * Double.pi * Double(k) / Double(m)
+            var sum = 0.0
+            for (i, v) in c.enumerated() { sum += v * cos(w * Double(i - reach)) }
+            spectrum[k] = max(sum, 0).squareRoot()
+        }
+        var h = (-reach...reach).map { n -> Double in
+            var sum = 0.0
+            for k in 0..<m { sum += spectrum[k] * cos(2 * Double.pi * Double(k) * Double(n) / Double(m)) }
+            return sum / Double(m)
+        }
+        let total = h.reduce(0, +)
+        h = h.map { $0 / total }
+        // trim taps that carry nothing
+        while h.count > 1, let first = h.first, let last = h.last, abs(first) < 1e-5, abs(last) < 1e-5 {
+            h.removeFirst(); h.removeLast()
+        }
+        return h
     }
 
     private func mean(_ values: [Float]) -> Float {
@@ -858,20 +931,30 @@ final class Renderer {
         kernel.encode(commandBuffer: cb, sourceTexture: from, destinationTexture: to)
     }
 
+    /// How far the inhibitor spreads, in pixels. Not at all with Camera
+    /// sharpness: acting where it is released, the couplers keep their colour
+    /// and tone and draw no edges, so the file's detail comes through.
     private func couplerDiffusionPixels(setup: RenderSetup, recipe: Recipe) -> Float {
-        guard let dc = setup.film.defaults.dirCouplers, dc.diffusionSizeUm > 0 else { return 0 }
+        guard !recipe.keepsCameraSharpness,
+              let dc = setup.film.defaults.dirCouplers, dc.diffusionSizeUm > 0 else { return 0 }
         let pixelSizeUm = Self.pixelSizeUm(width: Int(imageSize.width),
                                            height: Int(imageSize.height),
-                                           filmFormatMM: recipe.filmFormatMM)
+                                           format: recipe.filmFormat)
         return dc.diffusionSizeUm * Float(recipe.couplersDiffusion) / pixelSizeUm
     }
 
-    /// agx `ResizingService`: the film format spans the long edge, so the
-    /// pixel pitch is what converts every micrometre-scale effect to pixels.
-    static func pixelSizeUm(width: Int, height: Int, filmFormatMM: Double) -> Float {
-        let longEdge = Float(max(width, height))
-        guard longEdge > 0 else { return 10 }
-        return Float(filmFormatMM) * 1000 / longEdge
+    /// How much film a pixel covers, in um: the pitch that converts every
+    /// micrometre-scale effect to pixels. The image is laid on the format's
+    /// frame as large as it fits, as a camera of its shape would fill the
+    /// film: a 3:2 image fills a 3:2 frame (agx's `ResizingService` spans the
+    /// long edge), a 4:3 one — Fuji GFX, Micro Four Thirds — spans the short
+    /// side, 24 mm on 35 mm and 56 mm on 120, and one wider than 3:2 spans
+    /// the long side, inside the frame either way.
+    static func pixelSizeUm(width: Int, height: Int, format: FilmFormat) -> Float {
+        let long = Float(max(width, height)), short = Float(min(width, height))
+        guard short > 0 else { return 10 }
+        let frame = format.frameMM
+        return min(Float(frame.long) * 1000 / long, Float(frame.short) * 1000 / short)
     }
 
     private func encode(_ cb: MTLCommandBuffer,
@@ -1060,6 +1143,15 @@ final class Renderer {
     private func readback(_ texture: MTLTexture) -> [Float]? {
         guard let staging = stagingCopy(of: texture) else { return nil }
         let w = texture.width, h = texture.height
+        // Past 12 MP the intermediates are half precision (`setImage`).
+        if texture.pixelFormat == .rgba16Float {
+            var half = [Float16](repeating: 0, count: w * h * 4)
+            half.withUnsafeMutableBytes { raw in
+                staging.getBytes(raw.baseAddress!, bytesPerRow: w * 8,
+                                 from: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0)
+            }
+            return half.map(Float.init)
+        }
         var out = [Float](repeating: 0, count: w * h * 4)
         out.withUnsafeMutableBytes { raw in
             staging.getBytes(raw.baseAddress!, bytesPerRow: w * 16,

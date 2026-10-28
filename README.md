@@ -60,10 +60,12 @@ video mode. That is where most of the work in this repository went.
 
 - **spektrafilm's model.** This covers spectral upsampling of the scene, each
   film's spectral sensitivities and characteristic curves, development with DIR
-  couplers, the dichroic colour enlarger, the print and the scan, in-emulsion
-  scatter and halation, and the stochastic grain model. It is ported to Metal
-  function by function and held to the original: film exposure and negative
-  density match bit for bit, the final colour to within 6e-4 (`tests/parity`).
+  couplers, the dichroic colour enlarger, the print and the scan, and in-emulsion
+  scatter and halation. It is ported to Metal function by function and held to
+  the original: film exposure and negative density match bit for bit, the final
+  colour to within 6e-4 (`tests/parity`). Its grain model, a count of the
+  particles that develop in each emulsion layer, is where the app's grain starts
+  (*Grain*).
 - **spektrafilm's data.** 14 of the 38 film stocks are spektrafilm's, used as they
   are: Kodak Portra 160, 400 and 800 (and Portra 800's two pushes), Ektar 100, Gold
   200, Ultramax 400, the four Vision3 stocks, Verita 200D, and Fujifilm C200,
@@ -77,7 +79,7 @@ video mode. That is where most of the work in this repository went.
 ### What is new
 
 - **A native app.** The model runs on the GPU. A slider move re-renders the
-  2560-pixel preview in about 23 to 40 ms, and a 45-megapixel NEF renders at
+  2560-pixel preview in about 29 to 50 ms, and a 45-megapixel NEF renders at
   full resolution in under a second on an M4 Pro. RAW files decode through macOS
   itself, and nothing in the app needs Python.
 - **Camera-side controls, before the negative.** spektrafilm's controls are
@@ -136,6 +138,13 @@ video mode. That is where most of the work in this repository went.
   films and a silver paper are built from datasheets alone, as noted above. They
   run neutral through the three-layer engine, with grain and sharpness from
   Kodak's and Agfa's published data.
+- **Grain from the datasheets.** spektrafilm gives every colour stock the same
+  grain, set by eye. Here each stock has its own, from its sheet: Fujifilm's
+  and Agfa's RMS granularity, Kodak's Print Grain Index, and for the Vision3
+  stocks Kodak's granularity curves for each layer, whose shape every colour
+  negative follows. It is drawn per emulsion layer, coarsest where a negative
+  is thin, with dye clouds and silver clumps of a real size on the film, so
+  the preview shows the grain a full-size export has (*Grain*).
 - **Video.** The Motion mode grades log footage through the same engine as
   photographs, live while it plays, and exports the graded clip. Output is
   ProRes 422 HQ or 10-bit HEVC, with audio and metadata kept, encoded so that
@@ -237,10 +246,10 @@ Scene light in, print out. Each stage names its origin in the shader source.
 |---|---|
 | RAW decode | `CIRAWFilter`, scene-referred and linear — no tone curve, no highlight boost, no gamut mapping, and none of the "shadow bias" Apple otherwise subtracts to hide noise (3.0 on Nikon Z, 5.0 on a Leica M), which put the darkest light the sensor recorded below zero, beyond any Exposure. No luminance noise reduction, so the film's grain is the texture; colour noise reduction and sharpening stay at Apple's defaults for the camera. White-balanced for the *film's* reference illuminant, not as-shot |
 | Film exposure | RGB → XYZ (CAT16 to the stock's reference illuminant) → chromaticity → a baked 192×192 LUT that carries the whole spectral upsampling *and* the film's 81-band sensitivity projection |
-| Scatter & halation | linear irradiance propagated through the emulsion and reflected off the base — the red bloom around bright edges |
+| Scatter & halation | linear irradiance propagated through the emulsion and reflected off the base — the red bloom around bright edges. Sharpness, under Film & Paper, set to Camera leaves the scatter out, and the couplers' spread with it, so a picture keeps the camera file's own detail with the film's colour, halation and grain |
 | Development | characteristic curves plus DIR couplers: inhibitor released as density forms, diffused, then re-developed against the pre-coupler curves |
 | The print's shape | when the print is cropped, turned or levelled, the developed negative is shaped with it, and everything after runs at the print's own size (*Crop, turn and level*) |
-| Grain | Poisson–Binomial particle model per layer, loudest in the midtones, softened by agx's 0.65 px blur. Scale follows the film format — 120, by default, or 35 mm — because that sets the pixel pitch, and the same emulsion on 120 is enlarged less. Measured here at 35% finer. Added as texture only: every region averages to the grain-free light, so a full-size export matches the preview |
+| Grain | each stock's own granularity, per emulsion layer, with dye clouds or silver clumps of a real size on the film (*Grain*). The film format — 120, a 6×9 frame of 84 × 56 mm, by default, or 35 mm, 36 × 24 — sets how much the frame is enlarged, so the same emulsion is finer on 120. The picture is laid on the frame as large as it fits: a 3:2 one fills it, a 4:3 one (Fuji GFX, Micro Four Thirds) spans the short side, 24 or 56 mm, and one wider than 3:2 the long side. Added as texture only: every region averages to the grain-free light, so a full-size export matches the preview |
 | Enlarger | 81-band integral through the negative's dyes, a tungsten-halogen source and CMY dichroic filters, onto the paper's own sensitivities |
 | Dodge & burn | per-pixel print-exposure and local-grade map |
 | Paper | the paper's characteristic curve, reshaped by the tone controls |
@@ -477,11 +486,11 @@ paper chosen on purpose for the kind of film already loaded stays.
   hidden. Pre-flash still holds the highlights.
 - **Grain is the datasheet's, where the sheet gives it.** Kodak gives Tri-X a
   diffuse RMS granularity of 17 and T-Max 100 one of 8, and Agfa gives APX 25
-  one of 7, read the way
-  the datasheets read it: net density 1.0 through a 48 um aperture, at a
-  6000 px export of a 35 mm frame. Ilford publishes none for HP5 Plus, which
-  takes Tri-X's 17, an emulsion of the same class; Neopan 1600 and the push
-  are below. It is one silver layer, so the grain is neutral.
+  one of 7, read the way the datasheets read it: net density 1.0 through a
+  48 um aperture. Ilford publishes none for HP5 Plus, which takes Tri-X's 17,
+  an emulsion of the same class; Neopan 1600 and the push are below. It is one
+  silver layer, so the grain is neutral, and its clumps are smaller and
+  crisper than a colour film's dye clouds (*Grain*).
 - **So is the sharpness.** Kodak publishes Tri-X's modulation transfer in
   D-76: above 100% at coarse detail, 112% at 8 cycles/mm, back to 101% at 24
   and 55% at 50. The hump is development's edge effect — its by-products
@@ -633,6 +642,50 @@ the middle of the print as it stands.
 
 The crop belongs to its frame. It stays out of Copy and Paste Settings, out of
 a newly opened image, and out of LUTs. The Motion mode has none.
+
+## Grain
+
+Each stock's grain is its datasheet's. The sheets give a diffuse RMS
+granularity — the density fluctuation through a 48 um aperture, times 1000:
+
+| Read at | Stocks |
+|---|---|
+| visual density 1.0 over the minimum | Fujifilm's and Agfa's colour negatives and Fujifilm's slides, from their sheets |
+| gross visual density 1.0 | Kodak's slides |
+| net silver density 1.0 | Tri-X, T-Max 100, APX 25 |
+| Print Grain Index | Kodak's colour negatives for stills: four units are a just-noticeable step, and doubling the enlargement adds 22, so a difference of d is a factor of 2 to the power d/22. The scale is set at Portra 400 = 4, where Kodak's own curves put Vision3 250D and 500T and Fujifilm puts Pro 400H |
+| per layer, against density | Kodak Vision3 50D, 250D and 500T. 200T's sheet repeats 500T's plot, so 200T sits between 50D and 250D at the 100-speed grain Kodak claims for it, and Verita 200D between them at its own speed |
+
+A few publish nothing: HP5 Plus and Neopan 1600 are derived as noted above,
+Reala 500D takes Eterna 500's figure, Ultramax 400 takes Gold 200's, and
+Phoenix 200 takes Superia 1600's. Pushed stocks take their normal figure
+times the root of the slope ratio at mid-grey (Selwyn: the same grains, each
+developed to more density).
+
+The grain follows the density the way the film's does. Kodak's Vision3 curves
+show every layer coarsest just above the fog, where only the fast emulsion has
+developed, then levelling off as the slower ones fill in, and blue — the
+yellow-dye layer — about twice as grainy as red and green. Every colour
+negative follows that measured shape at its own sheet's level. Slides and
+black-and-white films publish no curve, so theirs comes from spektrafilm's
+counting model on each stock's own emulsion layers.
+
+It is drawn per emulsion layer, fast, medium and slow. Each layer's grain
+follows Selwyn's law — the fluctuation over an area A has a variance that goes
+as 1/A — so a pixel draws noise of the variance its area on the film calls for,
+and the noise is spread over the layer's dye clouds or silver clumps. Their size
+is micrometres on the film, larger for a grainier stock and for its fast
+layer, and the same whatever the pixel pitch. So the preview and a full-size
+export carry the same grain at the same viewing size, and cropping enlarges it.
+Grain size scales the clouds, and the grain's coarseness with them.
+
+The colour safety from 1.0 stays. Printing is not linear, so grain shifts a
+region's average colour, by more where pixels are smaller. The grain's mirror
+image is printed as well, and the mean of the two prints holds that shift and
+none of the texture; each region is scaled back to the grain-free light by
+it. 1.0 and 1.1 scaled against the grainy print's own neighbourhood, which
+took the grain's coarse structure out with the shift: a print kept 40% of its
+negative's grain at 0.1 mm, and the grain was a fine fizz.
 
 ## Command line
 
@@ -912,12 +965,14 @@ base white, is as sharp as its datasheet's MTF one stop under mid-grey and
 keeps that edge effect deeper down, every colour negative built from a
 datasheet prints a full tonal range with a neutral mid-grey, Temperature and
 Tint move prints and slides the same way, gamut
-compression leaves in-gamut colour alone and holds hue for the rest, grain is
-softened as agx softens it and averages to the grain-free colour region by
-region without pushing a pixel below zero, black-and-white stocks print every
-pixel neutral, grain included, on silver paper and a neutral mid-grey on colour
-paper, render a blue lighter than a red of the same luminance, give their
-datasheet's RMS granularity, print a grey card the same through every camera
+compression leaves in-gamut colour alone and holds hue for the rest, every
+stock gives its datasheet's RMS granularity, grain is the film's size whatever
+the pixels', so an export seen at the preview's size has the preview's grain
+and the print keeps the negative's coarse grain, and it averages to the
+grain-free colour region by region without pushing a pixel below zero,
+black-and-white stocks print every pixel neutral, grain included, on silver
+paper and a neutral mid-grey on colour paper, render a blue lighter than a red
+of the same luminance, print a grey card the same through every camera
 filter and never print an impossible colour lighter than its luminance, bloom
 and glow land on their highlight and scale with the frame, and every output
 space survives a 16-bit TIFF round trip through ColorSync. Each of them failed
@@ -937,16 +992,20 @@ On an M4 Pro, a 45 MP Nikon NEF:
 
 | | |
 |---|---|
-| Full-resolution render | 0.83 s |
-| Full pipeline incl. decode and JPEG write | 4.1 s |
-| Preview frame, print or tone slider (2560 px) | ~23 ms |
-| Preview frame, exposure or film-character slider | ~40 ms |
+| Full-resolution render | 0.36 s |
+| Full pipeline incl. decode and JPEG write | 1.9 s |
+| Preview frame, print or tone slider (2560 px) | ~29 ms |
+| Preview frame, exposure or film-character slider | ~50 ms |
 
 The preview is 2560 pixels on its long side. Preview size, under Output, also
 offers 1024, 2048, 3072 and 4096, and the choice is kept between launches. At
-2048 the two sliders take about 15 and 27 ms, at 3072 about 33 and 57, and at
-4096 about 57 and 98, for a Mac with the GPU for it. A file smaller than the
-preview size is shown at its own size; the preview never enlarges it.
+2048 the two sliders take about 19 and 33 ms, at 3072 about 42 and 71, and at
+4096 about 73 and 122, for a Mac with the GPU for it. A file smaller than the
+preview size is shown at its own size; the preview never enlarges it. Of
+those times grain takes about 6 and 10 ms at 2560, and 0.08 s of the
+full-resolution render: its three emulsion layers, and printing its mirror
+image, which keeps the colour without taking the grain's coarse structure away
+(*Grain*).
 
 The preview renders on its own actor (`App/RenderEngine.swift`), never on the
 main thread, so the controls stay responsive whatever a frame costs; while one

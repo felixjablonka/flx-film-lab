@@ -34,7 +34,8 @@ from spektrafilm.profiles.io import load_profile, profile_from_dict
 from spektrafilm.utils.gamut_compression import InputGamutCompressSpec
 from spektrafilm.utils.spectral_upsampling import compute_hanatos2025_tc_lut
 
-import stock_overrides  # noqa: E402  (tools/bake, next to this script)
+import grain  # noqa: E402  (tools/bake, next to this script)
+import stock_overrides  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 DEFAULT_OUT = REPO / "FLXFilmLab" / "Resources" / "packs"
@@ -159,50 +160,9 @@ BW_RMS_GRANULARITY = {
 }
 
 
-# The pixel pitch the grain is calibrated at: a 6000 px export of a 35 mm frame.
-GRAIN_REFERENCE_PITCH_UM = 6.0
-
-
-def softened_aperture_variance(blur_px: float, pitch_um: float) -> float:
-    """How much of a 48 um aperture's grain variance survives the softening.
-
-    The engine softens grain by agx's `blur` in pixels, which moves part of
-    each pixel's noise into its neighbours — and across the edge of an
-    aperture only a few pixels wide. Per axis, each noise pixel counts with the
-    share of its kernel that lands inside the aperture.
-    """
-    radius = int(np.ceil(3 * blur_px))
-    w = np.exp(-np.arange(-radius, radius + 1) ** 2 / (2 * blur_px ** 2))
-    w /= w.sum()
-    k = max(int(round(np.sqrt(np.pi) * 24.0 / pitch_um)), 1)
-    per_axis = float(np.sum(np.convolve(np.ones(k), w) ** 2) / k)
-    return per_axis ** 2
-
-
-def bw_particle_area(profile, rms: float, density_min: float, uniformity: float, blur: float) -> float:
-    """Particle area that gives the engine's grain the datasheet's RMS granularity.
-
-    The engine draws, per pixel, Poisson(n / s) seeds of which Binomial(p)
-    develop, each worth D_max / n (`film_grain` in flx.metal; agx
-    `layer_particle_model`). Its variance is D_max s D / n with s = 1 - p u and
-    p = D / D_max, and n = pixel area / particle area. Averaged over a 48 um
-    aperture that leaves D_max s D a / A_aperture whatever the pixel size —
-    Selwyn's law — less what the softening carries out of the aperture, which
-    does depend on the pitch: a tenth or so at the reference pitch. Solved for
-    the particle area a.
-    """
-    curves = np.asarray(profile.data.density_curves)
-    d_max = float(np.nanmax(curves) - np.nanmin(curves)) + density_min
-    d = 1.0 + density_min
-    s = 1.0 - (d / d_max) * uniformity
-    aperture = np.pi * 24.0 ** 2
-    survives = softened_aperture_variance(blur, GRAIN_REFERENCE_PITCH_UM) if blur > 0.4 else 1.0
-    return (rms / 1000.0) ** 2 * aperture / (d_max * s * d * survives)
-
-
 def bw_defaults(profile, out: dict) -> dict:
-    """One silver layer: halation without colour, uniform grain, and the
-    sharpness of Kodak's measured MTF (`bw_mtf.py`)."""
+    """One silver layer: halation without colour, and the sharpness of Kodak's
+    measured MTF (`bw_mtf.py`). Its grain is `grain.py`'s."""
     import bw_mtf
 
     hal = out["halation"]
@@ -236,13 +196,6 @@ def bw_defaults(profile, out: dict) -> dict:
         "gammaInterlayerBtoRG": [0.0, 0.0],
         "diffusionSizeUm": fit["diffusionSizeUm"], "diffusionTailUm": 0.0, "diffusionTailWeight": 0.0,
     }
-    grain = out["grain"]
-    density_min = float(np.mean(grain["densityMin"]))
-    uniformity = float(np.mean(grain["uniformity"]))
-    area = bw_particle_area(profile, BW_RMS_GRANULARITY[profile.info.stock], density_min, uniformity,
-                            float(grain["blur"]))
-    grain.update(particleAreaUm2=area, particleScale=[1.0, 1.0, 1.0],
-                 densityMin=[density_min] * 3, uniformity=[uniformity] * 3)
     return out
 
 
@@ -349,15 +302,7 @@ def stock_defaults(profile) -> dict:
             "boostRange": float(hal.boost_range),
             "protectEV": float(hal.protect_ev),
         }
-        grain = digested.film_render.grain
-        out["grain"] = {
-            "particleAreaUm2": float(grain.particle_area_um2),
-            "particleScale": _f(grain.particle_scale),
-            "densityMin": _f(grain.density_min),
-            "uniformity": _f(grain.uniformity),
-            "blur": float(grain.blur),
-            "microStructure": _f(grain.micro_structure),
-        }
+        out["grain"] = grain.grain_defaults(profile, BW_RMS_GRANULARITY)
         if profile.info.channel_model == "bw":
             out = bw_defaults(profile, out)
     return out

@@ -397,36 +397,140 @@ do {
     renderer.setImage(greyWedge(stops), width: stops.count, height: 1)
 }
 
-print("grain is softened the way agx softens it")
+print("a picture is laid on the film frame as large as it fits")
 do {
-    // agx blurs the drawn grain by `blur` pixels (0.65 for every stock), which
-    // correlates neighbouring pixels' grain by about 0.5; grain drawn without
-    // it is not correlated at all, and twice as loud per pixel.
-    let w = 512, h = 512, grey = RenderSetupBuilder.midgrayValue
-    var px = [Float](repeating: 1, count: w * h * 4)
-    for i in 0..<(w * h) { px[i * 4] = grey; px[i * 4 + 1] = grey; px[i * 4 + 2] = grey }
-    renderer.setImage(px, width: w, height: h)
-    var r = try baseRecipe(film: "kodak_portra_400")
-    r.grainEnabled = true
-    _ = try render(renderer, r)
-    let film = renderer.readTap("cmy_film")!
-    var correlations: [Double] = []
-    for c in 0..<3 {
-        var mean = 0.0
-        for i in 0..<(w * h) { mean += Double(film[i * 4 + c]) }
-        mean /= Double(w * h)
-        var v0 = 0.0, vx = 0.0, vy = 0.0
-        for y in 1..<(h - 2) { for x in 1..<(w - 2) {
-            let d = Double(film[(y * w + x) * 4 + c]) - mean
-            v0 += d * d
-            vx += d * (Double(film[(y * w + x + 1) * 4 + c]) - mean)
-            vy += d * (Double(film[((y + 1) * w + x) * 4 + c]) - mean)
-        }}
-        correlations += [vx / v0, vy / v0]
+    // 36 x 24 mm on 35 mm, 84 x 56 mm (6x9) on 120: a 3:2 picture fills the
+    // frame, a 4:3 one (Fuji GFX, Micro Four Thirds) spans its short side, a
+    // square one makes a 6x6 on 120, and one wider than 3:2 spans the long side.
+    let cases: [(String, Int, Int, FilmFormat, Double)] = [
+        ("3:2 Zf on 35 mm", 6048, 4032, .thirtyFiveMM, 36.0 / 6048),
+        ("3:2 Zf, upright, on 35 mm", 4032, 6048, .thirtyFiveMM, 36.0 / 6048),
+        ("3:2 Zf on 120", 6048, 4032, .mediumFormat, 84.0 / 6048),
+        ("4:3 Micro Four Thirds on 35 mm", 5184, 3888, .thirtyFiveMM, 24.0 / 3888),
+        ("4:3 GFX on 120", 11648, 8736, .mediumFormat, 56.0 / 8736),
+        ("square on 120", 4000, 4000, .mediumFormat, 56.0 / 4000),
+        ("16:9 on 35 mm", 6000, 3375, .thirtyFiveMM, 36.0 / 6000),
+    ]
+    for (name, w, h, format, mmPerPixel) in cases {
+        let pitch = Double(Renderer.pixelSizeUm(width: w, height: h, format: format))
+        let frame = format.frameMM
+        let long = Double(max(w, h)) * pitch / 1000, short = Double(min(w, h)) * pitch / 1000
+        check(abs(pitch / (1000 * mmPerPixel) - 1) < 1e-5 && long <= frame.long * (1 + 1e-5) && short <= frame.short * (1 + 1e-5),
+              String(format: "%@: %.2f um a pixel, %.1f x %.1f mm on the film", name, pitch, long, short))
     }
-    let lo = correlations.min()!, hi = correlations.max()!
-    check(lo > 0.35 && hi < 0.7,
-          String(format: "neighbouring pixels' grain correlates by %.2f to %.2f (agx's 0.65 px softening: about 0.5)", lo, hi))
+}
+
+print("Camera sharpness keeps the file's detail and the film's colour")
+do {
+    // With the switch on, no scatter in the emulsion and no development edge
+    // effects: a small sinusoidal exposure across a 24 MP frame comes out
+    // at its large-area modulation at every frequency up to the pixels'
+    // limit, and a flat colour prints exactly as it does with the film's own
+    // sharpness (both act only on detail). Halation stays on.
+    let side = 6048, rows = 8, m = 0.04
+    func logLuminance(_ r: Recipe, _ pattern: (Int) -> Double) throws -> [Double] {
+        var px = [Float](repeating: 1, count: side * rows * 4)
+        for x in 0..<side {
+            let v = RenderSetupBuilder.midgrayValue * Float(pow(10, pattern(x)))
+            for yy in 0..<rows { let o = (yy * side + x) * 4; px[o] = v; px[o + 1] = v; px[o + 2] = v }
+        }
+        renderer.setImage(px, width: side, height: rows)
+        let out = try render(renderer, r)
+        return (0..<side).map { log10(Double(simd_dot(out[(rows / 2) * side + $0], SIMD3(0.2126, 0.7152, 0.0722))) + 1e-9) }
+    }
+    func response(_ r: Recipe, cyclesPerPixel f: Double) throws -> Double {
+        let large = (try logLuminance(r) { _ in m }[side / 2] - logLuminance(r) { _ in -m }[side / 2]) / 2
+        let w = 2 * Double.pi * f
+        let l = try logLuminance(r) { m * sin(w * (Double($0) + 0.5)) }
+        let span = (side / 5)..<(4 * side / 5)
+        let mean = span.map { l[$0] }.reduce(0, +) / Double(span.count)
+        var s = 0.0, c = 0.0, s2 = 0.0, c2 = 0.0
+        for x in span {
+            let a = w * (Double(x) + 0.5)
+            s += (l[x] - mean) * sin(a); c += (l[x] - mean) * cos(a); s2 += sin(a) * sin(a); c2 += cos(a) * cos(a)
+        }
+        return 100 * hypot(s / s2, c / c2) / large
+    }
+    for film in ["kodak_portra_400", "fujifilm_provia_100f", "kodak_tri_x_400"] {
+        var r = try baseRecipe(film: film)
+        r.halationEnabled = true
+        r.keepsCameraSharpness = true
+        let got = try [0.05, 0.1, 0.2, 0.3, 0.45].map { try response(r, cyclesPerPixel: $0) }
+        let worst = got.map { abs($0 - 100) }.max() ?? .infinity
+        check(worst < 3, String(format: "%@: %.0f%%, %.0f%%, %.0f%%, %.0f%%, %.0f%% of the file's detail at 0.05 to 0.45 cycles a pixel",
+                                film, got[0], got[1], got[2], got[3], got[4]))
+        // a flat colour, with the switch on and off
+        renderer.setImage(greyWedge(stops), width: stops.count, height: 1)
+        let sharp = try render(renderer, r).map(lab)
+        r.keepsCameraSharpness = false
+        let filmic = try render(renderer, r).map(lab)
+        let shift = zip(sharp, filmic).map { simd_length($0 - $1) }.max() ?? .infinity
+        check(shift < 0.05, String(format: "%@: a flat grey wedge prints the same with it on, %.3f dE apart", film, shift))
+    }
+    // Saved before the switch existed, a recipe still loads, as it off;
+    // saved with it on, it comes back on.
+    var plain = try JSONSerialization.jsonObject(with: JSONEncoder().encode(Recipe())) as! [String: Any]
+    plain.removeValue(forKey: "cameraSharpness")
+    let old = try? JSONDecoder().decode(Recipe.self, from: JSONSerialization.data(withJSONObject: plain))
+    var on = Recipe()
+    on.keepsCameraSharpness = true
+    let back = try? JSONDecoder().decode(Recipe.self, from: JSONEncoder().encode(on))
+    check(old?.keepsCameraSharpness == false && back?.keepsCameraSharpness == true,
+          "a recipe saved without the switch loads with it off; one saved with it on comes back on")
+    renderer.setImage(greyWedge(stops), width: stops.count, height: 1)
+}
+
+print("grain is the film's size, not the pixels'")
+do {
+    // Grain is drawn at the film's scale: seen at the same size, a full-size
+    // export and the preview must carry the same grain, and the finished
+    // print must keep the negative's coarse grain — the mottle a print shows
+    // at arm's length. 1.0-1.1 drew it per pixel with agx's fixed 0.65 px
+    // softening, so the export seen at the preview's size had a third more
+    // grain than the preview, and the colour safety step took 40% of the
+    // grain out at 0.1 mm, leaving a fizz. A flat mid-grey, read in L*.
+    let grey = RenderSetupBuilder.midgrayValue
+    func flat(_ w: Int, _ h: Int) -> [Float] {
+        var px = [Float](repeating: 1, count: w * h * 4)
+        for i in 0..<(w * h) { px[i * 4] = grey; px[i * 4 + 1] = grey; px[i * 4 + 2] = grey }
+        return px
+    }
+    // the standard deviation of L* averaged over squares of `side` pixels
+    func boxed(_ l: [Float], _ w: Int, _ h: Int, _ side: Int) -> Double {
+        var means: [Double] = []
+        var y = 0
+        while y + side <= h {
+            var x = 0
+            while x + side <= w {
+                var sum = 0.0
+                for yy in y..<(y + side) { for xx in x..<(x + side) { sum += Double(l[yy * w + xx]) } }
+                means.append(sum / Double(side * side))
+                x += side
+            }
+            y += side
+        }
+        let m = means.reduce(0, +) / Double(means.count)
+        return sqrt(means.map { ($0 - m) * ($0 - m) }.reduce(0, +) / Double(means.count - 1))
+    }
+    for film in ["kodak_portra_400", "fujifilm_provia_100f", "kodak_tri_x_400"] {
+        var r = try baseRecipe(film: film)
+        r.grainEnabled = true
+        // a 35 mm frame 6000 px wide (6 um pixels) and 2000 px wide (18 um)
+        renderer.setImage(flat(6000, 360), width: 6000, height: 360)
+        let big = try render(renderer, r).map { lab($0).x }
+        let bigNegative = renderer.readTap("cmy_film")!.enumerated().filter { $0.offset % 4 == 1 }.map(\.element)
+        renderer.setImage(flat(2000, 120), width: 2000, height: 120)
+        let small = try render(renderer, r).map { lab($0).x }
+        let atSmall = boxed(small, 2000, 120, 1), bigAtSmall = boxed(big, 6000, 360, 3)
+        check(abs(bigAtSmall / atSmall - 1) < 0.1,
+              String(format: "%@: grain at 18 um, export %.2f L* against preview %.2f", film, bigAtSmall, atSmall))
+        // the print's grain at 0.1 mm against 24 um, as the negative's
+        let print = boxed(big, 6000, 360, 16) / boxed(big, 6000, 360, 4)
+        let negative = boxed(bigNegative, 6000, 360, 16) / boxed(bigNegative, 6000, 360, 4)
+        check(abs(print / negative - 1) < 0.15,
+              String(format: "%@: from 24 um to 0.1 mm the print keeps %.0f%% of its grain, the negative %.0f%%",
+                     film, 100 * print, 100 * negative))
+    }
     renderer.setImage(greyWedge(stops), width: stops.count, height: 1)
 }
 
@@ -466,7 +570,7 @@ do {
     // read 36% at 24 cycles/mm where Kodak measures 101%.
     do {
         let side = 6048, rows = 8, m = 0.04
-        let pitchMM = Double(Renderer.pixelSizeUm(width: side, height: rows, filmFormatMM: 36)) / 1000
+        let pitchMM = Double(Renderer.pixelSizeUm(width: side, height: rows, format: .thirtyFiveMM)) / 1000
         func logLuminance(_ r: Recipe, _ pattern: (Int) -> Double) throws -> [Double] {
             var px = [Float](repeating: 1, count: side * rows * 4)
             for x in 0..<side {
@@ -633,48 +737,55 @@ do {
           String(format: "Neopan 1600 filter factors: yellow %.1f (Fujifilm 2), orange %.1f (No. 21: 4), red %.1f (8)",
                  neopan["yellow"] ?? 0, neopan["orange"] ?? 0, neopan["red"] ?? 0))
 
-    // Grain sized to the datasheet: diffuse RMS granularity at net density
-    // 1.0 through a 48 um aperture (Kodak F-4017: Tri-X 17; Ilford and Fujifilm
-    // publish none, see bake_packs.BW_RMS_GRANULARITY). A flat field at
-    // that density, read off the developed negative, averaged over squares of
-    // the aperture's area — at the 6 um pitch the bake calibrates at, a 6000 px
-    // export of a 35 mm frame.
-    for (film, rms) in [("kodak_tri_x_400", 17.0), ("kodak_tri_x_400_push2", 19.0), ("ilford_hp5_plus", 17.0),
-                        ("fujifilm_neopan_1600", 23.0), ("agfa_apx_25", 7.0), ("kodak_t_max_100", 8.0)] {
-        let pack = try PackLibrary.shared.pack(film)
-        let net = pack.densityCurves.enumerated().filter { $0.offset % 3 == 0 }.map { $0.element - pack.densityMin[0] }
-        let logE = pack.logExposure
-        guard let i = net.firstIndex(where: { $0 >= 1.0 }) else { check(false, "\(film) never reaches density 1"); continue }
-        let t = (1.0 - net[i - 1]) / (net[i] - net[i - 1])
-        let e = logE[i - 1] + t * (logE[i] - logE[i - 1])
-        let v = RenderSetupBuilder.midgrayValue * pow(10, e)
-        let side = 6000, rows = 600
+    // Grain sized to the datasheet, every stock: diffuse RMS granularity
+    // through a 48 um aperture, at the density the sheet reads it at — a
+    // visual density of 1.0 over the minimum (Fujifilm, Agfa; Kodak's colour
+    // negatives through their Print Grain Index), a gross visual 1.0 (Kodak's
+    // slides), a net silver density of 1.0 (black-and-white); see
+    // tools/bake/grain.py. A flat field of the neutral that develops to it,
+    // read off the developed negative and averaged over squares of the
+    // aperture's area, at 6 um pixels; the records weighted by how much
+    // each moves the visual density there.
+    for entry in PackLibrary.shared.filmStocks {
+        let pack = try PackLibrary.shared.pack(entry.stock)
+        guard let sheet = pack.defaults.grain?.sheet else { check(false, "\(entry.stock) has no grain"); continue }
+        let v = RenderSetupBuilder.midgrayValue * pow(10, Float(sheet.logExposure))
+        let side = 6000, rows = 288
         renderer.setImage([Float](repeating: v, count: side * rows * 4).enumerated().map { $0.offset % 4 == 3 ? 1 : $0.element },
                           width: side, height: rows)
-        var r = try baseRecipe(film: film)
+        var r = try baseRecipe(film: entry.stock)
         r.grainEnabled = true
         _ = try render(renderer, r)
         let negative = renderer.readTap("cmy_film")!
-        let pitch = Renderer.pixelSizeUm(width: side, height: rows, filmFormatMM: r.filmFormatMM)
+        let pitch = Renderer.pixelSizeUm(width: side, height: rows, format: r.filmFormat)
         let box = max(Int((sqrt(Float.pi) * 24 / pitch).rounded()), 1)
-        var means: [Double] = []
-        var y0 = 0
-        while y0 + box <= rows {
-            var x0 = 0
-            while x0 + box <= side {
-                var sum = 0.0
-                for yy in y0..<(y0 + box) { for xx in x0..<(x0 + box) { sum += Double(negative[(yy * side + xx) * 4]) } }
-                means.append(sum / Double(box * box))
-                x0 += box
+        var variance = 0.0
+        var densities = [Double](repeating: 0, count: 3)
+        for c in 0..<3 {
+            var means: [Double] = []
+            var y0 = 0
+            while y0 + box <= rows {
+                var x0 = 0
+                while x0 + box <= side {
+                    var sum = 0.0
+                    for yy in y0..<(y0 + box) { for xx in x0..<(x0 + box) { sum += Double(negative[(yy * side + xx) * 4 + c]) } }
+                    means.append(sum / Double(box * box))
+                    x0 += box
+                }
+                y0 += box
             }
-            y0 += box
+            let mean = means.reduce(0, +) / Double(means.count)
+            densities[c] = mean
+            // the box is not exactly the aperture's area: granularity goes as 1/sqrt(area)
+            let sd = sqrt(means.map { ($0 - mean) * ($0 - mean) }.reduce(0, +) / Double(means.count - 1))
+                * Double(Float(box) * pitch) / Double(sqrt(Float.pi) * 24)
+            variance += pow(sheet.weights[c] * sd, 2)
         }
-        let mean = means.reduce(0, +) / Double(means.count)
-        let sd = sqrt(means.map { ($0 - mean) * ($0 - mean) }.reduce(0, +) / Double(means.count - 1))
-        // the box is not exactly the aperture's area: granularity goes as 1/sqrt(area)
-        let granularity = 1000 * sd * Double(Float(box) * pitch) / Double(sqrt(Float.pi) * 24)
-        check(abs(granularity - rms) < 0.1 * rms,
-              String(format: "%@: RMS granularity %.1f at net density %.2f (target %.0f)", film, granularity, mean, rms))
+        let granularity = 1000 * sqrt(variance)
+        check(abs(granularity - sheet.rms) < 0.1 * sheet.rms,
+              String(format: "%@: RMS granularity %.1f at %@ density 1.0 (sheet %.1f; densities %.2f %.2f %.2f, the bake's %.2f %.2f %.2f)",
+                     entry.stock, granularity, sheet.basis, sheet.rms, densities[0], densities[1], densities[2],
+                     sheet.point[0], sheet.point[1], sheet.point[2]))
     }
     renderer.setImage(greyWedge(stops), width: stops.count, height: 1)
 }
@@ -731,7 +842,7 @@ do {
     ]
     let frequencies = [5.0, 10, 20, 30]
     let side = 6048, rows = 8, m = 0.02
-    let pitchMM = Double(Renderer.pixelSizeUm(width: side, height: rows, filmFormatMM: 36)) / 1000
+    let pitchMM = Double(Renderer.pixelSizeUm(width: side, height: rows, format: .thirtyFiveMM)) / 1000
     func green(_ r: Recipe, ev: Double, _ pattern: (Int) -> Double) throws -> [Double] {
         var px = [Float](repeating: 1, count: side * rows * 4)
         for x in 0..<side {

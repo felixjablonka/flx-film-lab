@@ -2,7 +2,10 @@
 
 The film and paper profiles in `profiles/` are measured off the manufacturers'
 published datasheets: characteristic curves, spectral sensitivities, dye spectra
-and MTF curves, read from the sheets' vector plots. The sheets themselves are the
+and MTF curves, read from the sheets' vector plots. Every stock's grain is its
+sheet's RMS granularity or Print Grain Index (`tools/bake/grain.py`, which
+lists each figure and where it is from), and Kodak's Vision3 granularity
+curves give the colour negatives theirs against density. The sheets themselves are the
 manufacturers' documents, so they are not part of this source. The app and its
 tests do not need them; only rebuilding the profiles does.
 
@@ -39,6 +42,9 @@ scripts look for these names.
 | HARMAN technology (Ilford) | ILFORD HP5 Plus | technical information | `Ilford HP5 Plus.pdf` | `build_bw_profiles.py` |
 | HARMAN technology (Ilford) | ILFORD MULTIGRADE RC Deluxe | technical information, 2020 | `Ilford Multigrade RC Deluxe.pdf` | `build_bw_profiles.py` |
 | HARMAN technology | HARMAN Phoenix 200 | technical information, Sep 2024 | `HARMAN Phoenix Technical Data sheet 0924.pdf` | `build_profiles.py`, `sheet_readers.py` |
+| Kodak | KODAK VISION3 50D Color Negative Film 5203/7203 | K-1165, 2025 | `KODAK-VISION3-50D-5203-7203-brochure.pdf` | `vision3_granularity.py` |
+| Kodak | KODAK VISION3 250D Color Negative Film 5207/7207 | K-1166, 2025 | `KODAK-VISION3-250D-5207-7207-brochure.pdf` | `vision3_granularity.py` |
+| Kodak | KODAK VISION3 500T Color Negative Film 5219/7219 | K-1168, 2025 | `KODAK-VISION3-500T-5219-7219-brochure.pdf` | `vision3_granularity.py` |
 
 Each profile records which sheet each of its parts came from in its own
 `datasource` field, and `NOTICE.md` lists what is inherited from spektrafilm

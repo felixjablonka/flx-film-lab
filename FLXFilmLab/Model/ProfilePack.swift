@@ -75,13 +75,35 @@ struct LensFilterRef: Decodable, Hashable, Identifiable {
     var designation: String { wratten.map { "\(name), Wratten \($0)" } ?? name }
 }
 
+/// A stock's grain, per colour record (or its one silver record) and per
+/// emulsion layer, fast, medium and slow (tools/bake/grain.py).
 struct GrainDefaults: Decodable {
-    let particleAreaUm2: Float
-    let particleScale: [Float]
-    let densityMin: [Float]
-    let uniformity: [Float]
-    let blur: Float
-    let microStructure: [Float]
+    /// Net density at each record's last table sample.
+    let tableDensityMax: [Float]
+    /// Selwyn coefficient, OD² µm², [record][sample][layer]: a layer's density
+    /// fluctuation over an area A has variance this over A.
+    let selwynUm2: [Float]
+    /// Dye-cloud or silver-clump size, µm (a Gaussian's sigma), [record][layer].
+    let cloudUm: [Float]
+    /// What the stock's datasheet says, and how it reads it.
+    let sheet: GrainSheet
+
+    var tableSamples: Int { selwynUm2.count / 9 }
+}
+
+struct GrainSheet: Decodable {
+    /// Diffuse RMS granularity × 1000 through a 48 µm aperture.
+    let rms: Double
+    /// "visual": visual diffuse density 1.0 over the minimum; "visual-gross":
+    /// 1.0 gross; "silver": net silver density 1.0.
+    let basis: String
+    let source: String
+    /// Where the bake read the sheet's figure: the records' net densities, how
+    /// much each moves the visual density there, and the log exposure (from
+    /// mid-grey) of the neutral that develops to them.
+    let point: [Double]
+    let weights: [Double]
+    let logExposure: Double
 }
 
 struct StockDefaults: Decodable {

@@ -142,6 +142,19 @@ struct InspectorView: View {
         Section("Film & Paper", subtitle: "Spectral profiles derived from manufacturer datasheets.") {
             StockPicker(title: "Film", entries: model.filmEntries, selection: filmStock)
 
+            Picker("Film format", selection: $model.recipe.filmFormat) {
+                ForEach(FilmFormat.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented).controlSize(.small).font(.system(size: 11))
+            .help("Sets the frame size, and with it the pixel pitch that scales grain, halation and coupler diffusion: 36 x 24 mm on 35 mm, 84 x 56 mm for a 6x9 on 120. The picture is laid on the frame as large as it fits, so a 4:3 one spans the short side. The same emulsion on 120 shows visibly finer grain than on 35 mm, because the frame is enlarged less.")
+
+            Picker("Sharpness", selection: $model.recipe.keepsCameraSharpness) {
+                Text("Film").tag(false)
+                Text("Camera").tag(true)
+            }
+            .pickerStyle(.segmented).controlSize(.small).font(.system(size: 11))
+            .help("Film: detail as the film renders it. Scattering inside the emulsion softens the finest detail and development's edge effects lift coarser edges, so on 35 mm a high-resolution file's finest detail softens as the film's would. Camera: the camera file's own detail, with the film's colour, tone, halation and grain.")
+
             ToggleRow(title: "Print on paper", isOn: printsOnPaper,
                       help: "Off reads the developed film straight off a light table, the way a slide is viewed. Slide stocks default to that: printing a positive onto RA-4 paper inverts it, which is what a lab would really produce and almost never what you want.")
 
@@ -501,6 +514,7 @@ struct InspectorView: View {
                 ParamSlider(title: "Edge width", value: $model.recipe.couplersDiffusion,
                             range: 0...3, defaultValue: 1, decimals: 2,
                             help: "How far the by-products spread before they act. Wider reads as local contrast more than as edge sharpness.")
+                    .disabled(model.recipe.keepsCameraSharpness)
 
                 Divider().opacity(0.3).padding(.vertical, 3)
             } else if let couplers = model.filmPack?.defaults.dirCouplers {
@@ -514,6 +528,7 @@ struct InspectorView: View {
                     ParamSlider(title: "Coupler diffusion", value: $model.recipe.couplersDiffusion,
                                 range: 0...3, defaultValue: 1, decimals: 2,
                                 help: "How far the inhibitor spreads before it acts. Wider diffusion reads as local contrast and apparent sharpness.")
+                        .disabled(model.recipe.keepsCameraSharpness)
                 }
 
                 Divider().opacity(0.3).padding(.vertical, 3)
@@ -528,20 +543,17 @@ struct InspectorView: View {
             ParamSlider(title: "Scatter", value: $model.recipe.scatterAmount,
                         range: 0...4, defaultValue: 1, decimals: 2,
                         help: "Scattering inside the emulsion itself, a much tighter effect than halation.")
+                .disabled(model.recipe.keepsCameraSharpness)
 
             Divider().opacity(0.3).padding(.vertical, 3)
 
             ToggleRow(title: "Grain", isOn: $model.recipe.grainEnabled,
-                      help: "Stochastic silver-halide development, modelled per layer. Visible at 100% and on export.")
+                      help: "The stock's own grain, as strong as its datasheet measures it, in each emulsion layer: coarsest where a negative is thin. Its dye clouds or silver clumps have a real size on the film, so the preview shows the grain the export will.")
             ParamSlider(title: "Grain", value: $model.recipe.grainAmount,
                         range: 0...3, defaultValue: 1, decimals: 2)
             ParamSlider(title: "Grain size", value: $model.recipe.grainScale,
-                        range: 0.25...4, defaultValue: 1, decimals: 2)
-            Picker("Film format", selection: $model.recipe.filmFormat) {
-                ForEach(FilmFormat.allCases) { Text($0.rawValue).tag($0) }
-            }
-            .pickerStyle(.segmented).controlSize(.small).font(.system(size: 11))
-            .help("Sets the frame size, and with it the pixel pitch that scales grain, halation and coupler diffusion. The same emulsion on 120 shows visibly finer grain than on 35 mm, because the frame is enlarged less.")
+                        range: 0.25...4, defaultValue: 1, decimals: 2,
+                        help: "Larger clouds and coarser grain, as a faster emulsion has.")
 
             Divider().opacity(0.3).padding(.vertical, 3)
 

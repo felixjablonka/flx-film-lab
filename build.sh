@@ -23,7 +23,7 @@ cd "$(dirname "$0")"
 
 APP_NAME="FLX Film Lab"
 # The version a release is built as; the release workflow sets it from the tag.
-VERSION="${VERSION:-1.1.2}"
+VERSION="${VERSION:-1.2.0}"
 # The binary inside the bundle, which refuse_if_running looks for.
 EXECUTABLE="FLXFilmLab"
 # The oldest macOS this is built to run on, on Apple Silicon only (since 1.1.2;
