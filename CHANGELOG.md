@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.1 (2026-10-29)
+
+### Fixed
+- Every film stock, and every photo, has its own grain. In 1.2.0 all stocks
+  drew the same grain pattern, only stronger or weaker, so HP5, Tri-X and
+  Neopan 1600 looked alike.
+
 ## 1.2.0 (2026-10-28)
 
 ### Added

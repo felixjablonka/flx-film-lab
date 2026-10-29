@@ -72,10 +72,12 @@ actor RenderEngine {
         renderer = try Renderer()
     }
 
-    /// Hand the engine a newly decoded image. Every cached reading belonged to
-    /// the previous one.
-    func setSource(_ decoded: RawLoader.Decoded) -> Int {
+    /// Hand the engine a newly decoded image, with its grain seed
+    /// (`Renderer.grainSeed(for:)`). Every cached reading belonged to the
+    /// previous one.
+    func setSource(_ decoded: RawLoader.Decoded, grainSeed: UInt32) -> Int {
         renderer.setImage(decoded.pixels, width: decoded.width, height: decoded.height)
+        renderer.grainSeed = grainSeed
         source = decoded
         sourceID += 1
         exposureReading = nil

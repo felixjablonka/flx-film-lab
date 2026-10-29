@@ -250,7 +250,7 @@ final class DocumentModel: ObservableObject {
             }
         case .success(let decoded):
             guard let engine else { return }
-            let sourceID = await engine.setSource(decoded)
+            let sourceID = await engine.setSource(decoded, grainSeed: Renderer.grainSeed(for: key.url))
             adopt(decoded, key: key, sourceID: sourceID)
         }
     }
@@ -505,6 +505,7 @@ final class DocumentModel: ObservableObject {
                 let full = try RawLoader.load(url: source, options: options)
                 let renderer = try Renderer()
                 renderer.setImage(full.pixels, width: full.width, height: full.height)
+                renderer.grainSeed = Renderer.grainSeed(for: source)
                 let setup = try RenderSetupBuilder.build(recipe: resolved,
                                                          exposureEV: Float(resolved.exposureEV))
                 let masks = resolved.masks.filter { $0.enabled }

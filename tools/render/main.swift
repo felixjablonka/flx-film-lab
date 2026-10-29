@@ -126,6 +126,7 @@ do {
 
     let renderer = try Renderer()
     renderer.setImage(decoded.pixels, width: decoded.width, height: decoded.height)
+    renderer.grainSeed = Renderer.grainSeed(for: inputURL)     // as the app seeds it
 
     // As the app does: the meters read only what the crop keeps.
     let area = recipe.geometry.metered(decoded.pixels, width: decoded.width, height: decoded.height)

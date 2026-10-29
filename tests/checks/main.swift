@@ -480,6 +480,42 @@ do {
     renderer.setImage(greyWedge(stops), width: stops.count, height: 1)
 }
 
+print("each stock, and each picture, draws its own grain")
+do {
+    // The grain was seeded by pixel alone, so every stock drew the same
+    // grain, only scaled: HP5, Tri-X and Neopan 1600 side by side looked like
+    // one film. The stock seeds it now, and the picture's file
+    // (`Renderer.grainSeed`): the same file on the same stock always grains
+    // the same, anything else differently. A flat grey, the developed
+    // negative's grain compared pixel by pixel.
+    let w = 600, h = 200, grey = RenderSetupBuilder.midgrayValue
+    var px = [Float](repeating: 1, count: w * h * 4)
+    for i in 0..<(w * h) { px[i * 4] = grey; px[i * 4 + 1] = grey; px[i * 4 + 2] = grey }
+    renderer.setImage(px, width: w, height: h)
+    func grain(_ film: String, seed: UInt32) throws -> [Double] {
+        renderer.grainSeed = seed
+        var r = try baseRecipe(film: film)
+        r.grainEnabled = true
+        _ = try render(renderer, r)
+        let negative = renderer.readTap("cmy_film")!
+        let values = (0..<(w * h)).map { Double(negative[$0 * 4]) }
+        let mean = values.reduce(0, +) / Double(values.count)
+        return values.map { $0 - mean }
+    }
+    func correlation(_ a: [Double], _ b: [Double]) -> Double {
+        zip(a, b).map(*).reduce(0, +) / sqrt(a.map { $0 * $0 }.reduce(0, +) * b.map { $0 * $0 }.reduce(0, +))
+    }
+    let trix = try grain("kodak_tri_x_400", seed: 7), again = try grain("kodak_tri_x_400", seed: 7)
+    let hp5 = try grain("ilford_hp5_plus", seed: 7), neopan = try grain("fujifilm_neopan_1600", seed: 7)
+    let otherPicture = try grain("kodak_tri_x_400", seed: 8)
+    let across = [correlation(trix, hp5), correlation(trix, neopan), correlation(hp5, neopan)].map(abs).max()!
+    check(correlation(trix, again) > 0.9999 && across < 0.05 && abs(correlation(trix, otherPicture)) < 0.05,
+          String(format: "the same stock and picture grain alike (%.4f); Tri-X, HP5 and Neopan 1600 at most %.3f alike; another picture %.3f",
+                 correlation(trix, again), across, correlation(trix, otherPicture)))
+    renderer.grainSeed = 0
+    renderer.setImage(greyWedge(stops), width: stops.count, height: 1)
+}
+
 print("grain is the film's size, not the pixels'")
 do {
     // Grain is drawn at the film's scale: seen at the same size, a full-size

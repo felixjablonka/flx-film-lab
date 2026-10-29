@@ -220,6 +220,25 @@ final class Renderer {
     private var developedGrainFree: MTLTexture?
     /// What the developed negative in `developedCmy` was made from.
     private var filmStageKey: FilmStageKey?
+
+    /// This picture's own grain. Each frame of film has its own grains, so
+    /// the app seeds the grain from the picture's file (`grainSeed(for:)`),
+    /// and the film stock adds its own: two stocks never draw the same grain,
+    /// and the same file on the same stock always does. 0 for a picture that
+    /// has no file.
+    var grainSeed: UInt32 = 0 {
+        didSet { if grainSeed != oldValue { filmStageKey = nil } }
+    }
+
+    /// A picture's grain seed: its file's name, so the export and every later
+    /// session draw the same grain for it.
+    static func grainSeed(for url: URL) -> UInt32 { fnv1a(url.lastPathComponent) }
+
+    private static func fnv1a(_ text: String) -> UInt32 {
+        var h: UInt32 = 0x811C_9DC5
+        for byte in text.utf8 { h = (h ^ UInt32(byte)) &* 0x0100_0193 }
+        return h
+    }
     private var displayStaging: MTLTexture?
     /// A shaped print's own textures, at its own size: the negative turned,
     /// levelled and cropped, the same with its grain, two scratch textures,
@@ -689,7 +708,8 @@ final class Renderer {
         for layer in 0..<3 {
             var uniforms = GrainLayerUniforms(tableTop: SIMD3(top[0], top[1], top[2]),
                                               pixelArea: pitch * pitch, sizeSquared: size * size,
-                                              amount: Float(recipe.grainAmount), seed: 0x5EED_1234,
+                                              amount: Float(recipe.grainAmount),
+                                              seed: Self.fnv1a(setup.film.stock) ^ (grainSeed &* 0x9E37_79B9),
                                               monochrome: setup.film.isMonochrome ? 1 : 0,
                                               layer: UInt32(layer), samples: UInt32(grain.tableSamples))
             encode(cb, filmGrainLayer, width: width, height: height) { e in
