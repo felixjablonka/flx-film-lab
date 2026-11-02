@@ -1,0 +1,21 @@
+#version 440
+// One halation bounce, weighted, into the sum. flx.metal accumulate_scaled.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2D src;
+layout(binding = 1, rgba32f) uniform image2D accum;
+layout(std140, binding = 2) uniform Accumulate {
+    vec4 weight;           // x
+    ivec4 reset;           // x: 1 for the first bounce, which starts the sum
+} u;
+
+void main()
+{
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(accum);
+    if (gid.x >= size.x || gid.y >= size.y) return;
+    vec3 add = u.weight.x * texelFetch(src, gid, 0).rgb;
+    vec3 base = u.reset.x != 0 ? vec3(0.0) : imageLoad(accum, gid).rgb;
+    imageStore(accum, gid, vec4(base + add, 1.0));
+}

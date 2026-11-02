@@ -1,0 +1,70 @@
+#version 440
+// One emulsion layer's grain, as a deviation from the clean density: per
+// pixel, zero-mean noise of variance S / (the pixel's area on the film), S
+// being the layer's Selwyn coefficient at the record's density
+// (tools/bake/grain.py). flx.metal film_grain_layer, and its hash and
+// random numbers bit for bit.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2D clean;
+layout(binding = 1, rgba32f) uniform writeonly image2D dst;
+layout(std140, binding = 2) uniform GrainLayer {
+    vec4 tableTop;         // net density at the table's last sample, per record
+    vec4 scale;            // pixelArea (um^2 of film), sizeSquared, amount
+    uvec4 ids;             // seed, monochrome, layer (0 fast, 1 medium, 2 slow), samples per record
+} u;
+layout(std430, binding = 3) readonly buffer Selwyn {
+    float selwyn[];        // [record][sample][layer], OD^2 um^2
+};
+
+uint hashCombine(uint a, uint b)
+{
+    uint h = a * 0x9E3779B9u + b + 0x85EBCA6Bu;
+    h ^= h >> 16; h *= 0x7FEB352Du;
+    h ^= h >> 15; h *= 0x846CA68Bu;
+    h ^= h >> 16;
+    return h;
+}
+
+float uniformFrom(inout uint state)
+{
+    state = state * 1664525u + 1013904223u;
+    return float(state >> 8) * (1.0 / 16777216.0);
+}
+
+// Box-Muller.
+float normalFrom(inout uint state)
+{
+    float u1 = max(uniformFrom(state), 1e-7);
+    float u2 = uniformFrom(state);
+    return sqrt(-2.0 * log(u1)) * cos(6.2831853 * u2);
+}
+
+void main()
+{
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(dst);
+    if (gid.x >= size.x || gid.y >= size.y) return;
+    vec3 density = texelFetch(clean, gid, 0).rgb;
+    uint samples = u.ids.w;
+    uint pixel = hashCombine(uint(gid.x), uint(gid.y));
+    float field = 0.0;
+    vec3 grain;
+    for (int c = 0; c < 3; ++c) {
+        float x = clamp(max(density[c], 0.0) / max(u.tableTop[c], 1e-4), 0.0, 1.0) * float(samples - 1u);
+        uint i = min(uint(x), samples - 2u);
+        float t = x - float(i);
+        uint row = uint(c) * samples;
+        float s = mix(selwyn[(row + i) * 3u + u.ids.z], selwyn[(row + i + 1u) * 3u + u.ids.z], t);
+        float sigma = sqrt(max(s, 0.0) * u.scale.y / u.scale.x) * u.scale.z;
+        // A black-and-white film's three channels are one record: one random
+        // field keeps its grain neutral.
+        if (u.ids.y == 0u || c == 0) {
+            uint state = hashCombine(pixel, u.ids.x + uint(c) * 7919u + u.ids.z * 104729u);
+            field = normalFrom(state);
+        }
+        grain[c] = field * sigma;
+    }
+    imageStore(dst, gid, vec4(grain, 1.0));
+}

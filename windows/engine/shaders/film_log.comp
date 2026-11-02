@@ -1,0 +1,17 @@
+#version 440
+// Closes filming.expose: the film's linear exposure to log10. flx.metal film_log.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2D src;
+layout(binding = 1, rgba32f) uniform writeonly image2D dst;
+
+void main()
+{
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(dst);
+    if (gid.x >= size.x || gid.y >= size.y) return;
+    vec3 raw = texelFetch(src, gid, 0).rgb;
+    // log10, which GLSL lacks
+    imageStore(dst, gid, vec4(log2(max(raw, 0.0) + 1e-10) * 0.30102999566398120, 1.0));
+}

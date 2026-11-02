@@ -1,0 +1,25 @@
+#version 440
+// Turned upright as the camera was held: EXIF's 3 (half a turn), 6 (a
+// quarter clockwise) and 8 (a quarter counter-clockwise). RawDecoder's
+// decodePlan.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2D src;
+layout(binding = 1, rgba32f) uniform writeonly image2D dst;
+layout(std140, binding = 2) uniform Turn {
+    ivec4 orientation;      // x
+} u;
+
+void main()
+{
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(dst);
+    if (gid.x >= size.x || gid.y >= size.y) return;
+    ivec2 from = textureSize(src, 0);
+    ivec2 s = gid;
+    if (u.orientation.x == 3) s = ivec2(from.x - 1 - gid.x, from.y - 1 - gid.y);
+    else if (u.orientation.x == 6) s = ivec2(gid.y, from.y - 1 - gid.x);
+    else if (u.orientation.x == 8) s = ivec2(from.x - 1 - gid.y, gid.x);
+    imageStore(dst, gid, texelFetch(src, s, 0));
+}

@@ -32,6 +32,8 @@ Where each stock's figures come from:
   shape, 50D's and 250D's averaged, at its own sheet's level: blue
   (yellow-dye) grain about twice the red and green, and highest just above
   the fog, where the coarse fast emulsion alone has developed.
+- Kodak EXR 50D and 200T: their own sheets' per-layer curves, plotted as
+  VISION3's are (`exr_granularity.py`).
 - Slides and black-and-white films publish no curve: theirs is agx's
   counting model's (`layer_particle_model` on spektrafilm's sub-layers),
   at the sheet's level.
@@ -55,6 +57,7 @@ from scipy.special import j1
 
 from spektrafilm.config import SPECTRAL_SHAPE
 
+import exr_granularity
 import vision3_granularity
 
 APERTURE_RADIUS_UM = 24.0
@@ -136,6 +139,13 @@ VISION3_INTERPOLATED = {
     "kodak_vision3_200t": (np.log(100 / 50) / np.log(250 / 50), "VISION3 50D and 250D curves, at Kodak's '100-speed image structure'"),
     "kodak_verita_200d": (np.log(200 / 50) / np.log(250 / 50), "VISION3 50D and 250D curves, at its speed"),
 }
+
+# Stocks whose sheets give no granularity, on another Kodak camera negative's
+# per-layer curves. 5251 (1962): Kodak says only that 5254 (1968) has "the same
+# graininess characteristics"; EXR 200T's are the oldest Kodak tungsten camera
+# negative's here that Kodak measured, and 5251, older by a generation, was
+# likely grainier.
+GRAIN_FROM = {"kodak_5251_50t": "kodak_exr_200t"}
 
 # Pushes: the same grains, each developed to more density (Selwyn's
 # granularity goes as the root of the density per grain), so the normal
@@ -288,8 +298,9 @@ def as_the_sheet_reads(profile, sigma: np.ndarray, basis: str) -> float:
 # --- each stock's curves ------------------------------------------------------
 
 def _kodak_curves(stock) -> dict[int, tuple[np.ndarray, np.ndarray]]:
+    read = exr_granularity.read if stock in exr_granularity.SHEETS else vision3_granularity.read
     return {c: (np.asarray(layer["netDensity"]), np.asarray(layer["sigmaAtNet"]))
-            for c, layer in vision3_granularity.read(stock).items() if "sigmaAtNet" in layer}
+            for c, layer in read(stock).items() if "sigmaAtNet" in layer}
 
 
 _SHAPE: dict | None = None
@@ -348,8 +359,9 @@ def record_curves(profile, bw_rms: dict[str, float]) -> tuple[np.ndarray, float,
         return sigma * rms / as_the_sheet_reads(profile, sigma, basis), rms, basis, source, note
 
     basis = "visual"
-    if stock in VISION3_MEASURED:
-        source = "Kodak's per-layer curves (vision3_granularity.py)"
+    if stock in VISION3_MEASURED or stock in exr_granularity.SHEETS:
+        source = ("Kodak's per-layer curves (exr_granularity.py)" if stock in exr_granularity.SHEETS
+                  else "Kodak's per-layer curves (vision3_granularity.py)")
         curves = _kodak_curves(stock)
         if 0 not in curves:
             # 500T's plot draws no red curve: its red follows its green as
@@ -359,6 +371,11 @@ def record_curves(profile, bw_rms: dict[str, float]) -> tuple[np.ndarray, float,
             curves[0] = (net, green * np.interp(net, *shape[0]) / np.interp(net, *shape[1]))
             note = "red record from its green, as 50D's and 250D's red follow theirs"
         sigma = on_grid(curves)
+        return sigma, as_the_sheet_reads(profile, sigma, basis), basis, source, note
+    if stock in GRAIN_FROM:
+        source = (f"none published; {GRAIN_FROM[stock]}'s per-layer curves (exr_granularity.py), "
+                  "the oldest Kodak tungsten camera negative's here")
+        sigma = on_grid(_kodak_curves(GRAIN_FROM[stock]))
         return sigma, as_the_sheet_reads(profile, sigma, basis), basis, source, note
     if stock in VISION3_INTERPOLATED:
         t, source = VISION3_INTERPOLATED[stock]

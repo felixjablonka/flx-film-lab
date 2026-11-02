@@ -1,0 +1,24 @@
+#version 440
+// In-emulsion scatter: E1 = (1 - s) E0 + s [(1 - w) core + w tail], from the
+// two blurs of E0. flx.metal scatter_mix.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2D src;
+layout(binding = 1) uniform sampler2D core;
+layout(binding = 2) uniform sampler2D tail;
+layout(binding = 3, rgba32f) uniform writeonly image2D dst;
+layout(std140, binding = 4) uniform Scatter {
+    vec4 tailWeight;       // w per channel
+    vec4 amount;           // x: the fraction of light that scatters at all
+} u;
+
+void main()
+{
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(dst);
+    if (gid.x >= size.x || gid.y >= size.y) return;
+    vec3 e0 = texelFetch(src, gid, 0).rgb;
+    vec3 scattered = (1.0 - u.tailWeight.xyz) * texelFetch(core, gid, 0).rgb + u.tailWeight.xyz * texelFetch(tail, gid, 0).rgb;
+    imageStore(dst, gid, vec4(mix(e0, scattered, u.amount.x), 1.0));
+}

@@ -320,6 +320,95 @@ def vericolor_iii():
             "sensitivity": vector_plots.joined_by_peak(VC_SENSITIVITY, ("B", "G", "R"))}
 
 
+# --- Kodak EXR 50D (H-1-5245) and EXR 200T (H-1-5293), page 3 ---------------------
+# Vector, every curve black; labels in text, rules read off the ticks and
+# gridlines. The characteristic curves are named B, G, R from the top at the
+# dense end, the sensitivities by where they peak. EXR 50D's sheet of 1999 and
+# its edition of 2003 plot the same curves and sensitivities (they agree to
+# 0.01 density and 0.002 in log sensitivity); the 1999 plot is read for the
+# curves, whole to the blue layer's toe, which the 2003 redraw cuts short. The
+# 2003 edition adds two things of its own: a camera-stop scale over its curves,
+# which places them (`exr_50d_normal_log_h`), and the three dyes' spectral
+# densities, peak-normalised, drawn with the midscale neutral and D-min. EXR
+# 200T's sheet plots the neutral and D-min alone.
+EXR_50D = "Kodak EXR 50D 5245-1999.pdf"
+EXR_50D_2003 = "Kodak EXR 50D 5245.pdf"
+EXR_200T = "Kodak EXR 200T 5293-1999.pdf"
+EXR_50D_CURVES = _plot(EXR_50D, 2, (90.9, 48.2, 275.4, 232.7),
+                       zip((90.9, 137.0, 183.12, 229.25, 275.4), range(-3, 2)),
+                       zip((232.7, 186.54, 140.41, 94.29, 48.2), range(0, 5)))
+EXR_50D_SENSITIVITY = _plot(EXR_50D, 2, (362.6, 57.3, 552.9, 201.2),
+                            zip((362.6, 381.68, 400.75, 419.81, 438.88, 457.95, 477.02, 496.09, 515.15, 534.22,
+                                 552.9), range(250, 751, 50)),
+                            ((57.3, 2.0), (93.3, 1.0), (129.27, 0.0), (165.25, -1.0), (201.2, -2.0)))
+EXR_50D_DYES = _plot(EXR_50D_2003, 3, (358.7, 61.8, 543.1, 246.1),
+                     zip((358.7, 376.71, 395.17, 413.74, 432.12, 450.64, 469.1, 487.67, 506.05, 524.5, 543.1),
+                         range(300, 801, 50)),
+                     ((61.8, 1.8), (80.17, 1.6), (98.62, 1.4), (116.99, 1.2), (135.49, 1.0), (153.86, 0.8),
+                      (172.36, 0.6), (209.23, 0.2), (227.09, 0.0), (246.1, -0.2)))
+# The 1999 sheet's own neutral and D-min, for the check against the 2003 plot's.
+EXR_50D_NEUTRAL_1999 = _plot(EXR_50D, 2, (91.8, 279.8, 276.2, 464.1),
+                             zip((91.8, 128.7, 165.57, 202.43, 239.3, 276.2), range(250, 751, 100)),
+                             zip((464.1, 427.24, 390.37, 353.5, 316.63, 279.8), np.arange(0.0, 2.51, 0.5)))
+EXR_200T_CURVES = _plot(EXR_200T, 2, (91.1, 49.2, 275.6, 233.7),
+                        zip((91.1, 137.25, 183.37, 229.5, 275.6), range(-4, 1)),
+                        zip((233.7, 187.54, 141.41, 95.29, 49.2), range(0, 5)))
+EXR_200T_SENSITIVITY = _plot(EXR_200T, 2, (362.6, 50.7, 552.9, 194.6),
+                             zip((362.6, 381.68, 400.75, 419.82, 438.89, 457.97, 477.04, 496.11, 515.18, 534.25,
+                                  552.9), range(250, 751, 50)),
+                             ((50.7, 3.0), (86.7, 2.0), (122.68, 1.0), (158.65, 0.0), (194.6, -1.0)))
+EXR_200T_NEUTRAL = _plot(EXR_200T, 2, (91.3, 279.6, 275.6, 463.9),
+                         zip((91.3, 128.26, 165.12, 201.99, 238.86, 275.6), range(250, 751, 100)),
+                         zip((463.9, 427.05, 390.18, 353.31, 316.44, 279.6), np.arange(0.0, 2.51, 0.5)))
+# EXR 50D's 2003 curves plot, for its camera-stop scale: the curves' own
+# log H rules, and the frame's top, which the scale's marks sit on.
+EXR_50D_CURVES_2003 = _plot(EXR_50D_2003, 2, (361.3, 91.3, 545.8, 275.8),
+                            zip((361.3, 391.66, 422.58, 453.58, 484.11, 514.83, 545.8), range(-4, 3)),
+                            zip((275.8, 214.51, 153.0, 91.3), range(0, 4)))
+
+
+def exr_50d_dyes() -> dict[str, np.ndarray]:
+    """The 2003 sheet's dye plot: the three dyes (Y, M, C, by where they peak),
+    which run past 750 nm, and the midscale neutral and D-min, which stop at
+    700 nm, the neutral the higher of the two."""
+    curves = vector_plots.joined(EXR_50D_DYES)
+    dyes = [c for c in curves if c[-1, 0] > 750]
+    neutral = [c for c in curves if c[-1, 0] <= 750]
+    if len(dyes) != 3 or len(neutral) != 2:
+        raise ValueError(f"{EXR_50D_2003}: {len(dyes)} dyes and {len(neutral)} neutral curves, expected 3 and 2")
+    dyes.sort(key=lambda c: c[np.argmax(c[:, 1]), 0])
+    neutral.sort(key=lambda c: -float(np.interp(550.0, c[:, 0], c[:, 1])))
+    return {"Y": dyes[0], "M": dyes[1], "C": dyes[2], "mid": neutral[0], "min": neutral[1]}
+
+
+def exr_50d_normal_log_h() -> float:
+    """Where the 2003 sheet's camera-stop scale puts stop 0, the normal
+    exposure, on its log H axis (lux-seconds): the scale's marks are small
+    filled triangles on the frame's top, one every two stops from -6 to +6."""
+    plot = EXR_50D_CURVES_2003
+    page = pymupdf.open(plot.pdf)[plot.page]
+    x0, y0, x1, _ = plot.frame
+    marks = sorted((d["rect"].x0 + d["rect"].x1) / 2 for d in page.get_drawings()
+                   if d.get("fill") is not None and max(d["fill"]) < 0.05 and d["rect"].width < 2
+                   and d["rect"].height < 4 and abs(d["rect"].y1 - y0) < 1.5 and x0 < d["rect"].x0 < x1)
+    if len(marks) != 7:
+        raise ValueError(f"{EXR_50D_2003}: {len(marks)} camera-stop marks, expected 7")
+    stop_zero = float(np.polyval(np.polyfit(range(-6, 7, 2), marks, 1), 0.0))
+    return float(vector_plots._to_data(plot, np.array([[stop_zero, y0]]))[0, 0])
+
+
+def exr_50d():
+    dyes = exr_50d_dyes()
+    return {"curves": vector_plots.joined_by_value(EXR_50D_CURVES, ("B", "G", "R"), at_x=0.0),
+            "sensitivity": vector_plots.joined_by_peak(EXR_50D_SENSITIVITY, ("B", "G", "R")),
+            "dyes": {k: dyes[k] for k in "CMY"}}
+
+
+def exr_200t():
+    return {"curves": vector_plots.joined_by_value(EXR_200T_CURVES, ("B", "G", "R"), at_x=-1.0),
+            "sensitivity": vector_plots.joined_by_peak(EXR_200T_SENSITIVITY, ("B", "G", "R"))}
+
+
 # --- HARMAN Phoenix 200 (Sep 2024), pages 2 and 3 --------------------------------
 # Bitmaps: black curves on white over a grey grid, calibrated on the grid —
 # relative log exposure 0-3 and density 0-4 every half; 300-800 nm every 50
@@ -373,6 +462,9 @@ NEUTRAL_SPECTRA = {
     "kodak_vericolor_iii_160": _plot(VERICOLOR, 3, (358.0, 374.6, 542.3, 558.9),
                                      ((358.0, 400), (419.4, 500), (480.9, 600), (542.3, 700)),
                                      zip((558.9, 522.0, 485.2, 448.3, 411.4, 374.6), np.arange(0.0, 2.51, 0.5))),
+    # EXR 50D's from the 2003 plot, drawn with its dyes; EXR 200T's on its own.
+    "kodak_exr_50d": lambda: {k: v for k, v in exr_50d_dyes().items() if k in ("mid", "min")},
+    "kodak_exr_200t": EXR_200T_NEUTRAL,
 }
 
 
@@ -380,6 +472,8 @@ def neutral_spectra(stock: str) -> dict[str, np.ndarray]:
     """The sheet's midscale neutral ("mid") and D-min ("min") spectral
     densities, as (wavelength, density)."""
     entry = NEUTRAL_SPECTRA[stock]
+    if callable(entry):
+        return entry()
     if not isinstance(entry, VectorPlot):
         import datasheet as ds
         pdf, page, frame = entry
@@ -405,6 +499,9 @@ SOURCES = {
     "kodak_royal_gold_100": royal_gold_100,
     "kodak_vericolor_iii_160": vericolor_iii,
     "harman_phoenix_200": phoenix_200,
+    "kodak_exr_50d": exr_50d,
+    "kodak_exr_200t": exr_200t,
+    "kodak_5251_50t": lambda: __import__("kodak_1962_sheets").negative(),
 }
 
 # How the curves of a sheet read here were told apart, for the profile's
@@ -423,4 +520,8 @@ CURVES_READ = {
     "kodak_royal_gold_100": "read from the vector plot, each layer by its order at the dense end",
     "kodak_vericolor_iii_160": "read from the vector plot, each layer by its order at the dense end",
     "harman_phoenix_200": "traced off the sheet's bitmap, each layer by its order at the dense end",
+    "kodak_exr_50d": "read from the vector plot, each layer by its order at the dense end",
+    "kodak_exr_200t": "read from the vector plot, each layer by its order at the dense end",
+    "kodak_5251_50t": ("traced off the paper's scan, levelled, each solid curve from a point on it with 5250's "
+                       "dashes taken out (kodak_1962_sheets.py)"),
 }

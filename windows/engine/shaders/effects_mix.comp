@@ -1,0 +1,21 @@
+#version 440
+// a and b mixed by t: bloom's haze, a share of the light spread wide. glowMix.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2D a;
+layout(binding = 1) uniform sampler2D b;
+layout(binding = 2, rgba32f) uniform writeonly image2D dst;
+layout(std140, binding = 3) uniform Effect {
+    vec4 a;                // x: t
+    vec4 b;
+    ivec4 flags;
+} u;
+
+void main()
+{
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(dst);
+    if (gid.x >= size.x || gid.y >= size.y) return;
+    imageStore(dst, gid, mix(texelFetch(a, gid, 0), texelFetch(b, gid, 0), u.a.x));
+}

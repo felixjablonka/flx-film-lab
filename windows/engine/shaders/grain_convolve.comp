@@ -1,0 +1,31 @@
+#version 440
+// One pass of a separable convolution, along x (axis 0) or y, with a kernel
+// per channel: weights[i] for the tap at i - radius, edges clamped. The
+// grain's cloud filters, and the Gaussian blurs with one kernel for all three
+// channels. flx.metal grain_convolve.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2D src;
+layout(binding = 1, rgba32f) uniform writeonly image2D dst;
+layout(std430, binding = 2) readonly buffer Weights {
+    vec4 weights[];
+};
+layout(std140, binding = 3) uniform Convolve {
+    ivec4 params;          // x: radius, y: axis
+} u;
+
+void main()
+{
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(dst);
+    if (gid.x >= size.x || gid.y >= size.y) return;
+    int radius = u.params.x;
+    ivec2 step = u.params.y == 0 ? ivec2(1, 0) : ivec2(0, 1);
+    vec4 sum = vec4(0.0);
+    for (int i = -radius; i <= radius; ++i) {
+        ivec2 p = clamp(gid + step * i, ivec2(0), size - 1);
+        sum += weights[i + radius] * texelFetch(src, p, 0);
+    }
+    imageStore(dst, gid, vec4(sum.rgb, 1.0));
+}

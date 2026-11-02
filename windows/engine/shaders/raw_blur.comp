@@ -1,0 +1,40 @@
+#version 440
+// One axis of a blur of a single plane, up to 7 taps, the edges clamped:
+// capture sharpening's Gaussian and its 3x3 box (RawDetail's gaussian). The
+// second axis can end one of Richardson-Lucy's steps: the observed over the
+// estimate blurred, or the estimate times the ratios blurred.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2D src;
+layout(binding = 1) uniform sampler2D aux;          // the observed, or the estimate
+layout(binding = 2, r32f) uniform writeonly image2D dst;
+layout(std140, binding = 3) uniform Blur {
+    vec4 taps[2];           // the weights, from -radius
+    ivec4 params;           // x: the radius, y: 0 along the rows, 1 down the columns;
+                            // z: 0 the blur, 1 aux over it, 2 aux times it
+} u;
+
+const float kFloor = 1e-6;
+
+float tap(int i) { vec4 v = u.taps[i / 4]; int k = i % 4; return k == 0 ? v.x : k == 1 ? v.y : k == 2 ? v.z : v.w; }
+
+void main()
+{
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(dst);
+    if (gid.x >= size.x || gid.y >= size.y) return;
+    int r = u.params.x;
+    float sum = 0.0;
+    for (int i = -r; i <= r; ++i) {
+        ivec2 p = u.params.y == 0 ? ivec2(clamp(gid.x + i, 0, size.x - 1), gid.y)
+                                  : ivec2(gid.x, clamp(gid.y + i, 0, size.y - 1));
+        sum += tap(i + r) * texelFetch(src, p, 0).r;
+    }
+    float v = sum;
+    if (u.params.z == 1)
+        v = texelFetch(aux, gid, 0).r / max(sum, kFloor);
+    else if (u.params.z == 2)
+        v = texelFetch(aux, gid, 0).r * sum;
+    imageStore(dst, gid, vec4(v, 0.0, 0.0, 1.0));
+}

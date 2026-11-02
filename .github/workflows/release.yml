@@ -1,16 +1,21 @@
 name: Release
 
-# A tag such as v1.0.0 builds the disk image and the V-Log LUT pack, and
-# drafts a release with both, to be checked and published by hand.
+# A tag such as v1.0.0 builds the Mac app's disk image and V-Log LUT pack and
+# the Windows app's installer, and drafts a release with them, to be checked
+# and published by hand. A push to main, a release's commit before its tag,
+# builds the same as a trial and keeps them as the run's artifacts, with no
+# release; so does running it by hand (Actions > Release > Run workflow).
 on:
   push:
+    branches: [main]
     tags: ['v*']
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  release:
+  mac:
     # macOS 26 and its Xcode 26, the SDK the app is developed and tested
     # with: SwiftUI behaves as the SDK an app is built with, and 1.1.0, built
     # on macOS 15 with its SDK, lost the sliders' double-click reset. Named,
@@ -20,19 +25,145 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Build the disk image
-        run: VERSION="${GITHUB_REF_NAME#v}" ./build.sh dmg
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then export VERSION="${GITHUB_REF_NAME#v}"; fi
+          ./build.sh dmg
 
       - name: Bake the V-Log LUT pack
-        run: python3 tools/lut/vlog_pack.py "${GITHUB_REF_NAME#v}"
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then python3 tools/lut/vlog_pack.py "${GITHUB_REF_NAME#v}"
+          else python3 tools/lut/vlog_pack.py; fi
+          cd build
+          shasum -a 256 "FLX Film Lab.dmg" > "FLX Film Lab.dmg.sha256"
+          for pack in FLX-Film-Lab-V-Log-LUTs-*.zip; do shasum -a 256 "$pack" > "$pack.sha256"; done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac
+          path: |
+            build/FLX Film Lab.dmg
+            build/FLX Film Lab.dmg.sha256
+            build/FLX-Film-Lab-V-Log-LUTs-*.zip
+            build/FLX-Film-Lab-V-Log-LUTs-*.zip.sha256
+
+  # A Windows step that fails says why in an annotation, the last lines of
+  # its output, which GitHub shows without signing in, where the log needs it.
+
+  ffmpeg:
+    # The Windows app's own LGPL FFmpeg, cross-compiled with mingw-w64 as on
+    # the developer's Mac (windows/tools/ffmpeg/build.sh, which pins and
+    # checks every source and writes how it was built beside the DLLs).
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install mingw-w64, nasm and pkg-config
+        run: brew install mingw-w64 nasm pkgconf
+      - name: Build FFmpeg
+        run: |
+          if ! windows/tools/ffmpeg/build.sh > ffmpeg.log 2>&1; then
+            cat ffmpeg.log
+            echo "::error title=FFmpeg::$(tail -40 ffmpeg.log | awk 'BEGIN { ORS = "%0A" } { gsub(/%/, "%25"); gsub(/\r/, ""); print }')"
+            exit 1
+          fi
+          cat ffmpeg.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg
+          path: windows/build/ffmpeg
+
+  windows:
+    # Visual Studio 2026 and its clang-cl, as the port is developed with.
+    needs: ffmpeg
+    runs-on: windows-2025-vs2026
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: true
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ffmpeg
+          path: windows/build/ffmpeg
+
+      - name: Install Qt 6.12.0 (Qt Base, Shader Tools, Multimedia) and Inno Setup 7
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          trap { Write-Output "::error title=Install::$_"; break }
+          # Qt's own archives for MSVC 2022 64-bit, as Qt's online installer
+          # fetches them, each checked against the hash Qt publishes for it.
+          $qt = 'https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6120/qt6_6120_msvc2022_64'
+          $build = '6.12.0-0-202609280346'
+          $platform = 'Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z'
+          $archives = @(
+            @{ Path = "qt.qt6.6120.win64_msvc2022_64/${build}qtbase-$platform";
+               Sha256 = '219d1b86def3be418e31d704572bc4acc91b2ec373c65595c9fb12b42bf098dc' },
+            @{ Path = "qt.qt6.6120.addons.qtshadertools.win64_msvc2022_64/${build}qtshadertools-$platform";
+               Sha256 = 'dfceb86842d60a81ff75c1c2c98d49d186efc5c6cc49f0225b3b2ed699beca4b' },
+            @{ Path = "qt.qt6.6120.addons.qtmultimedia.win64_msvc2022_64/${build}qtmultimedia-$platform";
+               Sha256 = '2592acd8fc6c86f91106ef4e7262ad3c0954248be4fd4b74bbd1c2b1a1ba70b9' }
+          )
+          New-Item -ItemType Directory -Force 'C:\Qt\6.12.0\msvc2022_64' | Out-Null
+          foreach ($a in $archives) {
+            $file = Join-Path $env:RUNNER_TEMP ([IO.Path]::GetFileName($a.Path))
+            curl.exe -sSfL --retry 3 -o $file "$qt/$($a.Path)"
+            if ((Get-FileHash $file -Algorithm SHA256).Hash.ToLower() -ne $a.Sha256) { throw "$file is not Qt's" }
+            7z x -y -o'C:\Qt\6.12.0\msvc2022_64' $file | Out-Null
+          }
+          # Inno Setup 7, for this user, where tools\pc\package.cmd looks for it
+          $inno = Join-Path $env:RUNNER_TEMP 'innosetup-7.1.1-x64.exe'
+          curl.exe -sSfL --retry 3 -o $inno 'https://github.com/jrsoftware/issrc/releases/download/is-7_1_1/innosetup-7.1.1-x64.exe'
+          if ((Get-FileHash $inno -Algorithm SHA256).Hash.ToLower() -ne '8a5a6711c3766a6e5fb74f280ba0e3551e719ce94538d901fdbd1f8f9920b3f0') { throw "$inno is not Inno Setup's" }
+          Start-Process -Wait -FilePath $inno -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER'
+
+      - name: Build the app and its installer
+        shell: pwsh
+        run: |
+          foreach ($script in 'windows\tools\pc\build.cmd', 'windows\tools\pc\package.cmd') {
+            $out = & cmd /c $script 2>&1
+            $out | Write-Output
+            if ($LASTEXITCODE -ne 0) {
+              $tail = (($out | Select-Object -Last 40) -join "`n").Replace('%', '%25').Replace("`r", '').Replace("`n", '%0A')
+              Write-Output "::error title=$script::$tail"
+              exit 1
+            }
+          }
+
+      - name: Checksum
+        shell: pwsh
+        run: |
+          Get-ChildItem windows\dist -Filter '*Setup.exe' | ForEach-Object {
+            '{0}  {1}' -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name |
+              Set-Content -NoNewline -Encoding ascii "$($_.FullName).sha256"
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            windows/dist/*Setup.exe
+            windows/dist/*Setup.exe.sha256
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [mac, windows]
+    runs-on: ubuntu-latest
+    steps:
+      # the Mac's and Windows' files, not FFmpeg's, which the installer carries
+      - uses: actions/download-artifact@v4
+        with:
+          name: mac
+          path: assets
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows
+          path: assets
 
       - name: Draft the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cd build
-          pack="FLX-Film-Lab-V-Log-LUTs-${GITHUB_REF_NAME#v}.zip"
-          shasum -a 256 "FLX Film Lab.dmg" > "FLX Film Lab.dmg.sha256"
-          shasum -a 256 "$pack" > "$pack.sha256"
-          gh release create "$GITHUB_REF_NAME" "FLX Film Lab.dmg" "FLX Film Lab.dmg.sha256" \
-            "$pack" "$pack.sha256" \
+          cd assets
+          ls -la
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" * \
             --draft --generate-notes --title "FLX Film Lab ${GITHUB_REF_NAME#v}"

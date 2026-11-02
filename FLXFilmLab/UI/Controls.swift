@@ -312,8 +312,8 @@ struct StockPicker: View {
 }
 
 /// The camera filters a stock carries (`ProfilePack.lensFilters`): Kodak's
-/// Wratten filters on a black-and-white film, Tiffen's warming filters on a
-/// slide. Each shows how far it holds back a mid-grey.
+/// Wratten filters on a black-and-white film, warming and conversion filters
+/// on a colour one. Each shows how far it holds back a mid-grey.
 struct LensFilterPicker: View {
     let filters: [LensFilterRef]
     @Binding var selection: String?
@@ -329,7 +329,7 @@ struct LensFilterPicker: View {
         .controlSize(.small).font(.system(size: 11))
         .help(filters.contains { $0.wratten != nil }
               ? "A coloured filter on the lens, measured from Kodak's Wratten data. It passes its own colour and holds back the rest: yellow, orange and red darken a blue sky progressively; red lightens skin and darkens foliage; green does the opposite; blue lightens skies and haze and deepens reds. Exposure is opened up by the filter factor shown, as a photographer would, so a grey card prints the same."
-              : "A warming filter on the lens, measured from Tiffen's own transmission curves, for slide film's cool shade, overcast light and flash. The 81C holds back blue and some green, a plain amber warmth; the 812 holds back violet and a little blue and lets blue and green through alike, so its warmth leans pink. Exposure is opened up by the filter factor shown, as a photographer would, so the picture keeps its brightness.")
+              : "A warming or conversion filter on the lens, measured from its maker's transmission curves (Kodak's Wratten 81C, 85 and 85B, Tiffen's 812): the film sees the scene through it, wavelength by wavelength, with its own sensitivities. The 81C holds back blue and some green, a plain amber warmth; the 812 holds back violet and a little blue and lets blue and green through alike, so its warmth leans pink: both for daylight film's cool shade, overcast light and flash. The 85 and 85B hold back blue and much of the green and pass the red: they convert daylight for tungsten film, rated 5500 K to 3400 K and to 3200 K. Measured, both go further than rated, to about 3300 K and 2800 K, and a tungsten film's own layers see the same: balanced for 3200 K, it takes daylight through the 85 a little cool and through the 85B a little warm. Kodak names the 85 for its tungsten stocks in daylight. On daylight film they warm strongly. Exposure is opened up by the filter factor shown, as a photographer would, so the picture keeps its brightness: for the 85 and 85B the factor in daylight, the light they are made for.")
     }
 
     /// "8.2×, 3.0 stops": how much the filter holds back from a mid-grey.

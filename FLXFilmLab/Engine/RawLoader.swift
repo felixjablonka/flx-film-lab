@@ -23,16 +23,32 @@ enum RawLoader {
         /// away and makes every stock behave as if the light were perfect.
         case filmReference = "Film reference"
         case asShot = "As shot"
+        case daylightD55 = "Daylight D55"
+        /// Stored as "Daylight", as presets saved before D55 joined it name it.
         case daylight = "Daylight"
+        /// A 3200 K lamp, the light tungsten film is balanced for.
+        case tungsten3200 = "Tungsten 3200 K"
+        /// A household bulb, 2850 K. Stored as "Tungsten", as presets saved
+        /// before 3200 K joined it name it.
         case tungsten = "Tungsten"
         case custom = "Custom"
         var id: String { rawValue }
+
+        /// What the menu shows.
+        var label: String {
+            switch self {
+            case .daylight: return "Daylight D65"
+            case .tungsten: return "Tungsten 2850 K"
+            default: return rawValue
+            }
+        }
     }
 
     /// Correlated colour temperature of the illuminants the profiles name.
     static func referenceTemperature(_ illuminant: String) -> Double {
         switch illuminant {
-        case "T": return 2856          // CIE A, the tungsten stocks' reference
+        case "BB3200": return 3200     // a 3200 K lamp, the tungsten stocks' reference
+        case "T": return 2856          // agx's household bulb, read as CIE A
         case "TH-KG3", "TH-KG3-L": return 3400
         case "D50": return 5003
         case "D65": return 6504
@@ -55,7 +71,10 @@ enum RawLoader {
         case "D50": return CGPoint(x: 0.34567, y: 0.35850)
         case "D55": return CGPoint(x: 0.33242, y: 0.34743)
         case "D65": return CGPoint(x: 0.31271, y: 0.32902)
-        default: return nil            // CIE A and the tungsten lamps are blackbodies
+        // The Planckian 3200 K, where agx and the CIE put it. Core Image's own
+        // "3200 K" at tint 0 sits 14 K off it, and reads this as 3186 K, tint -0.4.
+        case "BB3200": return CGPoint(x: 0.42336, y: 0.39895)
+        default: return nil            // CIE A and the printing lamps: Core Image's own temperatures
         }
     }
 
@@ -187,8 +206,12 @@ enum RawLoader {
             }
         case .asShot:
             break                               // leave the camera's own neutral point
+        case .daylightD55:
+            filter.neutralChromaticity = referenceChromaticity("D55")!
         case .daylight:
             filter.neutralChromaticity = referenceChromaticity("D65")!
+        case .tungsten3200:
+            filter.neutralChromaticity = referenceChromaticity("BB3200")!
         case .tungsten:
             filter.neutralTemperature = 2850
             filter.neutralTint = 0

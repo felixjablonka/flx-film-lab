@@ -4,8 +4,8 @@ The film and paper profiles in `profiles/` are measured off the manufacturers'
 published datasheets: characteristic curves, spectral sensitivities, dye spectra
 and MTF curves, read from the sheets' vector plots. Every stock's grain is its
 sheet's RMS granularity or Print Grain Index (`tools/bake/grain.py`, which
-lists each figure and where it is from), and Kodak's Vision3 granularity
-curves give the colour negatives theirs against density. The sheets themselves are the
+lists each figure and where it is from), and Kodak's Vision3 and EXR
+granularity curves give the colour negatives theirs against density. The sheets themselves are the
 manufacturers' documents, so they are not part of this source. The app and its
 tests do not need them; only rebuilding the profiles does.
 
@@ -26,6 +26,10 @@ scripts look for these names.
 | Fujifilm | ETERNA 500T (8573/8673) | data sheet | `fujifilm_ETERNA_500t.pdf` | `build_profiles.py`, `sheet_readers.py` |
 | Fujifilm | ETERNA Vivid 160 (8543/8643) | KB-0701E | `fujifilm_eterna_vivid160.pdf` | `build_profiles.py`, `sheet_readers.py` |
 | Fujifilm | REALA 500D (8592/8692): characteristic curves | curve sheet | `Reala500D_curve.pdf` | `build_profiles.py`, `sheet_readers.py` |
+| Fujifilm | FUJICOLOR POSITIVE FILM F-CP, 35mm Type 3519 / 16mm Type 3619 | KB-918E (1999) | `fcp_type3519.pdf` | `build_print_profiles.py`, `fuji_print_sheets.py` |
+| Fujifilm | FUJICOLOR POSITIVE FILM F-CP, 35mm Type 3510 / 16mm Type 3610 | KB-301E (2003) | `fcp_type3510.pdf` | `build_print_profiles.py`, `fuji_print_sheets.py` |
+| Fujifilm | FUJICOLOR POSITIVE FILM ETERNA-CP, 35mm Type 3513DI / 16mm Type 3613DI | KB-505E (2005) | `eterna_cp_type3513di.pdf` | `build_print_profiles.py`, `fuji_print_sheets.py` |
+| Fujifilm | FUJIFILM MOTION PICTURE FILM MANUAL: 3510 and 3513DI curves (pp. 25-28), a check on their sheets | KB-0707E (2008) | `076_fujifilm_motion_picture_film_manual.pdf` | `fuji_print_sheets.py` |
 | Fujifilm | REALA 500D (8592/8692): product information | product sheet | `REALA500D_product_info.pdf` | reference only |
 | Fujifilm | NEOPAN 1600 SUPER PRESTO | AF3-608E | `datasheet_neopan1600superpresto_en_01.pdf` | `build_bw_profiles.py` |
 | Fujifilm | Professional Film Data Guide | AF3-207U | `Fuji_ProfessionalFilmDataGuide.pdf` | reference only |
@@ -37,7 +41,15 @@ scripts look for these names.
 | Eastman Kodak | KODAK ROYAL GOLD 100 Film | E-41 | `e41-1998_02_Kodak Royal Gold 100.pdf` | `build_profiles.py`, `sheet_readers.py` |
 | Eastman Kodak | KODAK VERICOLOR III Professional Film | E-26 | `e26-Vericolor_III.pdf` | `build_profiles.py`, `sheet_readers.py`, `slide_mtf.py` |
 | Kodak | KODAK WRATTEN 2 Optical Filter No. 8, 22, 25, 47 and 58 | filter data | `Kodak Wratten 2 Filter 8.pdf (and 22, 25, 47, 58)` | `lens_filters.py` |
-| Tiffen | Filter Specifications: 81 series (p. 13), 812 Warming (p. 16) | catalogue | `Tiffen Filter Specifications.pdf` | `lens_filters.py` |
+| Kodak | KODAK WRATTEN 2 Optical Filter / Light Balancing 81 Series (81C) | filter data | `Kodak Wratten 2 Filters 81 Series.pdf` | `lens_filters.py` |
+| Eastman Kodak / SMPTE, BBC | W. I. Kisner, "A New Color Negative Film for Better Picture Quality" and "A Higher Speed Color Print Film", Journal of the SMPTE 71(10), 1962, Figs. 1-3 each; C. B. B. Wood, BBC Research Department Report 1966/31, Fig. 1 (film-only MTF): EASTMAN Color Negative 5251, Color Print 5385, scanned figures compiled | papers | `Kodak 50T_5251_and 5385 print film.pdf` | `kodak_1962_sheets.py`, `build_profiles.py`, `build_print_profiles.py` |
+| Eastman Kodak / SMPTE | R. L. Beeler, R. A. Morris, C. W. Simonds, "A New, Higher Speed Color Negative Film" (5254, "structurally the same" as 5251), Journal of the SMPTE 77(9), 1968, pp. 988-990 | paper | `SMPTE 1968 Kodak 5254.pdf` | the exposure-axis convention, 5251's masking (`kodak_1962_sheets.py`) |
+| American Cinematographer | N. L. Simmons (Kodak), "The New Eastman Color Negative and Color Print Films", June 1962, pp. 362-363 and 385: 5251's EI 50 tungsten, EI 32 daylight with a Wratten 85, its 3200 K balance | article (online, Media History Digital Library) | — | `build_profiles.py` |
+| Kodak | KODAK WRATTEN 2 Optical Filter / Conversion 85 Series (85, 85B) | filter data | `Kodak Wratten 2 Filters 85 Series.pdf` | `lens_filters.py` |
+| Eastman Kodak | EASTMAN EXR 50D Color Negative Film 5245/7245 | H-1-5245 (3-99) | `Kodak EXR 50D 5245-1999.pdf` | `build_profiles.py`, `sheet_readers.py`, `slide_mtf.py`, `exr_granularity.py` |
+| Eastman Kodak | EASTMAN EXR 50D Film 5245/7245 | H-1-5245t (5-03) | `Kodak EXR 50D 5245.pdf` | `build_profiles.py`, `sheet_readers.py` |
+| Eastman Kodak | EASTMAN EXR 200T Color Negative Film 5293/7293 | H-1-5293 (3-99) | `Kodak EXR 200T 5293-1999.pdf` | `build_profiles.py`, `sheet_readers.py`, `slide_mtf.py`, `exr_granularity.py` |
+| Tiffen | Filter Specifications: 812 Warming (p. 16) | catalogue | `Tiffen Filter Specifications.pdf` | `lens_filters.py` |
 | Agfa | Technical Data: Agfa range of films, Professional | range sheet | `agfa_films_data.pdf` | `build_bw_profiles.py`, `build_profiles.py`, `bw_mtf.py`, `sheet_readers.py` |
 | HARMAN technology (Ilford) | ILFORD HP5 Plus | technical information | `Ilford HP5 Plus.pdf` | `build_bw_profiles.py` |
 | HARMAN technology (Ilford) | ILFORD MULTIGRADE RC Deluxe | technical information, 2020 | `Ilford Multigrade RC Deluxe.pdf` | `build_bw_profiles.py` |

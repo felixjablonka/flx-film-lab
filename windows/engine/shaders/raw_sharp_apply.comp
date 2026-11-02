@@ -1,0 +1,49 @@
+#version 440
+// Capture sharpening applied: the estimate kept within the 3x3 neighbours'
+// range and within half and twice the pixel, as a ratio to all three
+// channels, where the detail is well clear of the noise and there is light
+// all around. RawDetail's sharpenCapture.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2D src;
+layout(binding = 1) uniform sampler2D observed;
+layout(binding = 2) uniform sampler2D luminance;
+layout(binding = 3) uniform sampler2D estimate;
+layout(binding = 4) uniform sampler2D mean;
+layout(binding = 5) uniform sampler2D energy;
+layout(binding = 6, rgba32f) uniform writeonly image2D dst;
+layout(std140, binding = 7) uniform Noise {
+    vec4 noise;             // x a, y b: the variance a Y + b
+} u;
+
+const float kFloor = 1e-6;
+
+float variance(float y) { return max(1e-12, u.noise.x * max(y, 0.0) + u.noise.y); }
+
+void main()
+{
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(dst);
+    if (gid.x >= size.x || gid.y >= size.y) return;
+    vec3 p = texelFetch(src, gid, 0).rgb;
+    float level = texelFetch(mean, gid, 0).r;
+    bool positive = level > 0.0;
+    for (int dy = -2; dy <= 2 && positive; ++dy)
+        for (int dx = -2; dx <= 2 && positive; ++dx)
+            positive = texelFetch(luminance, clamp(gid + ivec2(dx, dy), ivec2(0), size - 1), 0).r > kFloor;
+    if (positive) {
+        float o = texelFetch(observed, gid, 0).r, lo = o, hi = o;
+        for (int dy = -1; dy <= 1; ++dy)
+            for (int dx = -1; dx <= 1; ++dx) {
+                float v = texelFetch(observed, clamp(gid + ivec2(dx, dy), ivec2(0), size - 1), 0).r;
+                lo = min(lo, v);
+                hi = max(hi, v);
+            }
+        float sharpened = clamp(clamp(texelFetch(estimate, gid, 0).r, lo, hi), 0.5 * o, 2.0 * o);
+        float snr = sqrt(texelFetch(energy, gid, 0).r / (variance(level) * 8.0 / 9.0));
+        float m = clamp((snr - 3.0) / 3.0, 0.0, 1.0);
+        p *= 1.0 + m * m * (3.0 - 2.0 * m) * (sharpened / o - 1.0);
+    }
+    imageStore(dst, gid, vec4(p, 1.0));
+}

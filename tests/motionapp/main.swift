@@ -148,6 +148,14 @@ func run() async throws {
     m.look.recipe.lensFilter = nil
     _ = await settled(m)
 
+    print("pick a motion picture film")
+    m.selectFilm("kodak_exr_200t")
+    check(m.look.recipe.printStock == "fujifilm_fcp_3519",
+          "EXR 200T moves the print onto F-CP 3519 (\(m.look.recipe.printStock))")
+    m.selectFilm("kodak_portra_800")
+    check(m.look.recipe.printStock == "kodak_portra_endura", "and a still film back onto its own paper")
+    _ = await settled(m)
+
     print("export")
     let out = dir.appendingPathComponent("C graded.mov")
     m.look.export.codec = .hevc10

@@ -1,0 +1,39 @@
+#version 440
+// Output encoding for the screen. flx.metal encode_display.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2D src;
+layout(binding = 1, rgba8) uniform writeonly image2D dst;
+layout(std140, binding = 2) uniform Encode {
+    ivec4 modes;           // x: encoding (1 the sRGB curve, 2 ProPhoto's), y: coverage
+    vec4 columns;          // the print's shape, as print_and_scan's
+    vec4 offsetSize;
+    ivec4 shaped;          // x: 1 when the print is turned, levelled or cropped
+} u;
+
+void main()
+{
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(dst);
+    if (gid.x >= size.x || gid.y >= size.y) return;
+    vec3 c = max(texelFetch(src, gid, 0).rgb, 0.0);
+    if (u.modes.x == 1)
+        c = mix(1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, c * 12.92, lessThanEqual(c, vec3(0.0031308)));
+    else if (u.modes.x == 2)
+        c = pow(c, vec3(1.0 / 1.80078125));          // ProPhoto RGB (ROMM)
+    // Coverage 1: the parts of the print outside the frame transparent,
+    // premultiplied, while the crop is drawn.
+    float a = 1.0;
+    if (u.modes.y == 1) {
+        vec2 o = vec2(gid) + 0.5;
+        vec2 s = u.columns.xy * o.x + u.columns.zw * o.y + u.offsetSize.xy;
+        float inside = min(min(s.x, s.y), min(u.offsetSize.z - s.x, u.offsetSize.w - s.y));
+        a = clamp(inside + 0.5, 0.0, 1.0);
+    }
+    // Rounded to the nearest of the 256 levels here, so that every GPU's own
+    // conversion to 8 bits lands on the same one: Direct3D's, left to round
+    // the float itself, came out one level off Metal's in 4% of the values.
+    vec4 rgba = vec4(clamp(c, 0.0, 1.0) * a, a);
+    imageStore(dst, gid, floor(rgba * 255.0 + 0.5) / 255.0);
+}

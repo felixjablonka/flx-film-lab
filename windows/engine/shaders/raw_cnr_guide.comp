@@ -1,0 +1,21 @@
+#version 440
+// The colour noise's full-size guide: the luminance of the channels' cube
+// roots. RawDetail's reduceColourNoise.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2D src;
+layout(binding = 1, r32f) uniform writeonly image2D guide;
+
+const vec3 kLuma = vec3(0.2627, 0.6780, 0.0593);
+
+float cubeRoot(float v) { return sign(v) * pow(abs(v), 1.0 / 3.0); }
+
+void main()
+{
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(guide);
+    if (gid.x >= size.x || gid.y >= size.y) return;
+    vec3 c = texelFetch(src, gid, 0).rgb;
+    imageStore(guide, gid, vec4(kLuma.x * cubeRoot(c.r) + kLuma.y * cubeRoot(c.g) + kLuma.z * cubeRoot(c.b), 0.0, 0.0, 1.0));
+}

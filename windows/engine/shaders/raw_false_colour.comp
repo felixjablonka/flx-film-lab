@@ -1,0 +1,37 @@
+#version 440
+// False colour from the demosaic: R - G and B - G each through a 3x3
+// median, the edges clamped, green as it is. RawDetail's suppressFalseColour.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2D src;
+layout(binding = 1, rgba32f) uniform writeonly image2D dst;
+
+#define SWAP(a, b) { float lo = min(v[a], v[b]); v[b] = max(v[a], v[b]); v[a] = lo; }
+
+// the median of nine (Paeth's network)
+float median9(float v[9])
+{
+    SWAP(1, 2) SWAP(4, 5) SWAP(7, 8) SWAP(0, 1) SWAP(3, 4) SWAP(6, 7)
+    SWAP(1, 2) SWAP(4, 5) SWAP(7, 8) SWAP(0, 3) SWAP(5, 8) SWAP(4, 7)
+    SWAP(3, 6) SWAP(1, 4) SWAP(2, 5) SWAP(4, 7) SWAP(4, 2) SWAP(6, 4)
+    SWAP(4, 2)
+    return v[4];
+}
+
+void main()
+{
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(dst);
+    if (gid.x >= size.x || gid.y >= size.y) return;
+    float rg[9], bg[9];
+    int k = 0;
+    for (int dy = -1; dy <= 1; ++dy)
+        for (int dx = -1; dx <= 1; ++dx, ++k) {
+            vec3 c = texelFetch(src, clamp(gid + ivec2(dx, dy), ivec2(0), size - 1), 0).rgb;
+            rg[k] = c.r - c.g;
+            bg[k] = c.b - c.g;
+        }
+    vec3 p = texelFetch(src, gid, 0).rgb;
+    imageStore(dst, gid, vec4(p.g + median9(rg), p.g, p.g + median9(bg), 1.0));
+}

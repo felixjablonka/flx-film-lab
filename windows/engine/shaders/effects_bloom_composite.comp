@@ -1,0 +1,74 @@
+#version 440
+// The blurred highlight layer blended over the print in display values, as
+// Photoshop blends a layer by its alpha and opacity, and back to linear:
+// glowBloomComposite between the two sRGB tone curves. Mode 0 lighten,
+// 1 screen, 2 add; an amount past 1 stacks layers.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2D base;         // the linear print
+layout(binding = 1) uniform sampler2D layer;        // the blurred highlight layer
+layout(binding = 2, rgba32f) uniform writeonly image2D dst;
+layout(std140, binding = 3) uniform Effect {
+    vec4 a;                // x: amount
+    vec4 b;
+    ivec4 flags;           // x: mode
+} u;
+
+// Glow's helpers (GlowKernels.swift's prelude).
+float encode1(float c)
+{
+    c = max(c, 0.0);
+    return c <= 0.0031308 ? c * 12.92 : 1.055 * pow(c, 1.0 / 2.4) - 0.055;
+}
+float decode1(float c)
+{
+    c = max(c, 0.0);
+    return c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4);
+}
+vec3 encode3(vec3 c) { return vec3(encode1(c.r), encode1(c.g), encode1(c.b)); }
+float ramp(float x, float t0, float t1) { return clamp((x - t0) / max(t1 - t0, 1.0e-4), 0.0, 1.0); }
+// adds light e to a with a smooth shoulder instead of a hard clip at 1
+float softAdd(float a, float e)
+{
+    if (e <= 0.0) return a;
+    float r = 1.0 - a;
+    if (r <= 1.0e-4) return a;
+    return 1.0 - r * exp(-e / r);
+}
+// Core Image's sRGB tone curves, extended past 0 and 1 by mirroring and
+// continuing (CILinearToSRGBToneCurve, CISRGBToneCurveToLinear)
+float toSRGB(float v)
+{
+    float a = abs(v);
+    float e = a <= 0.0031308 ? a * 12.92 : 1.055 * pow(a, 1.0 / 2.4) - 0.055;
+    return v < 0.0 ? -e : e;
+}
+float toLinear(float v)
+{
+    float a = abs(v);
+    float e = a <= 0.04045 ? a / 12.92 : pow((a + 0.055) / 1.055, 2.4);
+    return v < 0.0 ? -e : e;
+}
+
+void main()
+{
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(dst);
+    if (gid.x >= size.x || gid.y >= size.y) return;
+    vec3 lin = texelFetch(base, gid, 0).rgb;
+    vec3 a = vec3(toSRGB(lin.r), toSRGB(lin.g), toSRGB(lin.b));
+    vec4 l = texelFetch(layer, gid, 0);
+    float amount = u.a.x;
+    float alpha = l.a;
+    vec3 c = alpha > 1.0e-5 ? l.rgb / alpha : vec3(0.0);
+    float k = amount <= 1.0 ? amount * alpha : 1.0 - pow(max(1.0 - alpha, 0.0), amount);
+    vec3 o;
+    if (u.flags.x == 0)
+        o = a + k * max(c - a, 0.0);
+    else if (u.flags.x == 1)
+        o = a + k * c * max(1.0 - a, 0.0);
+    else
+        o = a + amount * l.rgb;
+    imageStore(dst, gid, vec4(toLinear(o.r), toLinear(o.g), toLinear(o.b), 1.0));
+}

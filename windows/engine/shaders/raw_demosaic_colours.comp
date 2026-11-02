@@ -1,0 +1,54 @@
+#version 440
+// Any colour filter pattern, second pass: red and blue as differences from
+// green, from the pixels of their colour within 2, weighted by the inverse
+// square of the distance. RawDecoder's demosaicPattern.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2D mosaic;
+layout(binding = 1) uniform sampler2D green;
+layout(binding = 2, rgba32f) uniform writeonly image2D dst;
+layout(std140, binding = 3) uniform Pattern {
+    ivec4 cfa[9];
+    ivec4 size;
+} u;
+
+int colourAt(int x, int y)
+{
+    int i = (y % u.size.x) * 6 + (x % u.size.x);
+    ivec4 v = u.cfa[i / 4];
+    int k = i % 4;
+    return k == 0 ? v.x : k == 1 ? v.y : k == 2 ? v.z : v.w;
+}
+
+void main()
+{
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(dst);
+    if (gid.x >= size.x || gid.y >= size.y) return;
+    int x = gid.x, y = gid.y;
+    float g = texelFetch(green, gid, 0).r;
+    vec3 p = vec3(0.0, g, 0.0);
+    int own = colourAt(x, y);
+    for (int c = 0; c <= 2; c += 2) {
+        float value;
+        if (own == c) {
+            value = texelFetch(mosaic, gid, 0).r;
+        } else {
+            float sum = 0.0, weight = 0.0;
+            for (int dy = -2; dy <= 2; ++dy)
+                for (int dx = -2; dx <= 2; ++dx) {
+                    int sx = x + dx, sy = y + dy;
+                    if (sx >= 0 && sx < size.x && sy >= 0 && sy < size.y && colourAt(sx, sy) == c) {
+                        float k = 1.0 / float(dx * dx + dy * dy);
+                        ivec2 q = ivec2(sx, sy);
+                        sum += k * (texelFetch(mosaic, q, 0).r - texelFetch(green, q, 0).r);
+                        weight += k;
+                    }
+                }
+            value = g + (weight > 0.0 ? sum / weight : 0.0);
+        }
+        if (c == 0) p.x = value; else p.z = value;
+    }
+    imageStore(dst, gid, vec4(p, 1.0));
+}

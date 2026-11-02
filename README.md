@@ -2,9 +2,10 @@
 
 # FLX Film Lab
 
-FLX Film Lab is a Mac app for shooting digital photos as if they were film.
+FLX Film Lab is a Mac and Windows app for shooting digital photos as if they
+were film.
 
-**Its films are physical models, not presets.** Each of its 38 stocks, whether
+**Its films are physical models, not presets.** Each of its 41 stocks, whether
 colour negative, slide, cinema or black and white, is modelled from its
 manufacturer's datasheet. That means the spectral sensitivity of each layer, its
 characteristic curves and the dyes it forms, with the development couplers that
@@ -14,9 +15,11 @@ then developed and printed onto paper, or viewed as a slide on a light table.
 **Around them sits a hybrid workflow, half digital camera and half darkroom.**
 - **Before the negative:** exposure correction, white balance set by the film,
   auto exposure that keeps the stock's highlights, graduated filters, and
-  Wratten filters for black and white.
-- **After it:** paper grades and split grade, tone and colour controls, and
-  dodge and burn.
+  camera filters: Wratten filters for black and white, warming and conversion
+  filters for colour.
+- **After it:** a print on paper, or on a motion picture film's own print film,
+  with paper grades and split grade, tone and colour controls, dodge and burn,
+  and a crop.
 - **Beyond stills:** the same looks grade log video, and bake into LUTs for a
   Lumix camera's Real Time LUT or an iPhone camera app.
 
@@ -24,12 +27,13 @@ then developed and printed onto paper, or viewed as a slide on a light table.
 
 It is a native SwiftUI + Metal app. There is no Python at runtime, no LibRaw, no
 bundled interpreter: it opens RAW files from any camera macOS supports through
-macOS's own RAW pipeline and runs the whole film model on the GPU.
+macOS's own RAW pipeline and runs the whole film model on the GPU. On Windows
+it is the same engine in C++ and Qt, with a RAW decoder of its own (*Windows*).
 
 - **The physics** is a port of [agx-emulsion / spektrafilm][agx] — real spectral
   sensitivities, characteristic curves and dye absorption spectra read off
   manufacturer datasheets, plus DIR couplers, halation and a stochastic grain
-  model. FLX Film Lab ships with 38 film stocks and 9 print stocks, among them
+  model. FLX Film Lab ships with 41 film stocks and 13 print stocks, among them
   five black-and-white films and a black-and-white paper. Its slide stocks are
   read directly off a virtual light table rather than printed, since printing a
   positive onto RA-4 paper inverts it — and the scan is white-balanced on the
@@ -52,9 +56,9 @@ printing and scanning, and most of its film data, are what everything here
 stands on. Its author describes it as a reference implementation, the place
 where the model grows, with a Python desktop GUI for exploring it. FLX Film Lab
 sets out to be something else: a tool to photograph and grade with. Getting
-there meant a native port of the whole model, a film library nearly twice the
-size, rebuilt slide films, a capture and darkroom workflow of its own, and a
-video mode. That is where most of the work in this repository went.
+there meant a native port of the whole model, a film library more than twice
+the size, rebuilt slide films, a capture and darkroom workflow of its own, and
+a video mode. That is where most of the work in this repository went.
 
 ### What it uses
 
@@ -66,13 +70,18 @@ video mode. That is where most of the work in this repository went.
   colour to within 6e-4 (`tests/parity`). Its grain model, a count of the
   particles that develop in each emulsion layer, is where the app's grain starts
   (*Grain*).
-- **spektrafilm's data.** 14 of the 38 film stocks are spektrafilm's, used as they
-  are: Kodak Portra 160, 400 and 800 (and Portra 800's two pushes), Ektar 100, Gold
-  200, Ultramax 400, the four Vision3 stocks, Verita 200D, and Fujifilm C200,
-  Pro 400H and X-TRA 400. So are all eight of its print stocks. The colour
-  profiles built here take from its sister stocks what a datasheet does not give,
-  such as base densities and coupler matrices; `NOTICE.md` lists it stock by
-  stock.
+- **spektrafilm's data.** 14 of the 41 film stocks are spektrafilm's: Kodak
+  Portra 160, 400 and 800 (and Portra 800's two pushes), Ektar 100, Gold 200,
+  Ultramax 400, the four Vision3 stocks, Verita 200D, and Fujifilm C200, Pro
+  400H and X-TRA 400. They are used as they are, but for one change: Vision3
+  200T and 500T are balanced for the 3200 K lamp their datasheets name, where
+  spektrafilm balances them for a household bulb of about 2810 K. Only each
+  layer's sensitivity level moves, and with it the enlarger filtration that
+  prints them neutral, solved again in spektrafilm's own pipeline; the curves,
+  dyes, couplers and grain are spektrafilm's (*White balance*, `NOTICE.md`
+  item 16). All eight of its print stocks are used as they are. The colour profiles built here take from its sister stocks what a
+  datasheet does not give, such as base densities and coupler matrices;
+  `NOTICE.md` lists it stock by stock.
 - **NegPy's design.** The darkroom controls, the print meters, and the glow
   and halation effects follow NegPy; no NegPy code is used.
 
@@ -91,11 +100,16 @@ video mode. That is where most of the work in this repository went.
     re-times the enlarger by default, which hides the change.
   - **Auto exposure** places the scene within the stock's own highlight
     headroom, rather than metering the frame to mid-grey.
-  - **White balance** defaults to the light the film is balanced for, so daylight
-    film under tungsten goes orange.
+  - **White balance** defaults to the light the film is balanced for, D55 for
+    daylight film and a 3200 K lamp for tungsten film, so daylight film under
+    tungsten light goes orange and tungsten film in daylight goes blue.
   - **Graduated exposure** stacks plus-or-minus gradients on the negative, like
     grad filters on the lens.
-  - **Kodak Wratten filters** come with their filter factors for black and white.
+  - **Camera filters**, measured, with their filter factors: Kodak's Wratten
+    filters for black and white; for colour film Kodak's Wratten 81C, 85 and
+    85B and Tiffen's 812, each applied through the film's own spectral
+    sensitivities. The 85 and 85B convert daylight for tungsten film, their
+    factor and print time set in daylight, the light they are made for.
 - **A darkroom, after the negative.** This follows NegPy's design:
   - contrast as an ISO-R paper grade, with split grade;
   - brightness, shadows, highlights, blacks and whites on the print's lightness,
@@ -113,13 +127,18 @@ video mode. That is where most of the work in this repository went.
   spektrafilm's print side offers print exposure, the yellow and magenta
   filters, pre-flash, auto-compensation, and gamma factors that reshape the
   paper's curve, overall, per channel and per sub-layer.
-- **22 more stocks, each from its own datasheet.**
-  - 20 film stocks spektrafilm does not have: Fujifilm Astia 100F, Provia
+- **29 more stocks, each from its own datasheet.**
+  - 23 film stocks spektrafilm does not have: Fujifilm Astia 100F, Provia
     400X, Velvia 50, Superia 1600, Superia Reala 100, Eterna Vivid 160T,
     Eterna 500T, Reala 500D and Neopan 1600; Kodak Kodachrome 25 and 200,
-    Royal Gold 100, Vericolor III 160, Tri-X 400 and T-Max 100; Agfa Optima II
-    100, Portrait XPS 160 and APX 25; Ilford HP5 Plus; and HARMAN Phoenix 200.
+    Royal Gold 100, Vericolor III 160, EXR 50D, EXR 200T, 5251 50T, Tri-X 400
+    and T-Max 100; Agfa Optima II 100, Portrait XPS 160 and APX 25; Ilford HP5
+    Plus; and HARMAN Phoenix 200.
   - Tri-X pushed two stops, and Ilford Multigrade paper.
+  - Four motion picture print films to print on, beside Kodak's 2383 and
+    2393: Fujifilm's F-CP 3519, F-CP 3510 and Eterna-CP 3513DI, and Kodak's
+    5385 of 1962. A motion picture film prints on its own print film, as a lab
+    prints it.
 
   Each profile's characteristic curves and spectral sensitivities, and, where
   the sheet plots them, its dye spectra and MTF curves, are read off the sheet's
@@ -134,17 +153,18 @@ video mode. That is where most of the work in this repository went.
     engine changes, a share of the inhibitor that diffuses and a cap on its edge
     gain, and a grid sixteen times finer for inverting the couplers.
 - **Black and white.** spektrafilm's main line is colour only; its
-  black-and-white work sits on an unmerged branch. Here four black-and-white
-  films and a silver paper are built from datasheets alone, as noted above. They
-  run neutral through the three-layer engine, with grain and sharpness from
-  Kodak's and Agfa's published data.
+  black-and-white work sits on an unmerged branch. Here five black-and-white
+  films, Tri-X's two-stop push and a silver paper are built from datasheets
+  alone, as noted above. They run neutral through the three-layer engine, with
+  grain and sharpness from Kodak's and Agfa's published data.
 - **Grain from the datasheets.** spektrafilm gives every colour stock the same
   grain, set by eye. Here each stock has its own, from its sheet: Fujifilm's
   and Agfa's RMS granularity, Kodak's Print Grain Index, and for the Vision3
-  stocks Kodak's granularity curves for each layer, whose shape every colour
-  negative follows. It is drawn per emulsion layer, coarsest where a negative
-  is thin, with dye clouds and silver clumps of a real size on the film, so
-  the preview shows the grain a full-size export has (*Grain*).
+  and EXR stocks Kodak's granularity curves for each layer, whose Vision3
+  shape every other colour negative follows. It is drawn per emulsion layer,
+  coarsest where a negative is thin, with dye clouds and silver clumps of a
+  real size on the film, so the preview shows the grain a full-size export has
+  (*Grain*).
 - **Video.** The Motion mode grades log footage through the same engine as
   photographs, live while it plays, and exports the graded clip. Output is
   ProRes 422 HQ or 10-bit HEVC, with audio and metadata kept, encoded so that
@@ -166,6 +186,8 @@ video mode. That is where most of the work in this repository went.
     among them.
   - The output is ready for a Lumix camera's Real Time LUT and for iPhone camera
     apps, and the baker is checked against the engine (`lutchecks`).
+  - Each release carries a V-Log pack of every stock, for a Lumix camera
+    (*Download*).
 - **Checked as it goes.** Besides the parity harness, invariant checks cover
   what parity cannot see. Separate suites cover the app, the LUT baker and the
   video path (*Verification*).
@@ -184,10 +206,20 @@ xattr -cr "/Applications/FLX Film Lab.app"
 It needs macOS 26 or later, on a Mac with Apple Silicon. FLX Film Lab 1.1.1,
 the last for macOS 14 and 15 and for Intel Macs, stays on the releases page.
 
+For Windows, releases from 1.3.0 also carry an installer, `FLX Film Lab
+<version> Setup.exe`. It installs the app for the person running it, without
+administrator rights, and offers it under Open with for RAW, JPEG, TIFF and
+movie files, never as their default. It is not signed either, so Windows
+SmartScreen may hold it back: More info, then Run anyway. It needs 64-bit
+Windows 10 or 11 (it is tested on 11) and a graphics card with Direct3D 12
+or 11.
+
 Releases also carry a V-Log LUT pack, `FLX-Film-Lab-V-Log-LUTs-<version>.zip`,
 for a Lumix camera's Real Time LUT: every film stock on its usual paper,
-slides on a light table, and Tri-X through its five camera filters, to load
-onto the camera and shoot without the app. Its read-me says how.
+slides on a light table, Tri-X pushed two stops and through its five camera
+filters, and, for daylight, EXR 200T through a Wratten 85 and an 85B on
+Fujifilm F-CP 3519 and Kodak 5251 through an 85 on Kodak 5385, to load onto
+the camera and shoot without the app. Its read-me says how.
 
 ## Build and run
 
@@ -238,6 +270,20 @@ which otherwise recorded the toolchain's default in the binary. macOS runs an
 app as the SDK it records behaves, so a build here now behaves as the release,
 built on GitHub with Xcode 26, does.
 
+## Windows
+
+`windows/` is FLX Film Lab for Windows: both modes, Stills and Motion, on the
+same engine and the same film data, ported to C++20 and GLSL compute on Qt
+6.12, and checked against the Mac app's engine stage by stage: its prints are
+within ΔE2000 0.09 of the Mac's, on Direct3D 12 and 11 as on Metal. It decodes
+RAW files itself, with RawSpeed and, for what RawSpeed lacks, LibRaw, and
+gives each camera Apple's colour, measured from macOS's own decoding, so a
+picture's colour is the Mac app's; lens correction comes from the camera's
+own file, or from Lensfun's database. `windows/README.md` says how it is built
+and checked. The Mac remains the main development platform: the Windows app
+receives limited testing, on a single configuration, Windows 11 with an
+NVIDIA RTX graphics card.
+
 ## The pipeline
 
 Scene light in, print out. Each stage names its origin in the shader source.
@@ -245,7 +291,7 @@ Scene light in, print out. Each stage names its origin in the shader source.
 | Stage | What happens |
 |---|---|
 | RAW decode | `CIRAWFilter`, scene-referred and linear — no tone curve, no highlight boost, no gamut mapping, and none of the "shadow bias" Apple otherwise subtracts to hide noise (3.0 on Nikon Z, 5.0 on a Leica M), which put the darkest light the sensor recorded below zero, beyond any Exposure. No luminance noise reduction, so the film's grain is the texture; colour noise reduction and sharpening stay at Apple's defaults for the camera. White-balanced for the *film's* reference illuminant, not as-shot |
-| Film exposure | RGB → XYZ (CAT16 to the stock's reference illuminant) → chromaticity → a baked 192×192 LUT that carries the whole spectral upsampling *and* the film's 81-band sensitivity projection |
+| Film exposure | RGB → XYZ (CAT16 to the stock's reference illuminant) → chromaticity → a baked 192×192 LUT that carries the whole spectral upsampling *and* the film's 81-band sensitivity projection; through a camera filter, the film's own LUT for it, its sensitivities times the filter's transmittance |
 | Scatter & halation | linear irradiance propagated through the emulsion and reflected off the base — the red bloom around bright edges. Sharpness, under Film & Paper, set to Camera leaves the scatter out, and the couplers' spread with it, so a picture keeps the camera file's own detail with the film's colour, halation and grain |
 | Development | characteristic curves plus DIR couplers: inhibitor released as density forms, diffused, then re-developed against the pre-coupler curves |
 | The print's shape | when the print is cropped, turned or levelled, the developed negative is shaped with it, and everything after runs at the print's own size (*Crop, turn and level*) |
@@ -322,17 +368,28 @@ step with the image.
 ## White balance
 
 The decode is balanced for the illuminant the loaded **film** is balanced for —
-D55 for a daylight stock, 2856 K for a tungsten one — not for the scene. D55 is
+D55 for a daylight stock, a 3200 K lamp for a tungsten one — not for the scene. D55 is
 set as its chromaticity, not as "5503 K": Core Image reads a bare temperature as
 a lamp of that colour, which is pinker than daylight, and every daylight frame
-then decoded green-yellow.
+then decoded green-yellow. The 3200 K is set as its chromaticity too, the
+Planckian 3200 K, which Core Image's own "3200 K" misses by 14 K.
+
+The tungsten stocks are balanced for 3200 K because their datasheets are: "balanced
+for exposure with tungsten illumination (3200K)", Kodak's say, and Fujifilm's
+expose their curves to a "3200K tungsten light source". agx balances its Vision3
+200T and 500T for a household bulb of about 2810 K instead, which left a 3200 K
+lamp printing blue (b* -6 to -9); only each layer's sensitivity level differs
+for it here. A 3200 K lamp now prints neutral, and household bulbs warm, as
+they do on tungsten film.
 
 That is the whole point. A daylight film shot under tungsten really does go
 orange, and Vision3 500T in daylight really does go blue; that is the emulsion
 reacting to light it was not designed for. Decoding "as shot" lets the camera
 neutralise the illuminant before the film ever sees it, which quietly throws all
 of that away and makes every stock behave as if the light were perfect. As shot,
-Daylight, Tungsten and Custom are still there when you want a neutral start.
+Daylight D55 (the daylight stocks' own balance), Daylight D65, Tungsten 3200 K
+(the tungsten stocks'), Tungsten 2850 K (a household bulb) and Custom are still
+there when you want a neutral start.
 
 ## Exposure
 
@@ -352,16 +409,40 @@ Exposure comes first and is authoritative: Auto Brightness meters the result of
 whatever exposure you set and corrects what is left, rather than trying to undo
 it.
 
-**Warming filters for slides.** A slide film can be shot through Tiffen's 81C or
-812 warming filter, chosen under Exposure, read off the transmission curves in
-Tiffen's *Filter Specifications* catalogue. The film sees the scene through the
-filter, and exposure opens up by the filter factor for the green-sensitive
-layer, about half a stop (Tiffen rounds both to a third; its curves pass about
-two thirds of the green), so the picture keeps its brightness while it warms.
-On Provia 100F a grey card moves a* +3.7 b* +10.9 through the 81C, a plain
-amber. The 812 lets blue and green through alike and holds back violet, so it
-adds the same red with half the yellow, a* +4.3 b* +5.2, and leans pink, as
-the two filters look on film.
+**Warming and conversion filters for colour film.** Every colour film, slide,
+negative or motion picture, can be shot through Kodak's Wratten 81C warming
+filter or Tiffen's own 812, or Kodak's Wratten 85 or 85B conversion filter,
+chosen under Negative Exposure (Exposure on a slide): the filters typically
+used, read off Kodak's Wratten 2 curves for the 81 and 85 series and, for the
+812, which Kodak does not make, Tiffen's *Filter Specifications* catalogue.
+The filter is applied as what it is: the film's own spectral sensitivities,
+wavelength by wavelength, times the filter's transmittance, so each layer sees
+the scene's light through it as the film would on the camera, rather than as a
+shift of white balance. Exposure opens up by the filter factor for the
+green-sensitive layer, about half a stop for the 81C and 812 (each is rated a
+third; their curves pass about two thirds of the green) and about one for the
+85 and 85B (their rated two thirds is a meter's luminous reading; they pass
+under half the green), so the picture keeps its brightness. Kodak's own film
+sheets rate the 85 at two thirds of a stop as well, EXR 200T at EI 125 in
+daylight against 200 under tungsten, 5251 at 32 against 50; their green layers
+make it a stop and 0.9, and the app opens up by those. On Provia 100F a grey
+card moves a* +3.7 b* +10.6 through the 81C, a plain amber. The 812 lets blue
+and green through alike and holds back violet, so it adds the same red with
+half the yellow, a* +4.3 b* +5.2, and leans pink, as the two filters look on
+film. The 85 and 85B hold back blue and much of the green and pass the red:
+they convert daylight for tungsten film, rated 5500 K to 3400 K and to 3200 K,
+so their filter factor, and the print time, are set in daylight, the light
+they are made for. Measured, both go further than rated: Kodak's curves,
+through the CIE observer, take daylight to about 3300 K and 2800 K (Tiffen's
+charts the same, 3300 K and 2900 K), and a tungsten film's own layers see the
+same. On Kodak EXR 200T in daylight, decoded for the film's own 3200 K, a grey
+prints a* -13.8 b* -16.3 on F-CP 3519 unfiltered; through the 85B a* +5.3 b*
++7.2, a little warm and about as light as the film prints a grey in its own
+light; through the 85 a* +0.4 b* -5.1, a little cool, the filter Kodak names
+for its tungsten stocks in daylight. At the film's layers daylight exposes
+blue 0.96 stops over green against the film's balance, 0.25 through the 85,
+and through the 85B 0.24 under, with red 0.25 over. On a daylight film they
+warm strongly.
 
 ## Metering
 
@@ -654,20 +735,21 @@ granularity — the density fluctuation through a 48 um aperture, times 1000:
 | gross visual density 1.0 | Kodak's slides |
 | net silver density 1.0 | Tri-X, T-Max 100, APX 25 |
 | Print Grain Index | Kodak's colour negatives for stills: four units are a just-noticeable step, and doubling the enlargement adds 22, so a difference of d is a factor of 2 to the power d/22. The scale is set at Portra 400 = 4, where Kodak's own curves put Vision3 250D and 500T and Fujifilm puts Pro 400H |
-| per layer, against density | Kodak Vision3 50D, 250D and 500T. 200T's sheet repeats 500T's plot, so 200T sits between 50D and 250D at the 100-speed grain Kodak claims for it, and Verita 200D between them at its own speed |
+| per layer, against density | Kodak Vision3 50D, 250D and 500T, and EXR 50D and 200T. Vision3 200T's sheet repeats 500T's plot, so 200T sits between 50D and 250D at the 100-speed grain Kodak claims for it, and Verita 200D between them at its own speed |
 
 A few publish nothing: HP5 Plus and Neopan 1600 are derived as noted above,
-Reala 500D takes Eterna 500's figure, Ultramax 400 takes Gold 200's, and
-Phoenix 200 takes Superia 1600's. Pushed stocks take their normal figure
-times the root of the slope ratio at mid-grey (Selwyn: the same grains, each
-developed to more density).
+Reala 500D takes Eterna 500's figure, Ultramax 400 takes Gold 200's, Phoenix
+200 takes Superia 1600's, and 5251 EXR 200T's curves. Pushed stocks take their
+normal figure times the root of the slope ratio at mid-grey (Selwyn: the same
+grains, each developed to more density).
 
 The grain follows the density the way the film's does. Kodak's Vision3 curves
 show every layer coarsest just above the fog, where only the fast emulsion has
 developed, then levelling off as the slower ones fill in, and blue — the
 yellow-dye layer — about twice as grainy as red and green. Every colour
-negative follows that measured shape at its own sheet's level. Slides and
-black-and-white films publish no curve, so theirs comes from spektrafilm's
+negative without curves of its own follows that measured shape at its own
+sheet's level; the EXR stocks have theirs, and 5251 takes EXR 200T's. Slides
+and black-and-white films publish no curve, so theirs comes from spektrafilm's
 counting model on each stock's own emulsion layers.
 
 It is drawn per emulsion layer, fast, medium and slow. Each layer's grain
@@ -693,11 +775,13 @@ The same engine, headless:
 
 ```bash
 ./build.sh render
-./build/flxrender in.NEF out.tif --film kodak_ektar_100 --grade 95 --shadow-density -0.4
+./build/flxrender in.NEF out.tif --film kodak_ektar_100 --grade 95 --shadows 0.3
 ```
 
 `--list` prints the available stocks; `--dump-recipe` prints a recipe JSON you
-can edit and pass back with `--recipe`.
+can edit and pass back with `--recipe`. `--wb` takes a white balance by its
+stored name (`"Daylight D55"`, `"Tungsten 3200 K"`, ...), and `--filter` a
+camera filter (`red`, `85b`, ...).
 
 ## Motion mode: log video
 
@@ -788,14 +872,19 @@ the slider takes over from the meter.
 
 **White balance** happens in the camera, before N-Log. A fixed 5500 K on the
 camera is what loading daylight film was: tungsten light then goes orange, as
-it would on Portra. Temperature and Tint correct it the way a lab would, with
-the enlarger's filters.
+it would on Portra. For a tungsten stock 3200 K is the film's own light, and
+daylight goes blue unless it is shot through an 85. Temperature and Tint
+correct it the way a lab would, with the enlarger's filters.
 
-**Black and white.** Tri-X, Tri-X Push 2, T-Max 100, HP5 Plus, Neopan 1600 and APX 25 print on Multigrade, as in Stills:
-picking one moves the print onto silver paper, which has no colour to balance,
-and the same camera filters (Wratten 47, 58, 8, 22 and 25) sit under Exposure.
-The halation effect, red on colour film, glows grey in a black-and-white
-picture.
+**Black and white.** Tri-X, Tri-X Push 2, T-Max 100, HP5 Plus, Neopan 1600
+and APX 25 print on Multigrade, as in Stills: picking one moves the print onto
+silver paper, which has no colour to balance, and the same camera filters
+(Wratten 47, 58, 8, 22 and 25) sit under Film & Paper. The halation effect,
+red on colour film, glows grey in a black-and-white picture.
+
+**Motion picture film and filters, as in Stills.** A motion picture film
+prints on its own print film, and colour films take the 81C, 812, 85 and 85B
+under Film & Paper.
 
 **What a frame cannot carry.** Grain, the film's own halation, coupler
 diffusion, dodge and burn and the meters depend on neighbouring pixels or on
@@ -822,7 +911,8 @@ full-range Zf clip to a LUT — and Rec.709 BT.1886 out (the app's Export LUT…
 writes the open clip's own format: V-Log, F-Log, Canon Log, S-Log3 and I-Log
 the same way, Apple Log on its signal); `--input video-levels` is for video-range
 files and `--output apple` writes for Apple displays;
-`--film kodak_tri_x_400 --filter red` bakes Tri-X shot through a red filter.
+`--film kodak_tri_x_400 --filter red` bakes Tri-X shot through a red filter,
+`--film kodak_exr_200t --filter 85b` EXR 200T through an 85B.
 Per-pixel only, like the app's look. The app's Export LUT… follows the open
 clip's own range.
 
@@ -881,9 +971,11 @@ shadow noise. At ISO 640 there is room for that; at ISO 4000 (about 3.7 clean
 stops below grey) the plain table is the better choice.
 
 `python3 tools/lut/vlog_pack.py` bakes the V-Log pack that goes out with a
-release: every stock this way, on its reference paper, and Tri-X through its
-five filters. Tri-X, pushed and through its filters too, and HP5 Plus print
-at Contrast +20 (R102), as they look flat at R115. It writes
+release: every stock this way, on its reference paper (Portra 800's pushes
+aside), Tri-X through its five filters, and EXR 200T and 5251 through the
+filters that convert them for daylight. Tri-X, pushed and through its filters
+too, HP5 Plus and T-Max 100 print at Contrast +20 (R102), as they look flat at
+R115. It writes
 `build/FLX-Film-Lab-V-Log-LUTs-<version>.zip`, with a read-me for the camera,
 and the release workflow attaches it to each release.
 
@@ -959,24 +1051,40 @@ defaults need checks of their own:
 ./build.sh checks
 ```
 
-These assert properties rather than reference values: the metered exposure
-reaches the film stage, every slide renders a grey wedge neutral and its clear
-base white, is as sharp as its datasheet's MTF one stop under mid-grey and
-keeps that edge effect deeper down, every colour negative built from a
-datasheet prints a full tonal range with a neutral mid-grey, Temperature and
-Tint move prints and slides the same way, gamut
-compression leaves in-gamut colour alone and holds hue for the rest, every
-stock gives its datasheet's RMS granularity, grain is the film's size whatever
-the pixels', so an export seen at the preview's size has the preview's grain
-and the print keeps the negative's coarse grain, and it averages to the
-grain-free colour region by region without pushing a pixel below zero,
-black-and-white stocks print every pixel neutral, grain included, on silver
-paper and a neutral mid-grey on colour paper, render a blue lighter than a red
-of the same luminance, print a grey card the same through every camera
-filter and never print an impossible colour lighter than its luminance, bloom
-and glow land on their highlight and scale with the frame, and every output
-space survives a 16-bit TIFF round trip through ColorSync. Each of them failed
+These assert properties rather than reference values. Each of them failed
 before the fix it guards.
+- **Exposure and white balance:** the metered exposure reaches the film stage;
+  the decode keeps the darkest light the sensor recorded; the daylight white
+  balances decode at the CIE daylights, and Tungsten 3200 K at the Planckian
+  3200 K; graduated exposure changes what the film receives, and only where it
+  covers.
+- **Filters:** every colour film takes the 81C, 812, 85 and 85B; on a slide a
+  grey card keeps its lightness as they warm it; the tungsten films, balanced
+  for a 3200 K lamp, print daylight blue, through the 85 a little cool and
+  through the 85B a little warm and as light as in their own light;
+  black-and-white films print a grey card the same through every filter.
+- **Tone:** Brightness, Shadows and Highlights stay in their own bands; Auto
+  Contrast fits the frame instead of crushing it; Temperature and Tint move
+  prints and slides the same way; gamut compression leaves in-gamut colour
+  alone and holds hue for the rest.
+- **Films and papers:** every slide renders a grey wedge neutral and its clear
+  base white, and is as sharp as its datasheet's MTF one stop under mid-grey,
+  keeping that edge effect deeper down; every colour negative built from a
+  datasheet prints a full tonal range with a neutral mid-grey; the motion
+  picture print films built here print any negative's greys, Fujifilm's with
+  less chroma than 2383; black-and-white stocks print every pixel neutral,
+  grain included, on silver paper and a neutral mid-grey on colour paper,
+  render a blue lighter than a red of the same luminance, and never print an
+  impossible colour lighter than its luminance.
+- **Grain:** every stock gives its datasheet's RMS granularity, in a pattern of
+  its own; grain is the film's size whatever the pixels', so an export seen at
+  the preview's size has the preview's grain and the print keeps the
+  negative's coarse grain; it averages to the grain-free colour region by
+  region without pushing a pixel below zero.
+- **Effects and output:** Camera sharpness keeps the file's detail and the
+  film's colour; bloom and glow land on their highlight and scale with the
+  frame; every output space survives a 16-bit TIFF round trip through
+  ColorSync.
 
 For the crop they check the following:
 - a turned, mirrored or cropped print is the frame's pixels moved, masks and
@@ -1159,13 +1267,16 @@ beyond any of agx's films on that paper. "High saturation" is taken at Ektar
 
 Fujifilm's motion picture negatives **Eterna Vivid 160T** (KB-0701E), **Eterna
 500T** (KB-501E) and **Reala 500D** are built on agx's Vision3 stocks of the
-same light balance (200T, 500T, 250D), and print on 2383. The Eterna sheets
+same light balance (200T, 500T, 250D), and print on Fujifilm's own F-CP 3510
+(below). The Eterna sheets
 plot against camera stops from the normal exposure, so mid-grey sits at their
 0, 1.03 and 1.07 decades over the green speed point. Reala 500D's sheet plots
 absolute log H, but metered at EI 500 on that axis its mid-grey sat 0.24
 decades over the toe and every shadow printed at L* 27. It goes where the
 Eterna sheets put normal exposure instead, 1.05 decades over its speed point.
-Their greys print within a* 3.6 and b* 4.8 on 2383, as close as Vision3's own.
+Their greys print within a* 3.6 and b* 4.8 on 2383, as close as Vision3's own,
+and within a* 6.9 and b* 6.6 on F-CP 3510, where Vision3 500T's reach 7.6 and
+7.1.
 Eterna Vivid, "High color saturation ... the highest contrast in the ETERNA
 series", printed no more saturated than Eterna 500T (1.00x and 0.99x); it takes
 the step Ektar makes over Portra 160, to 1.12x. Reala 500D's and Superia
@@ -1192,6 +1303,118 @@ papers their sheets name, Ektacolor Edge and Portra Endura. Vericolor III's
 Royal Gold's sheet says nothing of saturation and puts it in the Gold family,
 so it takes Gold 200's on Ektacolor Edge. Vericolor III's sheet plots its MTF,
 to which its scatter and inhibitor are fitted, as the slides' are.
+
+**Kodak EXR 50D** (H-1-5245) and **EXR 200T** (H-1-5293), ECN-2 camera
+negatives of the EXR generation, take more again from their own sheets, which
+both plot curves, spectral sensitivities, the midscale neutral and D-min, MTF
+and granularity per layer:
+- **Dyes.** EXR 50D's 2003 edition plots its three dyes themselves, which it
+  takes as they are. EXR 200T's plots only the neutral; its dyes are its sister
+  stock's, 50D's, which add up to 200T's neutral over D-min to 0.014 in density
+  without moving, twice as close as any agx negative's (0.030 for Vision3
+  250D's).
+- **Placement.** Mid-grey goes at Kodak's normal exposure. The 2003 edition
+  marks it, camera stop 0 on a scale over 50D's curves: 0.202 lux-seconds at
+  EI 50, 10/EI. 200T's sheet draws no scale and goes by the same rule at EI 200
+  under tungsten. Normally exposed, the two then read about the same densities,
+  R 0.9 G 1.35 B 1.75, as Kodak's LAD aims mean its camera negatives to.
+- **Range.** Both plot only to about three stops over normal, a step tablet's
+  range, where the film goes on; each curve continues at its final gradient for
+  0.8 decades, as the black-and-white negatives' do, so the meter does not take
+  the plot's edge for the film's shoulder (5.2 stops of headroom, where
+  Eterna's sheets give 5.5).
+- **Sharpness and grain.** Their scatter and inhibitor are fitted to their
+  green MTF, as the slides' are. Their grain is their own per-layer curves
+  (`exr_granularity.py`), which combined as a visual figure read 3.1 for 50D,
+  inside its sheet's "less than 5", and 6.1 for 200T, whose sheet gives the
+  same "less than 5": its curves and its figure disagree, and the curves are
+  kept. Kodak's 2003 edition of 50D's sheet gives the curve in place of a
+  figure, measured by a "modified measuring technique".
+- **Colour.** No sheet gives a coupler model; theirs is the Vision3 stock's of
+  the same balance and speed, which also gives the light: daylight, and for
+  200T the 3200 K lamp its own sheet names. Their
+  sheets say nothing of saturation, and none is set: on Vision3's coupler
+  strength they print 1.09x and 1.12x the scene's chroma on 2383, where Vision3
+  50D and 200T print 1.22x and 1.25x, from their own sensitivities and dyes.
+- **Paper.** They print on Fujifilm F-CP 3519, the print film of their day
+  (below). Its highlights print warmer than 2383's, for every negative: EXR's
+  greys reach b* 8.7 and 9.7 at the ends, Vision3's of the same balance 8.2 and
+  8.6 on it.
+
+**Fujifilm F-CP 3519** (KB-918E, 1999), **F-CP 3510** (KB-301E, 2003) and
+**Eterna-CP 3513DI** (KB-505E, 2005) are print films, the stocks a lab prints a
+camera negative onto, built by `build_print_profiles.py` from their own sheets
+(`fuji_print_sheets.py`), which plot curves, spectral sensitivities, the three
+dyes and a grey, and CTF. Fujifilm's 2008 motion picture manual repeats 3510's
+and 3513DI's curves, to 0.003 in density.
+- **Dyes.** As plotted the three add up to more than the sheet's grey, by twice
+  a smooth floor of 0.03 to 0.08 that the grey holds once, and the yellow and
+  magenta lie flat at about 0.05 across 600-700 nm, where neither absorbs: each
+  was measured with the film's base under it. Taken off, they add up to the grey
+  exactly. Read as plotted, they print 0.65 to 0.75 of 2383's chroma.
+- **Curves.** Status A, exposed with 2854 K tungsten through CC-90Y, CC-60M
+  and an SC-41, the green and blue moved back by the decade and two the sheet
+  shifts them by; put back, the three layers reach the aim density within 0.15
+  decades of each other. Each layer's sensitivity level comes from where its
+  curve lies under that exposure, the shapes from the sensitivity plot.
+- **Placement and light.** As on every agx print stock, log H 0 in each layer
+  is its share of a neutral grey of 18.4% luminance under agx's xenon
+  projector, and they are printed with agx's lamp: a grey prints as light on
+  them as on 2383. Every colour negative's filtration is solved for them in
+  agx's pipeline at bake time, as agx's table has its own negatives on its own
+  papers.
+- **Character.** The same negative prints with less chroma than on 2383 (0.81
+  to 0.90 of it), cooler shadows and warmer highlights; 3510 is the softest,
+  3513DI the high-contrast stock Fujifilm made it for digital intermediates.
+- **Reference papers.** Fujifilm's own motion picture negatives, Eterna 500T,
+  Eterna Vivid 160T and Reala 500D, name F-CP 3510 as their paper, and Kodak's
+  EXR 50D and 200T name F-CP 3519, where the Vision3 stocks they are built on
+  name 2383. Picking a motion picture film moves the print onto its own print
+  film, as a lab prints it; picking a still film after one moves the print
+  back onto that film's own paper, and a print film chosen for a still film
+  stays.
+
+**Kodak 5251 50T** and its print film **Kodak 5385**, Eastman's camera negative
+and release print of 1962-68, come from the two papers that introduced them,
+W. I. Kisner's in the Journal of the SMPTE of October 1962, whose figures
+survive as scans (`kodak_1962_sheets.py`): each figure levelled, calibrated on
+its own tick marks, and each solid curve traced with its predecessor's dashed
+one (5250's, 5382's) taken out as the short strokes it is.
+- **Exposure scale.** Neither paper numbers its log exposure axis. The curves
+  are read at the scale of their density, one decade drawn as long as one
+  density unit: Kodak's technical sheets draw them so (46.2 points to either on
+  EXR's 1999 sheets and Vericolor III's), and Kodak's 1968 paper on 5254,
+  "structurally the same" as 5251, marks its axis in decades as long as its
+  density units, to 3%. So read, 5251's curves end at a gradient of 0.61 to
+  0.63, where 5254's measure 0.61 to 0.62.
+- **5251.** Its own curves, spectral sensitivities and equivalent dyes, the
+  colored couplers' masking taken into them, their negative lobes kept as agx
+  keeps its own negatives'. 3200 K tungsten and EI 50 from Kodak's
+  announcement (American Cinematographer, June 1962); mid-grey at Kodak's
+  normal exposure, 10/EI, on its ASA/ISO speed point. It predates DIR couplers
+  and runs without them, masking only. The BBC's film-only measurement of its
+  MTF (C. B. B. Wood, 1966) sets its blur, and never rises over 100% as an
+  inhibitor's edge effect would make it. Its base and mask are Vision3 200T's,
+  and its grain EXR 200T's per-layer curves: no figure for either survives in
+  these sources, and 5251, a generation older, was likely grainier.
+- **5385.** Its own curves (integral density, taken as Status A), spectral
+  sensitivities and dyes, which add up to its neutral (they carry no floor of
+  base). The paper moved each curve along the axis "to illustrate the curve
+  shape", so each layer is placed by agx's rule for mid-grey, and its speed
+  taken from the sensitivity plot's own levels, where its curve reaches D-min +
+  1.0. The curves leave the plot at 3.56, still rising, and go on as agx's
+  curve model fitted to them. Kodak's note that labs would add "more yellow" to
+  their filter packs for it shows: Vision3 250D prints neutral on it at M 30, Y
+  70, against M 51, Y 54 on 2383.
+- **Character.** On its own print film 5251 prints more neutral, less
+  saturated and harder than Vision3 on 2383. The paper draws its blue layer a
+  little steeper than the other two where mid-grey prints (0.59 a decade
+  against 0.56 and 0.54), and its greys run b* -4 a stop over mid-grey. In
+  daylight through the Wratten 85, which Kodak names for it (EI 32), a grey
+  prints neutral.
+
+The print films' CTF is not modelled, Kodak's or Fujifilm's: no print stage
+here blurs.
 
 **HARMAN Phoenix 200**, an experimental C-41 film, has a route of its own:
 - **Its plots are bitmaps.** The characteristic curves run against relative log
@@ -1263,8 +1486,10 @@ range a datasheet plots.
 
 Camera filters come from `tools/bake/lens_filters.py`, which reads Kodak's
 Wratten 2 transmission sheets (see `docs/datasheets.md`): vector plots stored
-rotated a quarter turn, calibrated on their own labels. `bake_packs.py` bakes
-one exposure LUT per filter for each black-and-white film.
+rotated a quarter turn, calibrated on their own labels; for colour film, Kodak's
+upright sheets for the 81 and 85 series, each filter the polyline in its own
+colour, and Tiffen's catalogue for the 812. `bake_packs.py` bakes one exposure
+LUT per filter for each film.
 
 Ilford gives its spectral data as a "wedge spectrogram to tungsten light" on an
 unlabelled scale. Read literally as tungsten-weighted, HP5 Plus would need a
@@ -1299,6 +1524,7 @@ pip install --no-deps -e /path/to/spektrafilm
 
 python tools/bake/build_profiles.py   # -> profiles/  (datasheet-derived stocks)
 python tools/bake/build_bw_profiles.py  # -> profiles/  (black-and-white stocks)
+python tools/bake/build_print_profiles.py  # -> profiles/  (the motion picture print films)
 python tools/bake/bake_packs.py       # -> FLXFilmLab/Resources/packs
 python tools/bake/bake_reference.py   # -> tests/parity
 python tools/icon/make_icon.py        # -> FLXFilmLab/Resources/AppIcon.icns, and the icon's two pictures
@@ -1324,10 +1550,15 @@ tools/bake/    Python: datasheet extraction, packs, parity references
 tools/icon/    the app icon's .icns builder (the icon is all rights reserved)
 tools/render/  headless CLI renderer
 tools/lut/     flxlut: a look as a .cube for each log format the Motion mode reads
+windows/       FLX Film Lab for Windows (windows/README.md)
 tests/parity/  numeric harness
+tests/checks/  the app's defaults and invariants, which parity cannot reach
+tests/app/     the document model: open, edit, switch images
 tests/lut/     the LUT baker and the log curves
 tests/motion/  the video path, on synthetic footage in every log format
 tests/motionapp/  the grader's model: open, grade, switch, export
+tests/common/  colour helpers the suites share
+tools/ci/      how CI runs the suites
 docs/          notes: datasheets.md lists the manufacturer sheets, images/ the screenshots
 ```
 

@@ -134,6 +134,15 @@ def build_params(film: str, print_stock: str, gamut_compress: bool, scan_film: b
     # The profile the pack is baked from: this repo's own where it rebuilds one
     # (`profiles/`), as for the slide films, agx's otherwise.
     params.film = bake_packs.read_profile(film)
+    if film in stock_overrides.BAKED_FILTRATION:
+        # Printed with the filtration its pack carries, solved at bake time
+        # (`bake_packs.add_baked_filtration`) where agx's table holds another.
+        import print_neutral
+        m, y = print_neutral.neutral_filters(params.film, print_stock)
+        params.settings.neutral_print_filters_from_database = False
+        params.enlarger.c_filter_neutral = 0.0
+        params.enlarger.m_filter_neutral = float(m)
+        params.enlarger.y_filter_neutral = float(y)
     params.io.scan_film = scan_film
     params.io.input_color_space = WORKING_COLOR_SPACE
     params.io.input_cctf_decoding = False

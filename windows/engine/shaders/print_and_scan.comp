@@ -1,0 +1,221 @@
+#version 440
+// printing.expose + printing.develop + scanning.scan, fused, as in
+// flx.metal print_and_scan: all three are per pixel, so the tone controls
+// between them need no round trip through memory.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2D cmyFilm;
+layout(binding = 1, rgba32f) uniform writeonly image2D dst;
+layout(binding = 2) uniform sampler2D toneLut;
+layout(binding = 3) uniform sampler2D dodgeBurn;   // linear, clamped to the edge
+layout(std430, binding = 4) readonly buffer Tables {
+    float tables[];        // the packed spectral tables (Constants.swift offsets)
+};
+layout(std140, binding = 5) uniform PrintUniforms {
+    vec4 xyzToRGB0;        // columns: XYZ under the viewing illuminant -> output RGB
+    vec4 xyzToRGB1;
+    vec4 xyzToRGB2;
+    vec4 exposureFactorMidgray;
+    vec4 preflashRaw;
+    vec4 exposure;         // printExposure, cmfNormalization, toneLogE0, toneLogEStep
+    vec4 grades;           // gradeSpanMin, gradeSpanMax, glareAmount, toneShiftMax
+    vec4 illuminantXYZ;
+    vec4 gamut;            // threshold, limit, power
+    ivec4 flags;           // toneLutWidth, hasDodgeBurn, gamutCompress, scanFilm
+    ivec4 flags2;          // toneShiftCount
+    vec4 gamutRGBToLMS0;   // output RGB <-> Oklab LMS, for the gamut compression
+    vec4 gamutRGBToLMS1;
+    vec4 gamutRGBToLMS2;
+    vec4 gamutLMSToRGB0;
+    vec4 gamutLMSToRGB1;
+    vec4 gamutLMSToRGB2;
+} u;
+layout(std430, binding = 6) readonly buffer ToneShift {
+    float toneShift[];     // Brightness / Shadows / Highlights by mean density
+};
+layout(std140, binding = 7) uniform Shape {
+    vec4 columns;          // column0.xy, column1.xy: a print pixel's position to the frame's
+    vec4 offsetSize;       // offset.xy, sourceSize.xy
+    ivec4 shaped;          // x: 1 when the print is turned, levelled or cropped
+} shape;
+
+const int NW = 81;
+const int OFF_FILM_CHANNEL_DENSITY = 0;
+const int OFF_FILM_BASE_DENSITY = 243;
+const int OFF_FILM_VALID = 324;
+const int OFF_PRINT_ILLUMINANT = 405;
+const int OFF_PAPER_SENSITIVITY = 486;
+const int OFF_PRINT_CHANNEL_DENSITY = 729;
+const int OFF_PRINT_BASE_DENSITY = 972;
+const int OFF_PRINT_VALID = 1053;
+const int OFF_VIEWING_ILLUMINANT = 1134;
+const int OFF_CMFS = 1215;
+
+// 10^x and log10, which GLSL lacks
+float exp10f(float x) { return exp2(x * 3.32192809488736235); }
+vec3 log10v(vec3 x) { return log2(x) * 0.30102999566398120; }
+
+// agx utils/gamut_compression.reinhard_knee
+float reinhardKnee(float d, float threshold, float limit, float power)
+{
+    if (d <= threshold) return d;
+    float s = limit - threshold;
+    if (s <= 0.0) return d;
+    float n = (d - threshold) / s;
+    return threshold + s * n / pow(1.0 + pow(n, power), 1.0 / power);
+}
+
+// Oklab's nonlinear stage: cube-rooted LMS <-> Lab (Ottosson's M2 and inverse).
+vec3 lmsToOklab(vec3 lms)
+{
+    vec3 c = sign(lms) * pow(abs(lms), vec3(1.0 / 3.0));
+    return vec3(0.2104542553 * c.x + 0.7936177850 * c.y - 0.0040720468 * c.z,
+                1.9779984951 * c.x - 2.4285922050 * c.y + 0.4505937099 * c.z,
+                0.0259040371 * c.x + 0.7827717662 * c.y - 0.8086757660 * c.z);
+}
+
+vec3 oklabToLMS(vec3 lab)
+{
+    vec3 c = vec3(lab.x + 0.3963377774 * lab.y + 0.2158037573 * lab.z,
+                  lab.x - 0.1055613458 * lab.y - 0.0638541728 * lab.z,
+                  lab.x - 0.0894841775 * lab.y - 1.2914855480 * lab.z);
+    return c * c * c;
+}
+
+bool inOutputGamut(float L, vec2 ab, mat3 lmsToRGB)
+{
+    vec3 rgb = lmsToRGB * oklabToLMS(vec3(L, ab));
+    return all(greaterThanEqual(rgb, vec3(-1e-6))) && all(lessThanEqual(rgb, vec3(1.0 + 1e-6)));
+}
+
+// agx utils/gamut_compression.compress_rgb_oklch_chroma: chroma as a fraction
+// of the most the output space holds at this lightness and hue, through the
+// knee, lightness and hue held; the boundary found per pixel by bisection.
+vec3 compressGamut(vec3 rgb)
+{
+    if (u.flags.z == 0) return rgb;
+    mat3 rgbToLMS = mat3(u.gamutRGBToLMS0.xyz, u.gamutRGBToLMS1.xyz, u.gamutRGBToLMS2.xyz);
+    mat3 lmsToRGB = mat3(u.gamutLMSToRGB0.xyz, u.gamutLMSToRGB1.xyz, u.gamutLMSToRGB2.xyz);
+    vec3 lab = lmsToOklab(rgbToLMS * rgb);
+    float L = lab.x;
+    if (L <= 0.0) return vec3(0.0);
+    float chroma = length(lab.yz);
+    if (chroma <= 1e-7) return clamp(rgb, 0.0, 1.0);
+    vec2 hue = lab.yz / chroma;
+
+    float Lb = min(L, 1.0);                         // at L >= 1 only white fits
+    float lo = 0.0, hi = 1.0;
+    for (int i = 0; i < 20; ++i) {
+        float mid = 0.5 * (lo + hi);
+        if (inOutputGamut(Lb, hue * mid, lmsToRGB)) lo = mid; else hi = mid;
+    }
+    float cMax = max(lo, 1e-9);
+    float d = chroma / cMax;
+    float dCompressed = reinhardKnee(d, u.gamut.x, u.gamut.y, u.gamut.z);
+    if (dCompressed >= d && L <= 1.0) return rgb;
+    return lmsToRGB * oklabToLMS(vec3(Lb, hue * dCompressed * cMax));
+}
+
+void main()
+{
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(dst);
+    if (gid.x >= size.x || gid.y >= size.y) return;
+
+    vec3 cmy = texelFetch(cmyFilm, gid, 0).rgb;
+
+    // The dodge & burn map is drawn on the frame, so a shaped print finds it
+    // through its shape; sampled bilinearly.
+    vec2 db = vec2(0.0);
+    if (u.flags.y != 0) {
+        vec2 o = vec2(gid) + 0.5;
+        vec2 uv = o / vec2(size);
+        if (shape.shaped.x != 0)
+            uv = (shape.columns.xy * o.x + shape.columns.zw * o.y + shape.offsetSize.xy) / shape.offsetSize.zw;
+        db = textureLod(dodgeBurn, uv, 0.0).rg;
+    }
+    float localGrade = db.y;                          // ISO-R points
+
+    vec3 toneInput;
+    if (u.flags.w != 0) {
+        // Transparency: the developed film is the picture; the tone LUT is
+        // indexed in density, and one stop is log10(2) of it.
+        float stops = log2(max(u.exposure.x, 1e-6)) + db.x;
+        toneInput = cmy + stops * 0.30103;
+    } else {
+        // printing.expose: the 81-band integral through the negative
+        vec3 raw = vec3(0.0);
+        for (int l = 0; l < NW; ++l) {
+            if (tables[OFF_FILM_VALID + l] == 0.0) continue;   // agx zeroes non-finite transmittance
+            float dSpec = cmy.x * tables[OFF_FILM_CHANNEL_DENSITY + l * 3 + 0]
+                        + cmy.y * tables[OFF_FILM_CHANNEL_DENSITY + l * 3 + 1]
+                        + cmy.z * tables[OFF_FILM_CHANNEL_DENSITY + l * 3 + 2]
+                        + tables[OFF_FILM_BASE_DENSITY + l];
+            float light = exp10f(-dSpec) * tables[OFF_PRINT_ILLUMINANT + l];
+            raw.x += light * tables[OFF_PAPER_SENSITIVITY + l * 3 + 0];
+            raw.y += light * tables[OFF_PAPER_SENSITIVITY + l * 3 + 1];
+            raw.z += light * tables[OFF_PAPER_SENSITIVITY + l * 3 + 2];
+        }
+        raw *= u.exposureFactorMidgray.xyz;
+        raw += u.preflashRaw.xyz;
+        raw *= u.exposure.x;
+        raw *= exp2(db.x);                            // dodge & burn, in stops
+        toneInput = log10v(max(raw, 0.0) + 1e-10);
+    }
+
+    // The paper curve and tone controls, baked into a 2D transfer LUT: x the
+    // print log exposure (or density), y the local grade. Interpolated by
+    // hand, in float, as on the Mac.
+    float gradeSpan = max(u.grades.y - u.grades.x, 1e-6);
+    int lutHeight = textureSize(toneLut, 0).y;
+    int lutWidth = u.flags.x;
+    float gradePos = clamp((localGrade - u.grades.x) / gradeSpan, 0.0, 1.0) * float(lutHeight - 1);
+    int y0 = int(floor(gradePos));
+    int y1 = min(y0 + 1, lutHeight - 1);
+    float ty = gradePos - float(y0);
+
+    vec3 cmyPrint;
+    for (int c = 0; c < 3; ++c) {
+        float pos = clamp((toneInput[c] - u.exposure.z) / u.exposure.w, 0.0, float(lutWidth - 1));
+        int x0 = int(floor(pos));
+        int x1 = min(x0 + 1, lutWidth - 1);
+        float tx = pos - float(x0);
+        float v00 = texelFetch(toneLut, ivec2(x0, y0), 0)[c];
+        float v10 = texelFetch(toneLut, ivec2(x1, y0), 0)[c];
+        float v01 = texelFetch(toneLut, ivec2(x0, y1), 0)[c];
+        float v11 = texelFetch(toneLut, ivec2(x1, y1), 0)[c];
+        cmyPrint[c] = mix(mix(v00, v10, tx), mix(v01, v11, tx), ty);
+    }
+
+    // Brightness, Shadows, Highlights: one density change for all three
+    // layers, looked up by their mean, so a tone moves without its hue turning.
+    int toneShiftCount = u.flags2.x;
+    if (toneShiftCount > 1) {
+        float meanDensity = (cmyPrint.x + cmyPrint.y + cmyPrint.z) / 3.0;
+        float pos = clamp(meanDensity / u.grades.w, 0.0, 1.0) * float(toneShiftCount - 1);
+        int i0 = min(int(floor(pos)), toneShiftCount - 2);
+        float shift = mix(toneShift[i0], toneShift[i0 + 1], pos - float(i0));
+        cmyPrint = max(cmyPrint + shift, 0.0);
+    }
+
+    // scanning.scan: the print's dyes under the viewing illuminant
+    vec3 xyz = vec3(0.0);
+    for (int l = 0; l < NW; ++l) {
+        if (tables[OFF_PRINT_VALID + l] == 0.0) continue;
+        float dSpec = cmyPrint.x * tables[OFF_PRINT_CHANNEL_DENSITY + l * 3 + 0]
+                    + cmyPrint.y * tables[OFF_PRINT_CHANNEL_DENSITY + l * 3 + 1]
+                    + cmyPrint.z * tables[OFF_PRINT_CHANNEL_DENSITY + l * 3 + 2]
+                    + tables[OFF_PRINT_BASE_DENSITY + l];
+        float light = exp10f(-dSpec) * tables[OFF_VIEWING_ILLUMINANT + l];
+        xyz.x += light * tables[OFF_CMFS + l * 3 + 0];
+        xyz.y += light * tables[OFF_CMFS + l * 3 + 1];
+        xyz.z += light * tables[OFF_CMFS + l * 3 + 2];
+    }
+    xyz /= u.exposure.y;
+    if (u.grades.z > 0.0)
+        xyz += u.grades.z * u.illuminantXYZ.xyz;       // agx model/glare.add_glare, mean term
+
+    mat3 xyzToRGB = mat3(u.xyzToRGB0.xyz, u.xyzToRGB1.xyz, u.xyzToRGB2.xyz);
+    imageStore(dst, gid, vec4(compressGamut(xyzToRGB * xyz), 1.0));
+}

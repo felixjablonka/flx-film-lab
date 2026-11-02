@@ -1,0 +1,132 @@
+#version 440
+// Motion's per-frame grade (motion.metal grade_frame): the decoded frame's
+// Y'CbCr planes to the log format's code values (or, for Apple Log, its 0-1
+// signal), those through the baked print look, out as linear display light
+// with Rec.709 primaries. Smaller outputs (the preview) average a few samples
+// across the footprint rather than aliasing.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2D lumaPlane;    // R16: the file's own samples
+layout(binding = 1) uniform sampler2D cbPlane;
+layout(binding = 2) uniform sampler2D crPlane;
+layout(binding = 3) uniform sampler3D lut;          // the look, a 2.4 power on its values
+layout(binding = 4, rgba32f) uniform writeonly image2D dst;
+layout(std140, binding = 5) uniform Grade {
+    vec4 sizes;            // the luma plane's size, the chroma planes'
+    vec4 chroma;           // chroma texels per luma pixel; where chroma sample 0 sits, in luma pixels
+    vec4 levels;           // the code values of black and white luma, mid and full chroma
+    vec4 coding;           // x: samples per code value (4 where 12 bits are read as 10), y: kr, z: kb
+    ivec4 flags;           // x: full range, y: the LUT's size, z: mode, w: supersamples per axis
+    ivec4 flags2;          // x: the LUT takes the 0-1 signal (Apple Log), not code / 1023
+} u;
+
+float codeAt(sampler2D plane, ivec2 i)
+{
+    ivec2 size = textureSize(plane, 0);
+    return round(texelFetch(plane, clamp(i, ivec2(0), size - 1), 0).r * 65535.0) / u.coding.x;
+}
+
+// Bilinear by hand: a texel centre has to come back exactly for the code
+// values to be exact.
+float bilinearCode(sampler2D plane, vec2 p)
+{
+    vec2 q = p - 0.5;
+    ivec2 i0 = ivec2(floor(q));
+    vec2 f = q - vec2(i0);
+    float a = codeAt(plane, i0), b = codeAt(plane, i0 + ivec2(1, 0));
+    float c = codeAt(plane, i0 + ivec2(0, 1)), d = codeAt(plane, i0 + ivec2(1, 1));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+// 10-bit R'G'B' code values at a luma-plane position (texel space, centres at +0.5)
+vec3 codesAt(vec2 p)
+{
+    float y = bilinearCode(lumaPlane, p);
+    vec2 c = (p - 0.5 - u.chroma.zw) * u.chroma.xy + 0.5;
+    float cb = bilinearCode(cbPlane, c), cr = bilinearCode(crPlane, c);
+    float ey = (y - u.levels.x) / (u.levels.y - u.levels.x);
+    float ecb = (cb - u.levels.z) / u.levels.w;
+    float ecr = (cr - u.levels.z) / u.levels.w;
+    float kr = u.coding.y, kb = u.coding.z;
+    float r = ey + 2.0 * (1.0 - kr) * ecr;
+    float b = ey + 2.0 * (1.0 - kb) * ecb;
+    float g = (ey - kr * r - kb * b) / (1.0 - kr - kb);
+    vec3 e = vec3(r, g, b);
+    // the curves are defined on the code values the camera records, so a
+    // video-range signal keeps its 64 offset
+    return u.flags.x != 0 ? e * 1023.0 : 64.0 + 876.0 * e;
+}
+
+vec3 corner(ivec3 i, int dr, int dg, int db)
+{
+    return texelFetch(lut, i + ivec3(dr, dg, db), 0).rgb;
+}
+
+// tetrahedral interpolation, the same split as LookLUT::sample
+vec3 lookup(vec3 p, int n)
+{
+    vec3 q = clamp(p, 0.0, 1.0) * float(n - 1);
+    ivec3 i = min(ivec3(q), ivec3(n - 2));
+    vec3 f = q - vec3(i);
+    vec3 c000 = corner(i, 0, 0, 0), c111 = corner(i, 1, 1, 1);
+    if (f.x > f.y) {
+        if (f.y > f.z) {
+            vec3 c100 = corner(i, 1, 0, 0), c110 = corner(i, 1, 1, 0);
+            return c000 + f.x * (c100 - c000) + f.y * (c110 - c100) + f.z * (c111 - c110);
+        } else if (f.x > f.z) {
+            vec3 c100 = corner(i, 1, 0, 0), c101 = corner(i, 1, 0, 1);
+            return c000 + f.x * (c100 - c000) + f.z * (c101 - c100) + f.y * (c111 - c101);
+        } else {
+            vec3 c001 = corner(i, 0, 0, 1), c101 = corner(i, 1, 0, 1);
+            return c000 + f.z * (c001 - c000) + f.x * (c101 - c001) + f.y * (c111 - c101);
+        }
+    } else {
+        if (f.z > f.y) {
+            vec3 c001 = corner(i, 0, 0, 1), c011 = corner(i, 0, 1, 1);
+            return c000 + f.z * (c001 - c000) + f.y * (c011 - c001) + f.x * (c111 - c011);
+        } else if (f.z > f.x) {
+            vec3 c010 = corner(i, 0, 1, 0), c011 = corner(i, 0, 1, 1);
+            return c000 + f.y * (c010 - c000) + f.z * (c011 - c010) + f.x * (c111 - c011);
+        } else {
+            vec3 c010 = corner(i, 0, 1, 0), c110 = corner(i, 1, 1, 0);
+            return c000 + f.y * (c010 - c000) + f.x * (c110 - c010) + f.z * (c111 - c110);
+        }
+    }
+}
+
+void main()
+{
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(dst);
+    if (gid.x >= size.x || gid.y >= size.y) return;
+    vec2 scale = u.sizes.xy / vec2(size);
+    int taps = max(u.flags.w, 1);
+    vec3 code = vec3(0.0);
+    for (int j = 0; j < taps; ++j)
+        for (int i = 0; i < taps; ++i)
+            code += codesAt((vec2(gid) + (vec2(i, j) + 0.5) / float(taps)) * scale);
+    code /= float(taps * taps);
+    vec3 nc = code / 1023.0;
+    vec3 rgb;
+    if (u.flags.z == 2) {
+        rgb = nc;
+    } else if (u.flags.z == 1) {
+        // the untouched log footage as QuickTime shows a log file tagged
+        // BT.2020 / Rec.709: a 1.961 power on the video-range signal, BT.2020
+        // primaries taken to Rec.709
+        vec3 e = clamp((code - 64.0) / 876.0, 0.0, 1.0);
+        vec3 l = pow(e, vec3(1.961));
+        rgb = vec3( 1.660491 * l.r - 0.587641 * l.g - 0.072850 * l.b,
+                   -0.124550 * l.r + 1.132900 * l.g - 0.008349 * l.b,
+                   -0.018151 * l.r - 0.100579 * l.g + 1.118730 * l.b);
+        rgb = clamp(rgb, 0.0, 1.0);
+    } else {
+        // the LUT is encoded with a 2.4 power, which interpolates evenly
+        // across the tonal scale; Apple Log is defined on the signal once the
+        // levels are out
+        vec3 lutIn = (u.flags2.x != 0 && u.flags.x == 0) ? (code - 64.0) / 876.0 : nc;
+        rgb = pow(max(lookup(lutIn, u.flags.y), 0.0), vec3(2.4));
+    }
+    imageStore(dst, gid, vec4(rgb, 1.0));
+}

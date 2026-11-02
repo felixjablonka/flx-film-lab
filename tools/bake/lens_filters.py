@@ -1,5 +1,6 @@
 """Camera filters: for black-and-white film, read off Kodak's Wratten 2 sheets;
-for slide film, Tiffen's warming filters, read off Tiffen's catalogue.
+for colour film, Kodak's Wratten 2 81C, 85 and 85B, read off Kodak's sheets for
+their series, and Tiffen's own 812, read off Tiffen's catalogue.
 
 Kodak publishes each Wratten 2 filter's diffuse density from 300 to 900 nm as a
 vector plot (kodak.com, "KODAK WRATTEN 2 Filters"). The sheets are stored
@@ -8,12 +9,25 @@ so each axis is calibrated on its own printed labels. Where a curve leaves the
 plot above its top (density 3.0 and more), it is held there: a transmittance
 under 0.1% is nothing a film can see next to the passband.
 
-Tiffen's *Filter Specifications* catalogue charts each filter's transmittance
-from 360 to 700 nm, also as vectors: the 81 series on page 13 (the PDF's 7th
-page), the 812 on page 16 (its 9th). Each curve is drawn as a chain of small
-filled pieces in the curve's own colour, so a curve is read as the centres of
-its pieces, and the axes are calibrated on the chart's own labels. Past
-700 nm, where the charts stop, the last value holds.
+Kodak's sheets for a series (81, 85) chart each filter's diffuse density from
+400 to 700 nm upright, as vector polylines in the curve's own colour and dash,
+on a density scale (the 85 series' at the right, its transmittance scale at
+the left); each axis is calibrated on its own labels, and past the plot's ends
+the end values hold.
+
+Tiffen's *Filter Specifications* catalogue charts each filter's measured
+transmittance from 360 to 700 nm, also as vectors: the 81 series on page 13
+(the PDF's 7th page), the 812 on page 16 (its 9th), the 85 series on page 11
+(its 6th, which charts the 80 series too, so a chart there is picked by its
+title). Each curve is drawn as a chain of small filled pieces in the curve's
+own colour, which its label on the chart shares, so a curve is read as the
+centres of its pieces, and the axes are calibrated on the chart's own labels.
+Past 700 nm, where the charts stop, the last value holds.
+
+A filter is applied as what it is, a spectral transmittance: the film's own
+spectral sensitivities, wavelength by wavelength, times the filter's
+(`bake_packs.bake_lens_filters`), so each layer sees the scene's light
+through it as the film would on the camera.
 """
 
 from __future__ import annotations
@@ -61,17 +75,51 @@ class WarmingFilter:
     name: str        # what the inspector shows
     page: int        # the chart's page in Tiffen's catalogue, counted from 0
     colour: tuple    # the curve's colour on that chart
+    chart: str | None = None    # the chart's title, where its page has more than one
+    # The light it is made for, under which its filter factor and the print
+    # time are set: daylight for a conversion filter, which goes on a tungsten
+    # film outdoors; else the film's own light.
+    light: str | None = None
     wratten = None
 
     def transmittance(self) -> np.ndarray:
         return warming_transmittance(self)
 
 
-# Tiffen's 81C (FS 1/3) and its own 812 warming filter (FS 1/3), for slide
-# film. The 81C's curve is the teal one of the four on its chart.
+@dataclass(frozen=True)
+class SeriesFilter:
+    """A colour film's filter off one of Kodak's Wratten 2 sheets for a series."""
+    id: str          # what the recipe stores
+    name: str        # what the inspector shows
+    series: str      # the sheet's series, "81" or "85"
+    colour: tuple    # the curve's stroke colour on that sheet
+    light: str | None = None    # as `WarmingFilter.light`
+    wratten = None   # the name says it; the field marks a black-and-white filter
+
+    @property
+    def sheet(self) -> Path:
+        return SHEETS / f"Kodak Wratten 2 Filters {self.series} Series.pdf"
+
+    def transmittance(self) -> np.ndarray:
+        return series_transmittance(self)
+
+
+# For colour film (Felix's pick: the filters that are typically used). Kodak's
+# Wratten 81C warming filter, for slide film's cool shade, overcast and flash,
+# and its conversion filters 85 and 85B, which balance daylight for tungsten
+# film, 5500 to 3400 K and to 3200 K: the 85 is what Kodak's motion picture
+# sheets name for its tungsten stocks in daylight (EI 125 for EXR 200T), the
+# 85B the classic filter for a 3200 K stock outdoors. On a daylight film either
+# warms strongly. And Tiffen's own 812 ("FS 1/3"), which Kodak does not make.
+# The 81C's curve is the green one of the six on its sheet; the 85's the black
+# and the 85B's the dotted blue of the six on theirs. The 85 and 85B take their
+# factor in daylight: in a tungsten film's own light an 85B cuts more, and a
+# factor and print time set there left a daylight frame a third of a stop light.
 WARMING = (
-    WarmingFilter("81c", "Tiffen 81C", 6, (0.05, 0.67, 0.53)),
+    SeriesFilter("81c", "Wratten 81C", "81", (0.0, 0.69, 0.314)),
     WarmingFilter("812", "Tiffen 812", 8, (0.19, 0.2, 0.54)),
+    SeriesFilter("85", "Wratten 85", "85", (0.0, 0.0, 0.0), light="D55"),
+    SeriesFilter("85b", "Wratten 85B", "85", (0.0, 0.439, 0.753), light="D55"),
 )
 TIFFEN = SHEETS / "Tiffen Filter Specifications.pdf"
 _CHART_FRAME = (0.58, 0.59, 0.6)
@@ -85,8 +133,17 @@ def warming_transmittance(warming: WarmingFilter) -> np.ndarray:
     """A Tiffen filter's transmittance on the 380-780 nm, 5 nm grid."""
     page = pymupdf.open(str(TIFFEN))[warming.page]
     drawings = page.get_drawings()
-    frame = max((d["rect"] for d in drawings if _close(d.get("color"), _CHART_FRAME)),
-                key=lambda r: r.width * r.height)
+    frames = [d["rect"] for d in drawings if _close(d.get("color"), _CHART_FRAME)]
+    if warming.chart is None:
+        frame = max(frames, key=lambda r: r.width * r.height)
+    else:
+        # the frame whose top the chart's title sits on
+        words = page.get_text("words")
+        first, *rest = warming.chart.split()
+        titles = [pymupdf.Rect(w[:4]) for i, w in enumerate(words)
+                  if w[4] == first and [x[4] for x in words[i + 1:i + 1 + len(rest)]] == rest]
+        frame = min(((f, t) for f in frames for t in titles if f.x0 < (t.x0 + t.x1) / 2 < f.x1),
+                    key=lambda ft: abs(ft[0].y0 - ft[1].y1))[0]
     wavelength_labels, percent_labels = [], []
     for w in page.get_text("words"):
         try:
@@ -114,6 +171,35 @@ def warming_transmittance(warming: WarmingFilter) -> np.ndarray:
     nm = k_nm * centres[:, 0] + b_nm
     percent = k_t * centres[:, 1] + b_t
     return np.clip(np.interp(WAVELENGTHS, nm, percent) / 100, 0.0, 1.0)
+
+
+def series_transmittance(series_filter: SeriesFilter) -> np.ndarray:
+    """A filter's transmittance on the 380-780 nm, 5 nm grid, off its series' sheet."""
+    page = pymupdf.open(str(series_filter.sheet))[0]
+    wavelength_labels, density_labels = [], []
+    for w in page.get_text("words"):
+        try:
+            value = float(w[4])
+        except ValueError:
+            continue
+        cx, cy = (w[0] + w[2]) / 2, (w[1] + w[3]) / 2
+        if 300 <= value <= 800:
+            wavelength_labels.append((cx, value))
+        elif value <= 10:           # the series' own numbers, 81 and 85, are neither
+            density_labels.append((cy, value))
+    k_nm, b_nm = np.polyfit(*zip(*wavelength_labels), 1)
+    k_d, b_d = np.polyfit(*zip(*density_labels), 1)
+    # The curve, not its sample in the legend: the longest polyline in its colour.
+    curves = [d for d in page.get_drawings()
+              if d.get("color") is not None and _close(d["color"], series_filter.colour, 0.01)
+              and (d.get("width") or 0) > 1.5]
+    if not curves:
+        raise ValueError(f"no {series_filter.name} curve on {series_filter.sheet.name}")
+    segments = [i for i in max(curves, key=lambda d: len(d["items"]))["items"] if i[0] in ("l", "c")]
+    poly = ds._flatten_path(segments)
+    nm, density = k_nm * poly[:, 0] + b_nm, k_d * poly[:, 1] + b_d
+    order = np.argsort(nm)
+    return np.clip(10 ** (-np.interp(WAVELENGTHS, nm[order], density[order])), 0.0, 1.0)
 
 
 def transmittance(lens_filter: LensFilter) -> np.ndarray:

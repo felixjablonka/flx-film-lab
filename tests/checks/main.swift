@@ -826,43 +826,98 @@ do {
     renderer.setImage(greyWedge(stops), width: stops.count, height: 1)
 }
 
-print("slides take Tiffen's warming filters")
+print("colour films take warming and conversion filters")
 do {
-    // Tiffen's 81C and 812, read off its catalogue's transmission curves. One
-    // filter factor opens up for the green-sensitive layer, so a grey card
-    // keeps its lightness while it warms: the 81C a plain amber, the 812 with
-    // half the yellow and nearer pink, as the two look on film. Tiffen rounds
-    // both factors to a third of a stop; its curves pass about two thirds of
-    // the green, half a stop.
+    // Kodak's Wratten 81C, 85 and 85B and Tiffen's 812, read off their
+    // makers' transmission curves, on every colour film. One filter factor
+    // opens up for the green-sensitive layer: the 81C and 812 by about half a
+    // stop (each is rated a third), the 85 and 85B, which pass under half the
+    // green, by about one (their rated two thirds is a meter's reading).
+    let colour = PackLibrary.shared.filmStocks.filter { $0.channelModel != "bw" }.map(\.stock)
+    for film in colour {
+        let filters = try PackLibrary.shared.pack(film).lensFilters ?? []
+        let opened = Dictionary(uniqueKeysWithValues: filters.map { ($0.id, log2($0.factor)) })
+        let warming = ["81c", "812"].allSatisfy { (0.3...0.7).contains(opened[$0] ?? 0) }
+        let conversion = ["85", "85b"].allSatisfy { (0.7...1.4).contains(opened[$0] ?? 0) }
+        check(filters.map(\.id) == ["81c", "812", "85", "85b"] && warming && conversion,
+              String(format: "%@: %@, opened %@ stops", film, filters.map(\.name).joined(separator: ", "),
+                     filters.map { String(format: "%.2f", log2($0.factor)) }.joined(separator: ", ")))
+    }
+
+    // On a slide a grey card keeps its lightness while it warms: the 81C a
+    // plain amber, the 812 with half the yellow and nearer pink, as the two
+    // look on film.
     let slides = PackLibrary.shared.filmStocks.filter { $0.type == "positive" }.map(\.stock)
     let g = RenderSetupBuilder.midgrayValue
     renderer.setImage([g, g, g, 1], width: 1, height: 1)
     func hue(_ c: SIMD3<Float>) -> Float { atan2(c.z, c.y) * 180 / .pi }
     for film in slides {
-        let filters = try PackLibrary.shared.pack(film).lensFilters ?? []
         var r = try baseRecipe(film: film)
         let plain = lab(try render(renderer, r)[0])
         var casts: [String: SIMD3<Float>] = [:]
-        for f in filters {
-            r.lensFilter = f.id
-            casts[f.id] = lab(try render(renderer, r)[0]) - plain
+        for f in ["81c", "812"] {
+            r.lensFilter = f
+            casts[f] = lab(try render(renderer, r)[0]) - plain
         }
         let amber = casts["81c"] ?? .zero, pinker = casts["812"] ?? .zero
-        let opened = filters.map { log2($0.factor) }
-        check(filters.map(\.id) == ["81c", "812"] && opened.allSatisfy { $0 > 0.3 && $0 < 0.7 }
-              && abs(amber.x) < 2 && abs(pinker.x) < 2 && amber.z > 7 && pinker.z > 3 && pinker.z < amber.z
+        check(abs(amber.x) < 2 && abs(pinker.x) < 2 && amber.z > 7 && pinker.z > 3 && pinker.z < amber.z
               && hue(amber) > hue(pinker) + 5,
-              String(format: "%@: a grey through the 81C a* %+.1f b* %+.1f, through the 812 a* %+.1f b* %+.1f, %.0f° nearer pink; L* within %.1f, opened %.2f and %.2f stops",
+              String(format: "%@: a grey through the 81C a* %+.1f b* %+.1f, through the 812 a* %+.1f b* %+.1f, %.0f° nearer pink; L* within %.1f",
                      film, amber.y, amber.z, pinker.y, pinker.z, hue(amber) - hue(pinker),
-                     max(abs(amber.x), abs(pinker.x)), opened.first ?? 0, opened.last ?? 0))
+                     max(abs(amber.x), abs(pinker.x))))
+    }
+
+    // A tungsten film, balanced for a 3200 K lamp, prints daylight blue. The 85
+    // and 85B cut the blue and some of the green before the film's layers see
+    // them: rated 5500 K to 3400 K and to 3200 K, as Kodak measures them to
+    // about 3300 K and 2800 K. Through the 85B a daylight grey then prints warm,
+    // through the 85 (Kodak's pick for these stocks) cool, and on the VISION3
+    // stocks nearer neutral; what remains a lab takes out in printing. Their
+    // factor and the print time are set in daylight, so through the 85B the
+    // daylight grey prints about as light as the film prints a grey in its own
+    // light: set in the film's own light it printed 5 to 7 L* light. (As the
+    // print time balances the three layers' exposure, not lightness, the 85B's
+    // warmth leaves it a little lighter, the 85's coolness a little darker.)
+    // A daylight grey as Film reference
+    // presents it to a tungsten film is D55 read against the film's own light:
+    // its XYZ through the film's RGB-to-XYZ, inverted.
+    let tungsten = PackLibrary.shared.filmStocks
+        .filter { $0.channelModel != "bw" && (try? PackLibrary.shared.pack($0.stock).referenceIlluminant) == "BB3200" }
+        .map(\.stock)
+    check(Set(tungsten) == ["kodak_vision3_200t", "kodak_vision3_500t", "kodak_exr_200t", "fujifilm_eterna_500t",
+                            "fujifilm_eterna_vivid_160t", "kodak_5251_50t"],
+          "the tungsten stocks are balanced for a 3200 K lamp, as their sheets are: " + tungsten.sorted().joined(separator: ", "))
+    // A light the decode did not know would decode as D55, its default.
+    let lights = Set(PackLibrary.shared.filmStocks.compactMap { try? PackLibrary.shared.pack($0.stock).referenceIlluminant })
+    check(lights.allSatisfy { $0 == "D55" || RawLoader.referenceChromaticity($0) != nil || RawLoader.referenceTemperature($0) != 5503 },
+          "every film's light is one Film reference decodes for: " + lights.sorted().joined(separator: ", "))
+    for film in tungsten {
+        var r = try baseRecipe(film: film)
+        renderer.setImage([g, g, g, 1], width: 1, height: 1)
+        let balanced = lab(try render(renderer, r)[0])
+        let x: Float = 0.33242, y: Float = 0.34743
+        let blue = try PackLibrary.shared.pack(film).rgbToXYZMatrix.inverse * (SIMD3(x / y, 1, (1 - x - y) / y) * g)
+        renderer.setImage([blue.x, blue.y, blue.z, 1], width: 1, height: 1)
+        let bare = lab(try render(renderer, r)[0]) - balanced
+        r.lensFilter = "85b"
+        let b85b = lab(try render(renderer, r)[0]) - balanced
+        r.lensFilter = "85"
+        let b85 = lab(try render(renderer, r)[0]) - balanced
+        let cast = { (c: SIMD3<Float>) in (c.y * c.y + c.z * c.z).squareRoot() }
+        let tinted = bare.z < -10 && b85b.z > 2 && b85.z < 0 && max(cast(b85b), cast(b85)) < 0.7 * cast(bare)
+        let asLight = abs(b85b.x) < 2.5
+        check(tinted && asLight,
+              String(format: "%@ in daylight: a* %+.1f b* %+.1f bare, a* %+.1f b* %+.1f L* %+.1f through the 85B, a* %+.1f b* %+.1f L* %+.1f through the 85, against its own light",
+                     film, bare.y, bare.z, b85b.y, b85b.z, b85b.x, b85.y, b85.z, b85.x))
     }
     renderer.setImage(greyWedge(stops), width: stops.count, height: 1)
 }
 
-print("slides, and Vericolor III, are as sharp as their sheets, and grey")
+print("slides, and the negatives whose sheets plot an MTF, are as sharp as their sheets, and grey")
 // Each slide's scatter and spreading inhibition are fitted to its datasheet's
-// MTF (tools/bake/slide_mtf.py), and so are Vericolor III's, the one colour
-// negative whose sheet plots one, one stop under mid-grey: the green layer's
+// MTF (tools/bake/slide_mtf.py), and so are those of the colour negatives
+// whose sheets plot one (Vericolor III, EXR 50D and 200T), one stop under
+// mid-grey: the green layer's
 // density modulation for a small sinusoidal exposure against a large-area
 // step of the same size. Deeper down the edge effect must not run away — on
 // agx's couplers Provia 400X read 200% at 10 cycles/mm two stops down — and
@@ -875,6 +930,9 @@ do {
         ("kodak_ektachrome_100", [97, 91, 81, 63]), ("kodak_kodachrome_25", [131, 138, 110, 79]),
         ("kodak_kodachrome_64", [119, 123, 93, 69]), ("kodak_kodachrome_200", [119, 123, 93, 69]),
         ("kodak_vericolor_iii_160", [114, 114, 95, 76]),
+        ("kodak_exr_50d", [103, 106, 102, 93]), ("kodak_exr_200t", [106, 109, 109, 92]),
+        // the BBC's film-only measurement, one curve for the film (kodak_1962_sheets.negative_mtf)
+        ("kodak_5251_50t", [93, 85, 58, 35]),
     ]
     let frequencies = [5.0, 10, 20, 30]
     let side = 6048, rows = 8, m = 0.02
@@ -919,13 +977,36 @@ do {
     let wedge: [Float] = [-3, -2, -1, 0, 1, 2]
     renderer.setImage(greyWedge(wedge), width: wedge.count, height: 1)
     // Astia 100F's sheet draws green 0.03-0.07 below red where the density is
-    // 2 to 3, and three stops down its grey views a* -3.1 as drawn.
-    let drawn: [String: Float] = ["fujifilm_astia_100f": 3.5]
+    // 2 to 3, and three stops down its grey views a* -3.1 as drawn. A motion
+    // picture print film runs a little off grey at its ends in agx's model
+    // (VISION3's greys reach b* +5 two stops over on 2383, +8.6 on F-CP 3519,
+    // whose curves print highlights warmer): EXR's go at most 1.5 further from
+    // grey on their own print film, F-CP 3519, than agx's own VISION3 of the
+    // same balance prints on it (EXR 200T b* 9.7, VISION3 200T 8.6). Kisner's
+    // paper draws 5251's blue layer steeper than its green and red where
+    // mid-grey prints (0.59 a decade against 0.56 and 0.54; 1962, Fig. 2), and
+    // on its own print film, 5385, its grey runs b* -4.1 a stop over mid-grey
+    // as drawn (on 2383 within VISION3 200T's own, |a*| 5.0 and |b*| 6.1
+    // against 5.2 and 5.3).
+    let drawn: [String: Float] = ["fujifilm_astia_100f": 3.5, "kodak_5251_50t": 4.5]
+    let sister = ["kodak_exr_50d": "kodak_vision3_50d", "kodak_exr_200t": "kodak_vision3_200t"]
+    func worst(_ film: String, on paper: String? = nil) throws -> (a: Float, b: Float) {
+        var r = try baseRecipe(film: film)
+        if let paper { r.printStock = paper }
+        let out = try render(renderer, r).map(lab)
+        return (out.map { abs($0.y) }.max() ?? .infinity, out.map { abs($0.z) }.max() ?? .infinity)
+    }
     for (film, _) in sheets {
-        let out = try render(renderer, try baseRecipe(film: film)).map(lab)
-        let a = out.map { abs($0.y) }.max() ?? .infinity, b = out.map { abs($0.z) }.max() ?? .infinity
-        let limit = drawn[film] ?? 3
-        check(a < limit && b < limit, String(format: "%@: grey from -3 to +2 stops within |a*| %.1f |b*| %.1f", film, a, b))
+        let (a, b) = try worst(film)
+        var limitA = drawn[film] ?? 3, limitB = drawn[film] ?? 3
+        if let s = sister[film] {
+            let v = try worst(s, on: try PackLibrary.shared.pack(film).targetPrint)
+            limitA = max(limitA, v.a + 1.5)
+            limitB = max(limitB, v.b + 1.5)
+        }
+        check(a < limitA && b < limitB,
+              String(format: "%@: grey from -3 to +2 stops within |a*| %.1f |b*| %.1f%@", film, a, b,
+                     sister[film].map { String(format: " (%@'s limits %.1f, %.1f)", $0, limitA, limitB) } ?? ""))
     }
     renderer.setImage(greyWedge(stops), width: stops.count, height: 1)
 }
@@ -961,6 +1042,55 @@ do {
         check(abs(grey.y) < 1 && abs(grey.z) < 1,
               String(format: "harman_phoenix_200 on %@: mid-grey a* %+.1f b* %+.1f", entry.stock, grey.y, grey.z))
     }
+    renderer.setImage(greyWedge(stops), width: stops.count, height: 1)
+}
+
+print("the motion picture print films built here print any negative's greys; Fujifilm's less chroma than 2383")
+// F-CP 3519, F-CP 3510 and ETERNA-CP 3513DI, built from their own sheets, and
+// Kodak's 5385 of 1962, from the paper that introduced it
+// (tools/bake/build_print_profiles.py), placed as agx places 2383, print a
+// full grey range with mid-grey neutral by the engine's own solve. Fujifilm's
+// dyes absorb more outside their bands than 2383's, so the same negative
+// prints with less chroma: 0.8-0.9 of 2383's on these patches.
+do {
+    let prints = ["fujifilm_fcp_3519", "fujifilm_fcp_3510", "fujifilm_eterna_cp_3513di"]
+    let wedge: [Float] = [-3, -2, -1, 0, 1, 2]
+    renderer.setImage(greyWedge(wedge), width: wedge.count, height: 1)
+    for paper in prints + ["kodak_5385"] {
+        let entry = PackLibrary.shared.printStocks.first { $0.stock == paper }
+        check(entry?.isMotionPicture == true, "\(paper) is a motion picture print stock")
+        for film in ["kodak_vision3_250d", "kodak_vision3_500t", "fujifilm_eterna_500t", "kodak_exr_200t",
+                     "kodak_5251_50t"] {
+            var r = try baseRecipe(film: film)
+            r.printStock = paper
+            let out = try render(renderer, r).map(lab)
+            let rising = zip(out, out.dropFirst()).allSatisfy { $0.x < $1.x }
+            check(rising && out[0].x < 15 && out[5].x > 72 && abs(out[3].y) < 1 && abs(out[3].z) < 1,
+                  String(format: "%@ on %@: L* %.0f to %.0f from -3 to +2 stops, mid-grey a* %+.1f b* %+.1f",
+                         film, paper, out[0].x, out[5].x, out[3].y, out[3].z))
+        }
+    }
+    // Skin, sky, foliage, and a red, green and blue, in the working space.
+    let colours: [SIMD3<Float>] = [SIMD3(0.40, 0.25, 0.18), SIMD3(0.15, 0.22, 0.35), SIMD3(0.10, 0.17, 0.06),
+                                   SIMD3(0.42, 0.08, 0.06), SIMD3(0.08, 0.30, 0.10), SIMD3(0.06, 0.08, 0.35)]
+    var px = [Float]()
+    for c in colours { px += [c.x, c.y, c.z, 1] }
+    renderer.setImage(px, width: colours.count, height: 1)
+    func chroma(_ paper: String) throws -> Float {
+        var r = try baseRecipe(film: "kodak_vision3_250d")
+        r.printStock = paper
+        let out = try render(renderer, r).map(lab)
+        return out.map { hypot($0.y, $0.z) }.reduce(0, +) / Float(out.count)
+    }
+    let kodak = try chroma("kodak_2383")
+    for paper in prints {
+        let ratio = try chroma(paper) / kodak
+        check(ratio > 0.75 && ratio < 0.95,
+              String(format: "Vision3 250D on %@: %.2f of the chroma it prints on 2383", paper, ratio))
+    }
+    let ratio5385 = try chroma("kodak_5385") / kodak
+    check(ratio5385 > 0.6 && ratio5385 < 1.3,
+          String(format: "Vision3 250D on kodak_5385: %.2f of the chroma it prints on 2383", ratio5385))
     renderer.setImage(greyWedge(stops), width: stops.count, height: 1)
 }
 
@@ -1056,7 +1186,7 @@ do {
     }
 }
 
-print("daylight white balances are the CIE daylights, not lamps of the same temperature")
+print("daylight white balances are the CIE daylights, and 3200 K the Planckian 3200 K")
 // Core Image reads a temperature with tint 0 as a blackbody, and puts D55 and
 // D65 at tint +10. Balanced for "5503 K", a daylight frame decoded green-yellow
 // (a* -1.9, b* +1.5 on a mid-grey). Each mode is compared with the same frame
@@ -1075,9 +1205,16 @@ do {
             }
             return sum / max(n, 1)
         }
-        for (mode, label, temperature, tint) in [(RawLoader.WhiteBalance.filmReference, "Film reference (D55)", 5501.0, 10.01),
-                                                 (.daylight, "Daylight (D65)", 6503.0, 9.79)] {
-            let decoded = try RawLoader.load(url: sample, options: RawLoader.Options(whiteBalance: mode, filmReference: "D55",
+        for (mode, light, label, temperature, tint) in [
+            (RawLoader.WhiteBalance.filmReference, "D55", "Film reference (D55)", 5501.0, 10.01),
+            (.daylightD55, "D55", "Daylight D55", 5501.0, 10.01),
+            (.daylight, "D55", "Daylight D65", 6503.0, 9.79),
+            // The tungsten stocks' 3200 K lamp, the Planckian 3200 K: Core Image's
+            // own 3200 K at tint 0 is 14 K off it.
+            (.filmReference, "BB3200", "Film reference (3200 K tungsten)", 3186.0, -0.39),
+            (.tungsten3200, "D55", "Tungsten 3200 K", 3186.0, -0.39),
+        ] {
+            let decoded = try RawLoader.load(url: sample, options: RawLoader.Options(whiteBalance: mode, filmReference: light,
                                                                                       maxDimension: 600))
             let reference = try RawLoader.load(url: sample, options: RawLoader.Options(whiteBalance: .custom, temperature: temperature,
                                                                                         tint: tint, maxDimension: 600))

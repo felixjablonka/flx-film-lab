@@ -1,0 +1,32 @@
+#version 440
+// The cloud filter's second pass, laid on the negative: the clean density
+// plus the first layer's grain, then each further layer's added in place.
+// flx.metal grain_convolve_add.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2D src;
+layout(binding = 1) uniform sampler2D clean;
+layout(binding = 2, rgba32f) uniform image2D grainy;
+layout(std430, binding = 3) readonly buffer Weights {
+    vec4 weights[];
+};
+layout(std140, binding = 4) uniform Convolve {
+    ivec4 params;          // x: radius, y: axis, z: 1 for the first layer
+} u;
+
+void main()
+{
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(grainy);
+    if (gid.x >= size.x || gid.y >= size.y) return;
+    int radius = u.params.x;
+    ivec2 step = u.params.y == 0 ? ivec2(1, 0) : ivec2(0, 1);
+    vec4 sum = vec4(0.0);
+    for (int i = -radius; i <= radius; ++i) {
+        ivec2 p = clamp(gid + step * i, ivec2(0), size - 1);
+        sum += weights[i + radius] * texelFetch(src, p, 0);
+    }
+    vec3 base = u.params.z != 0 ? texelFetch(clean, gid, 0).rgb : imageLoad(grainy, gid).rgb;
+    imageStore(grainy, gid, vec4(base + sum.rgb, 1.0));
+}

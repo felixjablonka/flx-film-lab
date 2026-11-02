@@ -1,0 +1,108 @@
+#version 440
+// The lens's distortion corrected: each pixel from the source position the
+// model gives, bicubic (Catmull-Rom), the edges clamped. The radial models
+// (Nikon's, Lensfun's three, the tabulated profiles) about the image area's
+// centre; DNG's WarpRectilinear about its own centre, one warp per plane
+// where it has three. LensCorrection's Distortion::scale and
+// correctDistortion.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2D src;
+layout(binding = 1, rgba32f) uniform writeonly image2D dst;
+layout(std430, binding = 2) readonly buffer Profile {
+    float profile[];        // the source radius over the output radius at steps of the radius
+};
+layout(std140, binding = 3) uniform Lens {
+    vec4 k;                 // Nikon: c0 k2 k3 k4; poly3: k1; poly5: k1 k2; ptlens: a b c
+    vec4 shape;             // x: the radius, y: the zoom, z: the profile's step; DNG: x its m
+    vec4 centre;            // DNG: xy its centre in pixels
+    vec4 planes[6];         // DNG: kr0-kr3, then kt0 kt1, of each of up to three planes
+    ivec4 model;            // x: 1 Nikon, 2 poly3, 3 poly5, 4 ptlens, 5 profile, 6 DNG; y: the profile's
+                            // length; z: DNG's planes
+} u;
+
+float radialScale(float r)
+{
+    float uu = r / (u.shape.x * u.shape.y);
+    float s = 1.0;
+    int model = u.model.x;
+    if (model == 1) {
+        s = (1.0 + uu * uu * (u.k.y + uu * (u.k.z + uu * u.k.w))) / (1.0 + u.k.x);
+    } else if (model == 2) {
+        s = 1.0 - u.k.x + u.k.x * uu * uu;
+    } else if (model == 3) {
+        s = 1.0 + u.k.x * uu * uu + u.k.y * uu * uu * uu * uu;
+    } else if (model == 4) {
+        s = u.k.x * uu * uu * uu + u.k.y * uu * uu + u.k.z * uu + 1.0 - u.k.x - u.k.y - u.k.z;
+    } else if (model == 5) {
+        float x = uu / u.shape.z;
+        int i = int(max(0.0, x));
+        if (i + 1 >= u.model.y)
+            s = profile[u.model.y - 1];
+        else
+            s = profile[i] + (profile[i + 1] - profile[i]) * (x - float(i));
+    }
+    return s / u.shape.y;
+}
+
+void weights(float t, out vec4 k)
+{
+    float t2 = t * t, t3 = t2 * t;
+    k = vec4(-0.5 * t3 + t2 - 0.5 * t, 1.5 * t3 - 2.5 * t2 + 1.0, -1.5 * t3 + 2.0 * t2 + 0.5 * t, 0.5 * t3 - 0.5 * t2);
+}
+
+vec3 sampleAt(vec2 s, ivec2 size)
+{
+    ivec2 i0 = ivec2(floor(s));
+    vec4 kx, ky;
+    weights(s.x - float(i0.x), kx);
+    weights(s.y - float(i0.y), ky);
+    vec3 sum = vec3(0.0);
+    for (int j = 0; j < 4; ++j) {
+        int yy = clamp(i0.y - 1 + j, 0, size.y - 1);
+        vec3 row = vec3(0.0);
+        for (int i = 0; i < 4; ++i)
+            row += texelFetch(src, ivec2(clamp(i0.x - 1 + i, 0, size.x - 1), yy), 0).rgb * kx[i];
+        sum += row * ky[j];
+    }
+    return sum;
+}
+
+// DNG's WarpRectilinear for one plane: the picture sampled where it puts
+// the pixel
+vec3 dngWarp(ivec2 gid, int plane, ivec2 size)
+{
+    float m = u.shape.x;
+    float dx = (float(gid.x) - u.centre.x) / m, dy = (float(gid.y) - u.centre.y) / m, r2 = dx * dx + dy * dy;
+    vec4 kr = u.planes[2 * plane], kt = u.planes[2 * plane + 1];
+    float f = kr.x + r2 * (kr.y + r2 * (kr.z + r2 * kr.w));
+    float sx = f * dx + 2.0 * kt.x * dx * dy + kt.y * (r2 + 2.0 * dx * dx);
+    float sy = f * dy + 2.0 * kt.y * dx * dy + kt.x * (r2 + 2.0 * dy * dy);
+    return sampleAt(vec2(u.centre.x + m * sx, u.centre.y + m * sy), size);
+}
+
+void main()
+{
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(dst);
+    if (gid.x >= size.x || gid.y >= size.y) return;
+    vec3 p = vec3(0.0);
+    if (u.model.x == 6) {
+        // one warp for all three, or each plane its own (components by name:
+        // Direct3D's compiler writes none by a variable index)
+        if (u.model.z == 1) {
+            p = dngWarp(gid, 0, size);
+        } else {
+            p.x = dngWarp(gid, 0, size).x;
+            p.y = dngWarp(gid, 1, size).y;
+            p.z = dngWarp(gid, 2, size).z;
+        }
+    } else {
+        vec2 c = 0.5 * vec2(size - 1);
+        vec2 d = vec2(gid) - c;
+        float s = radialScale(sqrt(d.x * d.x + d.y * d.y));
+        p = sampleAt(c + d * s, size);
+    }
+    imageStore(dst, gid, vec4(p, 1.0));
+}

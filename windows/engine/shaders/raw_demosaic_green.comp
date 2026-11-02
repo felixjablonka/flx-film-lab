@@ -1,0 +1,44 @@
+#version 440
+// Any colour filter pattern, X-Trans's 6x6 above all, first pass: green,
+// where the pattern has none from the greens around (the four beside twice
+// the four across). RawDecoder's demosaicPattern.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2D mosaic;
+layout(binding = 1, r32f) uniform writeonly image2D green;
+layout(std140, binding = 2) uniform Pattern {
+    ivec4 cfa[9];           // the 6x6 pattern, row by row, four to a vec4
+    ivec4 size;             // x: its size on a side
+} u;
+
+int colourAt(int x, int y)
+{
+    int i = (y % u.size.x) * 6 + (x % u.size.x);
+    ivec4 v = u.cfa[i / 4];
+    int k = i % 4;
+    return k == 0 ? v.x : k == 1 ? v.y : k == 2 ? v.z : v.w;
+}
+
+void main()
+{
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(green);
+    if (gid.x >= size.x || gid.y >= size.y) return;
+    int x = gid.x, y = gid.y;
+    if (colourAt(x, y) == 1) {
+        imageStore(green, gid, vec4(texelFetch(mosaic, gid, 0).r, 0.0, 0.0, 1.0));
+        return;
+    }
+    float sum = 0.0, weight = 0.0;
+    for (int dy = -1; dy <= 1; ++dy)
+        for (int dx = -1; dx <= 1; ++dx) {
+            int sx = x + dx, sy = y + dy;
+            if ((dx != 0 || dy != 0) && sx >= 0 && sx < size.x && sy >= 0 && sy < size.y && colourAt(sx, sy) == 1) {
+                float k = dx != 0 && dy != 0 ? 1.0 : 2.0;
+                sum += k * texelFetch(mosaic, ivec2(sx, sy), 0).r;
+                weight += k;
+            }
+        }
+    imageStore(green, gid, vec4(weight > 0.0 ? sum / weight : 0.0, 0.0, 0.0, 1.0));
+}

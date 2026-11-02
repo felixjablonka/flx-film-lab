@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import sys
 from dataclasses import dataclass
+from typing import Callable
 from pathlib import Path
 
 import numpy as np
@@ -29,6 +30,7 @@ from scipy.stats import norm
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import datasheet as ds  # noqa: E402
 import trace_raster_plot as raster  # noqa: E402
+import stock_overrides  # noqa: E402
 import vector_plots  # noqa: E402
 from vector_plots import VectorPlot  # noqa: E402
 
@@ -149,6 +151,27 @@ class Build:
     # Spectral sensitivity plotted on a linear scale, each curve falling to
     # zero at both ends: taken as plotted, with none beyond, and no donor tails.
     sensitivity_linear: bool = False
+    # Mid-grey at the normal exposure the maker marks on the sheet's absolute
+    # axis (log10 lux-seconds; a callable reads it off the sheet), and how that
+    # was found, for the profile's `datasource`.
+    normal_log_h: float | Callable[[], float] | None = None
+    normal_note: str = ""
+    # For `fit_dyes`: start from this stock's own sheet dyes (its sister stock,
+    # of the same maker, generation and process) rather than the donor's.
+    dyes_from: str | None = None
+    # Decades to continue each curve past the sheet's last plotted exposure, at
+    # its final gradient, for a sheet that stops plotting a few stops over
+    # normal exposure: holding the last value there would put a shoulder at the
+    # plot's edge, where the film has none (`build_bw_profiles.characteristic`,
+    # whose 0.8 this takes).
+    extend: float = 0.0
+    # The sheet's dyes are equivalent dyes, the masking couplers' loss of
+    # colour as each dye forms taken into them: their negative lobes kept, as
+    # agx keeps its own negatives' (Vision3 500T's reach -0.12).
+    equivalent_dyes: bool = False
+    # With `relative_axis`: mid-grey at Kodak's normal exposure, 10/EI
+    # lux-seconds, rather than where a reflected-light meter puts it.
+    kodak_normal: bool = False
     created: str = "2026-10-18"
 
 
@@ -261,14 +284,18 @@ BUILDS = [
     # Fujifilm's motion picture negatives, on agx's Vision3 stock of the same
     # light balance and speed class (ECN-2 like them). Their sheets give the
     # curves and sensitivities but no single-dye spectra, so Kodak's dyes stay.
+    # The tungsten stocks' light is the Vision3 stock's, 3200 K, the "3200K
+    # tungsten light source" their own sheets expose the curves to
+    # (`stock_overrides.REFERENCE_LIGHT`). They print on Fujifilm's own print
+    # film, F-CP 3510 (Felix's pick).
     Build("fujifilm_eterna_vivid_160t", "Fujifilm Eterna Vivid 160T", "kodak_vision3_200t",
           "fujifilm_eterna_vivid160.pdf", 0, 160,
           "Fujifilm KB-0701E, FUJICOLOR ETERNA Vivid 160 (35 mm Type 8543), ECN-2, Status M.",
-          unmix=True, source=True, stop_axis=True),
+          unmix=True, source=True, stop_axis=True, paper="fujifilm_fcp_3510"),
     Build("fujifilm_eterna_500t", "Fujifilm Eterna 500T", "kodak_vision3_500t",
           "fujifilm_ETERNA_500t.pdf", 2, 500,
           "Fujifilm KB-501E, FUJICOLOR ETERNA 500 (35 mm Type 8573), ECN-2, Status M.",
-          unmix=True, source=True, stop_axis=True),
+          unmix=True, source=True, stop_axis=True, paper="fujifilm_fcp_3510"),
     # Reala 500D's sheet plots absolute log H, but metered at its EI 500 on
     # that axis mid-grey sits 0.24 decades over the toe (a speed of about 86
     # by its own curve) and the shadows print flat. It goes where Fujifilm's
@@ -277,7 +304,7 @@ BUILDS = [
     Build("fujifilm_reala_500d", "Fujifilm Reala 500D", "kodak_vision3_250d",
           "Reala500D_curve.pdf", 0, 500,
           "Fujifilm, FUJICOLOR REALA 500D (35 mm Type 8592), ECN-2, Status M.",
-          unmix=True, source=True, normal_above_speed=1.05),
+          unmix=True, source=True, normal_above_speed=1.05, paper="fujifilm_fcp_3510"),
     # Agfa's colour negatives, from its Professional range sheet. It plots no
     # single-dye spectra but the spectral density of a neutral at medium
     # density and at D-min; of agx's negatives, Superia X-TRA 400's dyes and
@@ -329,6 +356,67 @@ BUILDS = [
           "Status M.",
           unmix=True, source=True, metered_ei=160, paper="kodak_portra_endura",
           sheet_base=True, fit_dyes=True, no_window=True, antihalation="strong", created="2026-10-25"),
+    # Kodak's EXR 50D (5245) and EXR 200T (5293), ECN-2 camera negatives of the
+    # EXR generation (1989-1999), each built on its own sheet as far as it goes:
+    # curves, spectral sensitivities, the spectral density of D-min as the base,
+    # the midscale neutral, and the placement. EXR 50D's sheet (2003 edition)
+    # plots its three dyes; EXR 200T's plots only the neutral, so its dyes are
+    # its sister stock's, moved and stretched until they add up to its own. agx's
+    # adaptation window is left out. Mid-grey goes at Kodak's normal exposure:
+    # the 2003 sheet marks it as camera stop 0 over 50D's curves, 0.202
+    # lux-seconds at EI 50, 10/EI; 200T's sheet has no such scale and goes by
+    # the same rule at its EI 200 under tungsten (normally exposed, the two then
+    # read about the same densities, as Kodak's LAD aims mean them to). Both
+    # plot only to about three stops over normal, a step tablet's range, so the
+    # curves go on past it at their final gradient (`extend`). No sheet
+    # gives a coupler model: it is the VISION3 stock's of the same balance and
+    # speed, which also gives the use and the light: daylight, and for 200T the
+    # 3200 K its sheet balances it for, "Exposure: Tungsten (3200 K)"
+    # (`stock_overrides.REFERENCE_LIGHT`). They print on Fujifilm F-CP 3519, the
+    # print film of their day (Felix's pick).
+    # "Rem-jet backing": the strong antihalation of a motion picture negative.
+    Build("kodak_exr_50d", "Kodak EXR 50D", "kodak_vision3_50d",
+          "Kodak EXR 50D 5245-1999.pdf", 2, 50,
+          "Kodak H-1-5245 (3-99) and its edition H-1-5245t (5-03), EASTMAN EXR 50D Color Negative Film "
+          "5245/7245, ECN-2, Status M; curves and sensitivities from the 1999 plots, the dyes, neutral and D-min "
+          "from the 2003 edition's.",
+          unmix=True, source=True, sheet_base=True, no_window=True, antihalation="strong", extend=0.8,
+          normal_log_h=lambda: __import__("sheet_readers").exr_50d_normal_log_h(),
+          normal_note="camera stop 0 on the 2003 edition's camera-stop scale over the same curves, which is "
+                      "Kodak's 10/EI (0.202 lux-seconds at EI 50).",
+          paper="fujifilm_fcp_3519", created="2026-11-01"),
+    Build("kodak_exr_200t", "Kodak EXR 200T", "kodak_vision3_200t",
+          "Kodak EXR 200T 5293-1999.pdf", 2, 200,
+          "Kodak H-1-5293 (3-99), EASTMAN EXR 200T Color Negative Film 5293/7293, ECN-2, Status M.",
+          unmix=True, source=True, sheet_base=True, fit_dyes=True, dyes_from="kodak_exr_50d", no_window=True,
+          antihalation="strong", extend=0.8, normal_log_h=float(np.log10(10 / 200)),
+          normal_note="Kodak's 10/EI at EI 200 under tungsten, the rule the camera-stop scale on the sheet of its "
+                      "sister stock EXR 50D marks; this sheet draws no such scale.",
+          paper="fujifilm_fcp_3519", created="2026-11-01"),
+    # Eastman Color Negative 5251 (1962-68), Kodak's 3200 K camera negative of
+    # the 1960s, on the paper that introduced it (Kisner, SMPTE 1962): its
+    # curves, spectral sensitivities and equivalent dyes, traced off the scans
+    # (`kodak_1962_sheets`). The dyes are equivalent dyes, the colored
+    # couplers' masking taken into them, negative lobes and all; there is no
+    # D-min spectrum, so the base and mask are the Vision3 stock's of its
+    # balance, the donor. The curves are drawn against unnumbered log
+    # exposure, read at the scale of their density (Kodak's own convention,
+    # which its 1968 paper on 5254 marks in decades); EI 50 tungsten and the
+    # 3200 K balance from Kodak's announcement (American Cinematographer, June
+    # 1962), mid-grey at Kodak's normal exposure, 10/EI. It predates DIR
+    # couplers: masking only (`stock_overrides.NO_COUPLERS`), as its film-only
+    # MTF, which never rises over 100%, bears out. The plot stops about three
+    # stops over normal, still straight: the curves go on at their final
+    # gradient (`extend`). "Jet antihalation backing", Kodak 1968: strong. It
+    # prints on its companion print film, Eastman Color Print 5385.
+    Build("kodak_5251_50t", "Kodak 5251 50T", "kodak_vision3_200t",
+          "Kodak 50T_5251_and 5385 print film.pdf", 0, 50,
+          "W. I. Kisner, 'A New Color Negative Film for Better Picture Quality', Journal of the SMPTE 71(10), "
+          "1962, pp. 776-779, Figs. 1-3: EASTMAN Color Negative Film, Type 5251, integral density, taken as "
+          "Status M; EI 50 tungsten and the 3200 K balance from Kodak's announcement in American "
+          "Cinematographer, June 1962, pp. 362-363 and 385.",
+          unmix=True, source=True, relative_axis=True, kodak_normal=True, equivalent_dyes=True, no_window=True,
+          antihalation="strong", extend=0.8, paper="kodak_5385", created="2026-11-01"),
     # HARMAN Phoenix 200 (2024), an experimental C-41 film. Its sheet's bitmaps
     # give the curves, against relative log exposure, and the spectral
     # sensitivities, on a linear "Relative Sensitivity" scale. Its ISO 200 was
@@ -805,16 +893,20 @@ def own_log_sensitivity(donor_ls: np.ndarray, wl: np.ndarray, traced: dict[str, 
     return out
 
 
-def balance(profile) -> np.ndarray:
-    """Scale each layer's sensitivity so an 18.4% grey exposes it to exactly 1.
+def balance(profile, window: bool = True) -> np.ndarray:
+    """Scale each layer's sensitivity so an 18.4% grey in the stock's own light
+    exposes it to exactly 1, through the spectral LUT the app bakes, so
+    mid-grey lands at log exposure 0 in every layer.
 
-    agx normalises its stocks that way, through the same spectral LUT the app
-    bakes (the stock's own adaptation window included), so mid-grey lands at
-    log exposure 0 in every layer.
+    agx balances its own stocks the same way but before its adaptation window
+    (`window=False`), which then leaves a grey 0.01 to 0.05 stops over in red
+    and 0.02 to 0.12 short in blue as agx and the app render it. With the
+    stock's window included, as here by default, the grey exposes every layer
+    to 1 as rendered.
     """
     from spektrafilm.utils.spectral_upsampling import compute_hanatos2025_tc_lut, rgb_to_raw_hanatos2025
     adaptation = profile.hanatos2025_adaptation()
-    adaptation.apply_window = np.asarray(adaptation.window_params).size > 0
+    adaptation.apply_window = window and np.asarray(adaptation.window_params).size > 0
     adaptation.apply_surface = False
     adaptation.spectral_gaussian_blur = 0.0
     ls = np.asarray(profile.data.log_sensitivity, float)
@@ -827,14 +919,15 @@ def balance(profile) -> np.ndarray:
 
 
 def own_dyes(traced: dict[str, np.ndarray], wl: np.ndarray, valid: np.ndarray,
-             like: np.ndarray, resp: np.ndarray) -> np.ndarray:
+             like: np.ndarray, resp: np.ndarray, equivalent: bool = False) -> np.ndarray:
     """The sheet's dye spectra (C, M, Y columns, as agx stores them), each scaled
     so a unit amount of it reads the same density in its own channel as the
     donor's does, which keeps the dye-amount scale the couplers work in."""
     out = np.zeros((wl.size, 3))
     for j, name in enumerate("CMY"):
         curve = traced[name][np.argsort(traced[name][:, 0])]
-        out[:, j] = np.clip(np.interp(wl, curve[:, 0], curve[:, 1]), 0, None)
+        drawn = np.interp(wl, curve[:, 0], curve[:, 1])
+        out[:, j] = drawn if equivalent else np.clip(drawn, 0, None)
     out[~valid] = 0.0
     return scaled_like(out, like, resp)
 
@@ -984,7 +1077,7 @@ def build_unmixed(build: Build) -> Path:
     Read back through the densitometer the sheet names, the profile's neutral
     is the sheet's curves.
     """
-    donor = load_profile(build.donor)
+    donor = stock_overrides.reference_light(load_profile(build.donor))
     d = donor.data
     grid = np.asarray(d.log_exposure, float)
     wl = np.asarray(d.wavelengths, float)
@@ -1002,6 +1095,16 @@ def build_unmixed(build: Build) -> Path:
     donor_net = status_density(np.asarray(d.density_curves, float) @ cd.T + bd[None, :], resp) - base
     donor_cd = np.asarray(d.channel_density, float)
     measured = {}
+    sourced = {}
+    if build.source:
+        import sheet_readers
+        sourced = sheet_readers.SOURCES[build.stock]()
+    own_cd = None
+    if (build.sheet_base or build.fit_dyes) and "dyes" in sourced:
+        # A sheet that plots its own dyes as well as its D-min: the dyes are
+        # stored with the base, not the donor's.
+        valid = ~np.isnan(donor_cd).any(axis=1)
+        own_cd = own_dyes(sourced["dyes"], wl, valid, cd, resp)
     if build.sheet_base or build.fit_dyes:
         # What the sheet measures in place of the donor's: its D-min as the
         # base, the donor's dyes moved until they add up to its neutral. Both
@@ -1009,8 +1112,16 @@ def build_unmixed(build: Build) -> Path:
         import sheet_readers
         sheet = sheet_readers.neutral_spectra(build.stock)
         stored_cd, stored_bd = donor_cd, np.asarray(d.base_density, float)
+        if own_cd is not None:
+            stored_cd = np.where(np.isnan(donor_cd), np.nan, own_cd)
         if build.fit_dyes:
-            stored_cd, measured["dye fit"] = neutral_dyes(build.stock, wl, donor_cd)
+            start = donor_cd
+            if build.dyes_from is not None:
+                # the sister stock's own sheet dyes, on the donor's dye-amount scale
+                valid = ~np.isnan(donor_cd).any(axis=1)
+                sister = own_dyes(sheet_readers.SOURCES[build.dyes_from]()["dyes"], wl, valid, cd, resp)
+                start = np.where(np.isnan(donor_cd), np.nan, sister)
+            stored_cd, measured["dye fit"] = neutral_dyes(build.stock, wl, start)
         if build.sheet_base:
             stored_bd = np.interp(wl, sheet["min"][:, 0], sheet["min"][:, 1], left=np.nan, right=np.nan)
             measured["neutral"] = np.interp(wl, sheet["mid"][:, 0], sheet["mid"][:, 1], left=np.nan, right=np.nan)
@@ -1023,17 +1134,13 @@ def build_unmixed(build: Build) -> Path:
         base = status_density(bd[None, :], resp)[0]
         measured["dyes"] = np.where(defined[:, None], cd, np.nan)
         measured["base"] = np.where(defined, bd, np.nan)
-    sourced = {}
-    if build.source:
-        import sheet_readers
-        sourced = sheet_readers.SOURCES[build.stock]()
-    if build.dyes is not None or build.dyes_raster is not None or "dyes" in sourced:
+    if own_cd is None and (build.dyes is not None or build.dyes_raster is not None or "dyes" in sourced):
         valid = ~np.isnan(donor_cd).any(axis=1)
         traced_dyes = (sourced["dyes"] if "dyes" in sourced else
                        raster_spectra(SHEETS / build.pdf, build.page, build.dyes_raster)
                        if build.dyes_raster is not None else
                        vector_plots.by_position(build.dyes, ("Y", "M", "C"), drop_neutral=build.dyes_with_neutral))
-        cd = own_dyes(traced_dyes, wl, valid, cd, resp)
+        cd = own_dyes(traced_dyes, wl, valid, cd, resp, equivalent=build.equivalent_dyes)
 
     (x_lo, x_hi), curves = sheet_curves(build)
     sheet_grid = np.linspace(x_lo, x_hi, 1024)
@@ -1041,6 +1148,17 @@ def build_unmixed(build: Build) -> Path:
     sheet_dc = condition(sheet_grid, sheet_dc, positive,
                          smooth=9 if build.raster is not None else 1,
                          trim=0.02 if build.raster is not None else 0.0)
+    extension_note = ""
+    if build.extend > 0:
+        tail = sheet_grid > sheet_grid[-1] - 0.4
+        more = np.linspace(sheet_grid[-1], sheet_grid[-1] + build.extend, 160)[1:]
+        gradients = [float(np.polyfit(sheet_grid[tail], sheet_dc[tail, c], 1)[0]) for c in range(3)]
+        extra = np.stack([sheet_dc[-1, c] + gradients[c] * (more - sheet_grid[-1]) for c in range(3)], axis=-1)
+        sheet_grid = np.concatenate([sheet_grid, more])
+        sheet_dc = np.concatenate([sheet_dc, extra])
+        extension_note = (f" Past the sheet's last plotted exposure each curve continues at its final gradient for "
+                          f"{build.extend:.1f} decades (" + ", ".join(f"{n} {g:.2f}" for n, g in zip("RGB", gradients))
+                          + "), where the plot ends a few stops over normal and the film goes on.")
     sheet_net = sheet_dc - sheet_dc.min(axis=0, keepdims=True)
     if build.unmasked_base:
         # No orange mask: the base is the film's fog and stain, its dyes in the
@@ -1054,7 +1172,11 @@ def build_unmixed(build: Build) -> Path:
         measured["base"] = np.where(defined, bd, np.nan)
         measured["fog"] = base
 
-    if build.stop_axis:
+    if build.normal_log_h is not None:
+        normal = build.normal_log_h() if callable(build.normal_log_h) else build.normal_log_h
+        offset = -normal
+        placement = f"Mid-grey at the normal exposure, log H {normal:.3f} lux-seconds: {build.normal_note}"
+    elif build.stop_axis:
         offset = 0.0
         placement = (f"Mid-grey at the sheet's camera stop 0, the normal exposure at EI {build.iso}.")
     elif build.normal_above_speed is not None:
@@ -1062,6 +1184,14 @@ def build_unmixed(build: Build) -> Path:
         offset = -(point + build.normal_above_speed)
         placement = (f"Mid-grey {build.normal_above_speed:.2f} decades above the green layer's D-min + 0.1 speed "
                      f"point (log H {point:.3f} on the sheet's axis).")
+    elif build.relative_axis and build.kodak_normal:
+        point = iso_speed_point(sheet_grid, sheet_net)
+        above = float(np.log10(10.0 / np.sqrt(2)))
+        offset = -(point + above)
+        placement = (f"The sheet plots relative log exposure. Its exposure index, EI {build.iso}, is taken as its "
+                     f"speed by the ASA/ISO method: the curves' ISO 5800 speed point (0.15 over D-min, green and "
+                     f"slowest layer) at sqrt(2) / {build.iso} lux-seconds; mid-grey goes at Kodak's normal "
+                     f"exposure, 10/EI, {above:.3f} decades above.")
     elif build.relative_axis:
         point = iso_speed_point(sheet_grid, sheet_net)
         ei = build.metered_ei or build.iso
@@ -1081,6 +1211,7 @@ def build_unmixed(build: Build) -> Path:
         placement = (f"Exposure axis aligned to '{build.donor}' at the D-min + 1.0 speed point "
                      f"(offset {offset:+.3f} decades).")
     shifted = sheet_grid + offset
+    placement += extension_note
     if build.layer_gammas is not None:
         # Each layer's contrast about mid-grey (log exposure 0 on this axis).
         sheet_net = np.stack([np.interp(shifted, shifted / build.layer_gammas[c], sheet_net[:, c])
@@ -1141,6 +1272,8 @@ def build_unmixed(build: Build) -> Path:
     if build.dyes is not None or build.dyes_raster is not None or "dyes" in sourced:
         profile.update_data(channel_density=np.where(np.isnan(donor_cd), np.nan, cd))
         own.append("dye spectra")
+    elif build.dyes_from is not None:
+        own.append("dye spectra")
     if measured:
         profile.update_data(channel_density=measured["dyes"], base_density=measured["base"])
         if "neutral" in measured:
@@ -1185,7 +1318,14 @@ def build_unmixed(build: Build) -> Path:
                      "the curves' own D-min (" + ", ".join(f"{n} {v:.2f}" for n, v in zip("RGB", measured["fog"]))
                      + ")." if build.unmasked_base else "")
         dyes_note = ""
-        if build.fit_dyes:
+        if build.fit_dyes and build.dyes_from is not None:
+            q = measured["dye fit"]
+            dyes_note = (f" The sheet plots no single-dye spectra: the dyes are those its sister stock's sheet plots "
+                         f"('{build.dyes_from}', of the same maker, generation and process), each moved and "
+                         f"stretched about its peak until the three add up to this sheet's neutral over D-min: cyan "
+                         f"{q[3]:+.1f} nm x{q[6]:.3f}, magenta {q[4]:+.1f} nm x{q[7]:.3f}, yellow {q[5]:+.1f} nm "
+                         f"x{q[8]:.3f}.")
+        elif build.fit_dyes:
             q = measured["dye fit"]
             dyes_note = (f" The sheet plots no single-dye spectra: the dyes are those of the agx reference profile "
                          f"'{build.donor}', of agx's colour negatives the best fit to the sheet's neutral over D-min, "
@@ -1195,12 +1335,15 @@ def build_unmixed(build: Build) -> Path:
                        if build.no_window else "")
         borrowed = ([] if build.fit_dyes or "dye spectra" in own else ["dye spectra"]) \
             + ([] if build.sheet_base or build.unmasked_base else ["base density"]) \
-            + ([] if build.no_window else ["Hanatos-2025 adaptation parameters"]) + ["DIR coupler model"]
+            + ([] if build.no_window else ["Hanatos-2025 adaptation parameters"]) \
+            + ([] if build.stock in stock_overrides.NO_COUPLERS else ["DIR coupler model"])
+        couplers_note = (" No DIR couplers (stock_overrides.NO_COUPLERS)."
+                         if build.stock in stock_overrides.NO_COUPLERS else "")
         profile.metadata.datasource = (
             f"Characteristic curves{''.join(', ' + n for n in own)} from {build.notes} The curves were {how}, "
             f"and converted from {densitometer} densities into dye amounts. {placement}{sensitivities}{base_note}"
-            f"{dyes_note}{window_note} {', '.join(borrowed)[0].upper() + ', '.join(borrowed)[1:]} from "
-            f"'{build.donor}'."
+            f"{dyes_note}{window_note}{couplers_note} {', '.join(borrowed)[0].upper() + ', '.join(borrowed)[1:]} "
+            f"from '{build.donor}'."
         )
     else:
         profile.metadata.datasource = (
@@ -1224,7 +1367,7 @@ def build_unmixed(build: Build) -> Path:
 
 
 def build_one(build: Build) -> Path:
-    donor = load_profile(build.donor)
+    donor = stock_overrides.reference_light(load_profile(build.donor))
     grid = np.asarray(donor.data.log_exposure)
 
     if build.raster is not None:

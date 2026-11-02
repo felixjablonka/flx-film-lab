@@ -1,0 +1,33 @@
+#version 440
+// An export's luma: display light to the display's curve (a power, or
+// sRGB's for Windows displays), and to
+// BT.709 Y' at video levels, 10 bits (FramePipeline.renderExport, which
+// VideoToolbox converts on the Mac).
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2D src;
+layout(binding = 1, r16) uniform writeonly image2D dst;
+layout(std140, binding = 2) uniform Export {
+    vec4 coding;           // x: 1 / gamma; y: 1 for the sRGB curve instead
+    ivec4 chroma;          // x, y: chroma samples per luma pixel's log2
+} u;
+
+// display light to the display's curve: a power, or sRGB's
+vec3 encoded(vec3 light)
+{
+    light = clamp(light, 0.0, 1.0);
+    if (u.coding.y > 0.5)
+        return mix(12.92 * light, 1.055 * pow(light, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), light));
+    return pow(light, vec3(u.coding.x));
+}
+
+void main()
+{
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(dst);
+    if (gid.x >= size.x || gid.y >= size.y) return;
+    vec3 e = encoded(texelFetch(src, gid, 0).rgb);
+    float y = dot(e, vec3(0.2126, 0.7152, 0.0722));
+    imageStore(dst, gid, vec4(round(64.0 + 876.0 * y) / 65535.0, 0.0, 0.0, 1.0));
+}

@@ -1,0 +1,131 @@
+#version 440
+// filming.expose: working RGB -> the film's exposure, as linear irradiance
+// (film_log takes its log after halation). flx.metal film_expose.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2D src;
+layout(binding = 1, rgba32f) uniform writeonly image2D dst;
+layout(binding = 2) uniform sampler2D tcLut;
+layout(std140, binding = 3) uniform FilmUniforms {
+    vec4 rgbToXYZ0;        // columns: working RGB -> XYZ, adapted to the film's reference illuminant
+    vec4 rgbToXYZ1;
+    vec4 rgbToXYZ2;
+    vec4 scale;            // x: 2^exposureEV
+    ivec4 counts;          // x: tcLutSize, y: intoTriangle, z: gradient count
+} u;
+layout(std430, binding = 4) readonly buffer Gradients {
+    vec4 gradients[];      // two per gradient: (a.x, a.y, b.x, b.y) in pixels, (ev, 0, 0, 0)
+};
+
+// Mitchell-Netravali B = C = 1/3, agx utils/fast_interp_lut.mitchell_weight
+float mitchellWeight(float t)
+{
+    const float B = 1.0 / 3.0;
+    const float C = 1.0 / 3.0;
+    float x = abs(t);
+    float x2 = x * x;
+    float x3 = x2 * x;
+    if (x < 1.0)
+        return (1.0 / 6.0) * ((12.0 - 9.0 * B - 6.0 * C) * x3 + (-18.0 + 12.0 * B + 6.0 * C) * x2 + (6.0 - 2.0 * B));
+    if (x < 2.0)
+        return (1.0 / 6.0) * ((-B - 6.0 * C) * x3 + (6.0 * B + 30.0 * C) * x2 + (-12.0 * B - 48.0 * C) * x + (8.0 * B + 24.0 * C));
+    return 0.0;
+}
+
+// agx utils/fast_interp_lut.safe_index: symmetric reflection at the edges
+int safeIndex(int idx, int L)
+{
+    if (idx < 0) return -idx;
+    if (idx >= L) return 2 * (L - 1) - idx;
+    return idx;
+}
+
+// agx utils/fast_interp_lut._cubic_interp_lut_at_2d. The LUT is a numpy
+// (L, L, 3) array uploaded row-major: its first axis is the texture's y, its
+// second the x, hence the fetch at (second, first).
+vec3 sampleTcLut(vec2 tc, int L)
+{
+    vec2 c = clamp(tc, 0.0, 1.0) * float(L - 1);
+    ivec2 base;
+    vec2 frac;
+    for (int d = 0; d < 2; ++d) {
+        float v = c[d];
+        if (v >= float(L - 1)) { base[d] = L - 2; frac[d] = 1.0; }
+        else                   { base[d] = int(floor(v)); frac[d] = v - float(base[d]); }
+    }
+    float w0[4], w1[4];
+    for (int k = 0; k < 4; ++k) {
+        w0[k] = mitchellWeight(frac.x + 1.0 - float(k));
+        w1[k] = mitchellWeight(frac.y + 1.0 - float(k));
+    }
+    vec3 acc = vec3(0.0);
+    float weightSum = 0.0;
+    for (int i = 0; i < 4; ++i) {
+        int xi = safeIndex(base.x - 1 + i, L);
+        for (int j = 0; j < 4; ++j) {
+            int yj = safeIndex(base.y - 1 + j, L);
+            float w = w0[i] * w1[j];
+            weightSum += w;
+            acc += w * texelFetch(tcLut, ivec2(yj, xi), 0).rgb;
+        }
+    }
+    return weightSum != 0.0 ? acc / weightSum : acc;
+}
+
+// agx utils/spectral_upsampling._tri2quad
+vec2 tri2quad(vec2 xy)
+{
+    float y = xy.y / max(1.0 - xy.x, 1e-10);
+    float x = (1.0 - xy.x) * (1.0 - xy.x);
+    return clamp(vec2(x, y), 0.0, 1.0);
+}
+
+// Black-and-white stocks: a chromaticity outside the xy triangle pulled back
+// along the line to white onto its edge (flx.metal intoTriangle).
+vec2 intoTriangle(vec2 xy, vec2 white)
+{
+    vec2 d = xy - white;
+    float t = 1.0;
+    float s = d.x + d.y;
+    if (s > 0.0)   t = min(t, (1.0 - white.x - white.y) / s);
+    if (d.x < 0.0) t = min(t, -white.x / d.x);
+    if (d.y < 0.0) t = min(t, -white.y / d.y);
+    return white + d * max(t, 0.0);
+}
+
+// The stacked exposure gradients' compensation in EV at pixel position p.
+float gradientEV(vec2 p, int count)
+{
+    float ev = 0.0;
+    for (int i = 0; i < count; i++) {
+        vec2 a = gradients[2 * i].xy, b = gradients[2 * i].zw;
+        vec2 d = b - a;
+        float lengthSquared = dot(d, d);
+        if (lengthSquared <= 1e-9) continue;
+        float t = clamp(dot(p - a, d) / lengthSquared, 0.0, 1.0);
+        ev += gradients[2 * i + 1].x * (1.0 - t * t * (3.0 - 2.0 * t));
+    }
+    return ev;
+}
+
+void main()
+{
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(dst);
+    if (gid.x >= size.x || gid.y >= size.y) return;
+
+    mat3 rgbToXYZ = mat3(u.rgbToXYZ0.xyz, u.rgbToXYZ1.xyz, u.rgbToXYZ2.xyz);
+    vec3 xyz = rgbToXYZ * texelFetch(src, gid, 0).rgb;
+    float b = xyz.x + xyz.y + xyz.z;
+    if (isnan(b) || isinf(b)) b = 0.0;               // agx: b = np.nan_to_num(b)
+    vec2 xy = xyz.xy / max(b, 1e-10);
+    if (u.counts.y != 0) {
+        vec3 w = rgbToXYZ * vec3(1.0);                // the stock's reference white
+        xy = intoTriangle(xy, w.xy / (w.x + w.y + w.z));
+    }
+    vec3 raw = sampleTcLut(tri2quad(xy), u.counts.x) * b;
+    raw *= u.scale.x;
+    if (u.counts.z > 0) raw *= exp2(gradientEV(vec2(gid) + 0.5, u.counts.z));
+    imageStore(dst, gid, vec4(raw, 1.0));
+}

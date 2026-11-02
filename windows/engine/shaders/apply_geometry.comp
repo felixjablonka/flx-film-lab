@@ -1,0 +1,48 @@
+#version 440
+// The developed negative turned, mirrored, levelled and cropped: each pixel of
+// the print from where its shape puts it in the frame, bicubic (Catmull-Rom)
+// and held between its four nearest pixels, so no edge rings. A pixel that
+// lands on a pixel of the frame takes it as it is. flx.metal apply_geometry.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2D src;
+layout(binding = 1, rgba32f) uniform writeonly image2D dst;
+layout(std140, binding = 2) uniform Shape {
+    vec4 columns;          // the print's pixel to the frame's: column0.xy, column1.xy
+    vec4 offsetSize;       // its offset, and the frame's size
+    ivec4 shaped;
+} u;
+
+vec4 catmullRom(float t)
+{
+    float t2 = t * t, t3 = t2 * t;
+    return 0.5 * vec4(-t3 + 2.0 * t2 - t, 3.0 * t3 - 5.0 * t2 + 2.0, -3.0 * t3 + 4.0 * t2 + t, t3 - t2);
+}
+
+void main()
+{
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(dst);
+    if (gid.x >= size.x || gid.y >= size.y) return;
+    vec2 o = vec2(gid) + 0.5;
+    vec2 p = u.columns.xy * o.x + u.columns.zw * o.y + u.offsetSize.xy - 0.5;   // pixel centres on whole numbers
+    vec2 nearest = floor(p + 0.5);
+    if (all(lessThan(abs(p - nearest), vec2(1e-3)))) p = nearest;
+    vec2 f = floor(p);
+    vec4 wx = catmullRom(p.x - f.x), wy = catmullRom(p.y - f.y);
+    ivec2 base = ivec2(f) - 1;
+    ivec2 last = textureSize(src, 0) - 1;
+    vec3 c = vec3(0.0);
+    for (int j = 0; j < 4; ++j) {
+        int y = clamp(base.y + j, 0, last.y);
+        vec3 row = vec3(0.0);
+        for (int i = 0; i < 4; ++i)
+            row += wx[i] * texelFetch(src, ivec2(clamp(base.x + i, 0, last.x), y), 0).rgb;
+        c += wy[j] * row;
+    }
+    ivec2 n0 = clamp(ivec2(f), ivec2(0), last), n1 = clamp(ivec2(f) + 1, ivec2(0), last);
+    vec3 a = texelFetch(src, n0, 0).rgb, b = texelFetch(src, ivec2(n1.x, n0.y), 0).rgb;
+    vec3 d = texelFetch(src, ivec2(n0.x, n1.y), 0).rgb, e = texelFetch(src, n1, 0).rgb;
+    imageStore(dst, gid, vec4(clamp(c, min(min(a, b), min(d, e)), max(max(a, b), max(d, e))), 1.0));
+}

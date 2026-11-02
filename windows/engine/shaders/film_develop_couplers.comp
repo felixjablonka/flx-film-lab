@@ -1,0 +1,69 @@
+#version 440
+// DIR couplers, part 2: re-develop against the pre-coupler curves at the
+// inhibited exposure, on a grid 16 times finer than the density curves'.
+// flx.metal film_develop_couplers.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2D logE;
+layout(binding = 1) uniform sampler2D correction;
+layout(binding = 2, rgba32f) uniform writeonly image2D dst;
+layout(binding = 3) uniform sampler2D local;      // the inhibitor where it was released
+layout(std430, binding = 4) readonly buffer Curves0 {
+    float curves0[];       // compute_density_curves_before_dir_couplers(), (NCURVE0, 3)
+};
+layout(std140, binding = 5) uniform DevelopUniforms {
+    vec4 axis;             // logE0, logEStep, edgeCap, diffusionFraction
+    vec4 gammaFactor;
+    vec4 densityMax;
+    vec4 couplers;
+} u;
+layout(std430, binding = 6) readonly buffer EdgeScale {
+    float edgeScale[];     // FilmMath.edgeGainScale on the same grid, when edgeCap is 1
+};
+
+const int NCURVE0 = 255 * 16 + 1;
+
+vec3 interpCurves0(vec3 x, float logE0, float logEStep, vec3 gamma)
+{
+    vec3 result;
+    for (int c = 0; c < 3; ++c) {
+        float pos = clamp((x[c] * gamma[c] - logE0) / logEStep, 0.0, float(NCURVE0 - 1));
+        int i0 = int(floor(pos));
+        int i1 = min(i0 + 1, NCURVE0 - 1);
+        result[c] = mix(curves0[i0 * 3 + c], curves0[i1 * 3 + c], pos - float(i0));
+    }
+    return result;
+}
+
+vec3 interpEdgeScale(vec3 x, float logE0, float logEStep, vec3 gamma)
+{
+    vec3 result;
+    for (int c = 0; c < 3; ++c) {
+        float pos = clamp((x[c] * gamma[c] - logE0) / logEStep, 0.0, float(NCURVE0 - 1));
+        int i0 = int(floor(pos));
+        int i1 = min(i0 + 1, NCURVE0 - 1);
+        result[c] = mix(edgeScale[i0 * 3 + c], edgeScale[i1 * 3 + c], pos - float(i0));
+    }
+    return result;
+}
+
+void main()
+{
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(dst);
+    if (gid.x >= size.x || gid.y >= size.y) return;
+    float step0 = u.axis.y / 16.0;
+    vec3 x = texelFetch(logE, gid, 0).rgb;
+    vec3 c = texelFetch(correction, gid, 0).rgb;
+    if (u.axis.z > 0.5 || u.axis.w < 0.999) {
+        // Keep the local inhibition whole and only part of what diffusion adds
+        // or takes away at an edge: the share that spreads, held where the
+        // edge gain would run past the stock's measured one.
+        vec3 l = texelFetch(local, gid, 0).rgb;
+        vec3 keep = vec3(u.axis.w);
+        if (u.axis.z > 0.5) keep *= interpEdgeScale(x, u.axis.x, step0, u.gammaFactor.xyz);
+        c = l + keep * (c - l);
+    }
+    imageStore(dst, gid, vec4(interpCurves0(x - c, u.axis.x, step0, u.gammaFactor.xyz), 1.0));
+}

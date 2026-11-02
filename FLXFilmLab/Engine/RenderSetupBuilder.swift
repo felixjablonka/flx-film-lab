@@ -12,6 +12,22 @@ enum RenderSetupBuilder {
     /// balanced against (`printing._compute_exposure_factor_midgray`).
     static let midgrayValue: Float = 0.184
 
+    /// An 18% grey under the light a camera filter is made for, as the decode
+    /// presents it to this film: neutral in the film's own light, and in
+    /// daylight for the 85 and 85B on a tungsten film. The print time is
+    /// set on it, as the filter factor is (`bake_packs.bake_lens_filters`), so
+    /// a daylight frame through an 85B prints as light as the bare film in its
+    /// own light. Set on the film's light, an 85B's grey there is orange and
+    /// thin, and the daylight frame came out a third of a stop light.
+    static func midGrey(for film: ProfilePack, through filter: LensFilterRef?) -> SIMD3<Float> {
+        guard let light = filter?.light, light != film.referenceIlluminant,
+              let xy = RawLoader.referenceChromaticity(light) else {
+            return SIMD3(repeating: midgrayValue)
+        }
+        let x = Float(xy.x), y = Float(xy.y)
+        return film.rgbToXYZMatrix.inverse * (SIMD3(x / y, 1, (1 - x - y) / y) * midgrayValue)
+    }
+
     /// `exposureEV` is the exposure the negative actually receives — the
     /// metered value plus the user's trim when Auto Exposure is on. It travels
     /// in the setup so the film stage cannot be handed a different number than
@@ -53,10 +69,11 @@ enum RenderSetupBuilder {
         // the print exposure by the geometric mean of what the paper sees. This
         // is what makes a grey card print grey whichever stock is loaded.
         let negativeExposureEV = exposureEV ?? Float(recipe.exposureEV)
+        let lensFilter = film.lensFilter(recipe.lensFilter)
         let midgrayDensitySpectral = try filmDensitySpectral(
-            film: film, rgb: SIMD3(repeating: midgrayValue), exposureEV: 0,
+            film: film, rgb: midGrey(for: film, through: lensFilter), exposureEV: 0,
             gamma: Float(recipe.densityCurveGamma),
-            lensFilter: film.lensFilter(recipe.lensFilter))
+            lensFilter: lensFilter)
 
         let paperSensitivity = paper.sensitivity
         // Normalise the print exposure against an 18% grey at the *reference*

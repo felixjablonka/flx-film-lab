@@ -66,11 +66,12 @@ def _spektrafilm_data_dir() -> Path:
 
 
 def read_profile(stock: str):
-    """Load a profile, preferring this repo's own over the bundled ones."""
+    """Load a profile, preferring this repo's own over the bundled ones, which
+    come in the light their sheets balance them for (`stock_overrides.reference_light`)."""
     local = LOCAL_PROFILES / f"{stock}.json"
     if local.exists():
         return profile_from_dict(json.loads(local.read_text()))
-    return load_profile(stock)
+    return stock_overrides.reference_light(load_profile(stock))
 
 
 def available_stocks() -> list[str]:
@@ -404,20 +405,40 @@ def default_grade(contrast: float, softest: float | None) -> float:
 
 
 def add_baked_filtration(table: dict) -> None:
-    """agx's neutral-filter table, plus the filtration solved here for the stocks
-    that carry their own (`stock_overrides.BAKED_FILTRATION`): magenta and yellow
-    that print mid-grey neutral on each colour paper, in agx's pipeline as agx's
-    own values are."""
+    """agx's neutral-filter table, plus filtration solved here, in agx's
+    pipeline as agx's own values are: magenta and yellow that print mid-grey
+    neutral. For the stocks that carry their own
+    (`stock_overrides.BAKED_FILTRATION`), on every colour paper; and on the
+    print films built here (`build_print_profiles`), for every colour negative,
+    as agx's table has its own negatives on its own papers. The engine's solve
+    covers the rest, and lands a shade off agx's (`neutralFiltration`)."""
     import print_neutral
-    for stock in stock_overrides.BAKED_FILTRATION:
-        if not (LOCAL_PROFILES / f"{stock}.json").exists():
+    built_prints = []
+    for path in sorted(LOCAL_PROFILES.glob("*.json")):
+        info = json.loads(path.read_text())["info"]
+        if info["stage"] == "printing" and info["channel_model"] == "color":
+            table.setdefault(info["stock"], {info["reference_illuminant"]: {}})
+            built_prints.append(info["stock"])
+    for stock in available_stocks():
+        if stock in stock_overrides.BAKED_FILTRATION:
+            papers = list(table)
+        else:
+            papers = built_prints
+        if not papers:
             continue
         profile = read_profile(stock)
-        for paper, by_light in table.items():
-            for light in by_light:
+        if (profile.info.stage != "filming" or profile.info.type != "negative"
+                or profile.info.channel_model != "color"):
+            continue
+        for paper in papers:
+            for light in table[paper]:
                 m, y = print_neutral.neutral_filters(profile, paper)
-                by_light[light][stock] = [0.0, float(m), float(y)]
-                print(f"  {stock} on {paper} ({light}): magenta {m:.1f}, yellow {y:.1f}")
+                table[paper][light][stock] = [0.0, float(m), float(y)]
+                if stock in stock_overrides.BAKED_FILTRATION:
+                    print(f"  {stock} on {paper} ({light}): magenta {m:.1f}, yellow {y:.1f}")
+    for paper in built_prints:
+        for light, films in table[paper].items():
+            print(f"  {len(films)} colour negatives' filtration solved on {paper} ({light})")
 
 
 def bake_profile(stock: str, out_dir: Path, tc_lut_size_note: dict) -> dict:
@@ -506,11 +527,12 @@ def bake_profile(stock: str, out_dir: Path, tc_lut_size_note: dict) -> dict:
             "inputGamutCompress": "xy",
         }
         tc_lut_size_note[stock] = tc_lut.shape
-        if p.info.channel_model == "bw" or p.info.type == "positive":
-            import lens_filters
-            filters = lens_filters.FILTERS if p.info.channel_model == "bw" else lens_filters.WARMING
-            pack["lensFilters"] = bake_lens_filters(stock, sensitivity, adaptation, out_dir,
-                                                    p.info.reference_illuminant, filters)
+        # every film takes camera filters: Kodak's Wratten set on black and
+        # white, warming and conversion filters on colour
+        import lens_filters
+        filters = lens_filters.FILTERS if p.info.channel_model == "bw" else lens_filters.WARMING
+        pack["lensFilters"] = bake_lens_filters(stock, sensitivity, adaptation, out_dir,
+                                                p.info.reference_illuminant, filters)
 
     (out_dir / f"{stock}.json").write_text(json.dumps(pack))
     return pack
@@ -519,33 +541,59 @@ def bake_profile(stock: str, out_dir: Path, tc_lut_size_note: dict) -> dict:
 def bake_lens_filters(stock: str, sensitivity: np.ndarray, adaptation, out_dir: Path,
                       reference_illuminant: str, filters) -> list[dict]:
     """One exposure LUT per camera filter: Kodak's Wratten filters for a
-    black-and-white film, Tiffen's warming filters for a slide film.
+    black-and-white film, warming and conversion filters (Kodak's 81C, 85 and
+    85B, Tiffen's 812) for a colour film.
 
     The film sees the scene through the filter: its sensitivity times the
     filter's transmittance (tools/bake/lens_filters.py). The exposure is
     opened up by the filter factor, as a photographer does: a single factor,
-    set so mid-grey still exposes the green-sensitive layer at 1. On silver
-    every layer is that one, so only colours move: a red filter darkens a blue
-    sky without darkening the picture. On a slide the blue-sensitive layer
-    stays held back, which is what warms it.
+    set so mid-grey still exposes the green-sensitive layer as it would
+    without the filter. On silver every layer is that one, so only colours
+    move: a red filter darkens a blue sky without darkening the picture. On
+    colour film the blue-sensitive layer stays held back, which is what warms
+    it; under daylight an 85 or 85B holds it back to where a tungsten film's
+    balance wants it. The factor is taken under the light the filter is made
+    for (`WarmingFilter.light`): the film's own, or daylight for the 85 and
+    85B, where the engine sets the print time too
+    (`RenderSetupBuilder.midGrey`).
     """
-    from spektrafilm.utils.spectral_upsampling import rgb_to_raw_hanatos2025
+    from spektrafilm.utils.spectral_upsampling import _illuminant_to_xy, rgb_to_raw_hanatos2025
+
+    def grey_under(light):
+        """An 18% grey under `light` as the film's decode presents it: agx's
+        input RGB, read against the film's own light (`_rgb_to_tc_b`)."""
+        if light is None or light == reference_illuminant:
+            return np.full((1, 1, 3), 0.184)
+        x, y = colour.CCS_ILLUMINANTS["CIE 1931 2 Degree Standard Observer"][light]
+        xyz = np.array([x / y, 1.0, (1 - x - y) / y]) * 0.184
+        rgb = colour.XYZ_to_RGB(xyz, WORKING_COLOR_SPACE, illuminant=_illuminant_to_xy(reference_illuminant),
+                                chromatic_adaptation_transform="CAT16", apply_cctf_encoding=False)
+        return np.asarray(rgb, float).reshape(1, 1, 3)
+
+    def exposure(rgb, sens, tc_lut):
+        return np.ravel(rgb_to_raw_hanatos2025(rgb, sens, color_space=WORKING_COLOR_SPACE, apply_cctf_decoding=False,
+                                               reference_illuminant=reference_illuminant, tc_lut=tc_lut))
 
     baked = []
-    grey = np.full((1, 1, 3), 0.184)
+    bare_lut = None
     for lens_filter in filters:
         filtered = sensitivity * lens_filter.transmittance()[:, None]
         lut = compute_hanatos2025_tc_lut(filtered, adaptation, gamut_compress=InputGamutCompressSpec())
-        raw = rgb_to_raw_hanatos2025(grey, filtered, color_space=WORKING_COLOR_SPACE,
-                                     apply_cctf_decoding=False,
-                                     reference_illuminant=reference_illuminant, tc_lut=lut)
-        layers = np.ravel(raw)
-        factor = 1.0 / float(layers[1])     # the unfiltered film's mid-grey exposes 1
+        light = getattr(lens_filter, "light", None)
+        grey = grey_under(light)
+        layers = exposure(grey, filtered, lut)
+        if light is None or light == reference_illuminant:
+            factor = 1.0 / float(layers[1])     # the unfiltered film's mid-grey exposes 1
+        else:
+            if bare_lut is None:
+                bare_lut = compute_hanatos2025_tc_lut(sensitivity, adaptation, gamut_compress=InputGamutCompressSpec())
+            factor = float(exposure(grey, sensitivity, bare_lut)[1] / layers[1])
         lut = np.ascontiguousarray(np.asarray(lut, dtype=np.float64) * factor, dtype=np.float32)
         name = f"{stock}.{lens_filter.id}.tclut"
         (out_dir / name).write_bytes(lut.tobytes())
         entry = {"id": lens_filter.id, "name": lens_filter.name,
                  **({"wratten": lens_filter.wratten} if lens_filter.wratten else {}),
+                 **({"light": light} if light is not None and light != reference_illuminant else {}),
                  "file": name, "factor": factor}
         baked.append(entry)
         r, b = layers[0] * factor, layers[2] * factor

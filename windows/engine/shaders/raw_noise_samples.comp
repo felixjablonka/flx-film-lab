@@ -1,0 +1,45 @@
+#version 440
+// What the noise fit takes (RawDetail's noiseSamples): of the luminance at
+// full size, or of its 2x2 means, every fourth pixel each way from (1, 1),
+// its 3x3 mean and its distance from it. The CPU fits them.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2D src;
+layout(binding = 1, rgba32f) uniform writeonly image2D samples;
+layout(std140, binding = 2) uniform Samples {
+    ivec4 grid;             // x: 1 at full size, 2 for the 2x2 means; y: the step; zw: the plane's size
+} u;
+
+const vec3 kLuma = vec3(0.2627, 0.6780, 0.0593);
+
+float value(int x, int y)
+{
+    ivec2 full = textureSize(src, 0);
+    float sum = 0.0;
+    int count = 0;
+    for (int dy = 0; dy < u.grid.x; ++dy)
+        for (int dx = 0; dx < u.grid.x; ++dx) {
+            ivec2 p = ivec2(u.grid.x * x + dx, u.grid.x * y + dy);
+            if (p.x < full.x && p.y < full.y) {
+                vec3 c = texelFetch(src, p, 0).rgb;
+                sum += kLuma.x * c.x + kLuma.y * c.y + kLuma.z * c.z;
+                ++count;
+            }
+        }
+    return sum / float(count);
+}
+
+void main()
+{
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(samples);
+    if (gid.x >= size.x || gid.y >= size.y) return;
+    int x = 1 + u.grid.y * gid.x, y = 1 + u.grid.y * gid.y;
+    float sum = 0.0;
+    for (int dy = -1; dy <= 1; ++dy)
+        for (int dx = -1; dx <= 1; ++dx)
+            sum += value(x + dx, y + dy);
+    float mean = sum / 9.0;
+    imageStore(samples, gid, vec4(mean, abs(value(x, y) - mean), 0.0, 0.0));
+}

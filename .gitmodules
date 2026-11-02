@@ -1,0 +1,12 @@
+[submodule "windows/third_party/LibRaw"]
+	path = windows/third_party/LibRaw
+	url = https://github.com/LibRaw/LibRaw.git
+[submodule "windows/third_party/rawspeed"]
+	path = windows/third_party/rawspeed
+	url = https://github.com/darktable-org/rawspeed
+[submodule "windows/third_party/pugixml"]
+	path = windows/third_party/pugixml
+	url = https://github.com/zeux/pugixml
+[submodule "windows/third_party/lensfun"]
+	path = windows/third_party/lensfun
+	url = https://github.com/lensfun/lensfun

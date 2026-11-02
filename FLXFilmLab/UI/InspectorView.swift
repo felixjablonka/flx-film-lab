@@ -196,7 +196,7 @@ struct InspectorView: View {
             }
 
             Picker("White balance", selection: $model.whiteBalance) {
-                ForEach(RawLoader.WhiteBalance.allCases) { Text($0.rawValue).tag($0) }
+                ForEach(RawLoader.WhiteBalance.allCases) { Text($0.label).tag($0) }
             }
             .controlSize(.small).font(.system(size: 11))
             .help("The RAW is decoded for this illuminant, so the film sees the light the way it would have on set. Film reference uses whatever the loaded stock is balanced for.")

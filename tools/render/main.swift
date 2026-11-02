@@ -36,9 +36,11 @@ guard args.count >= 2 else {
       --no-auto                disable auto exposure
       --size PX                longest edge (default: native)
       --recipe FILE            load a saved recipe, then apply the flags above
-      --wb MODE                "Film reference" (default), "As shot", Daylight, Tungsten
-      --filter NAME            camera filter for a black-and-white film:
-                               blue, green, yellow, orange or red
+      --wb MODE                "Film reference" (default), "As shot", "Daylight D55",
+                               Daylight (D65), "Tungsten 3200 K", Tungsten (2850 K)
+      --filter NAME            camera filter: on black-and-white film blue, green,
+                               yellow, orange or red; on colour film 81c, 812, 85
+                               or 85b
       --list                   print the available stocks and exit
     """)
 }

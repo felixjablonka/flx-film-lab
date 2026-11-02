@@ -1,0 +1,26 @@
+#version 440
+// Capture sharpening's start: the luminance, and it floored above nought
+// (Richardson-Lucy works on light), which is also the first estimate.
+// RawDetail's sharpenCapture.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2D src;
+layout(binding = 1, r32f) uniform writeonly image2D observed;
+layout(binding = 2, r32f) uniform writeonly image2D luminance;
+layout(binding = 3, r32f) uniform writeonly image2D estimate;
+
+const vec3 kLuma = vec3(0.2627, 0.6780, 0.0593);
+const float kFloor = 1e-6;
+
+void main()
+{
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(observed);
+    if (gid.x >= size.x || gid.y >= size.y) return;
+    vec3 c = texelFetch(src, gid, 0).rgb;
+    float y = kLuma.x * c.x + kLuma.y * c.y + kLuma.z * c.z;
+    imageStore(observed, gid, vec4(max(y, kFloor), 0.0, 0.0, 1.0));
+    imageStore(luminance, gid, vec4(y, 0.0, 0.0, 1.0));
+    imageStore(estimate, gid, vec4(max(y, kFloor), 0.0, 0.0, 1.0));
+}

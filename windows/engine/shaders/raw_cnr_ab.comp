@@ -1,0 +1,31 @@
+#version 440
+// The guided filter's a and b for both chromas from the windows' means, the
+// edge threshold three times the noise at the level (the guide being cube
+// roots, its noise's variance is the luminance's over 9 Y^(4/3)).
+// RawDetail's reduceColourNoise.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2D first;        // means of I, I^2, c1, c2
+layout(binding = 1) uniform sampler2D second;       // means of I c1, I c2
+layout(binding = 2, rgba32f) uniform writeonly image2D ab;     // a1, b1, a2, b2
+layout(std140, binding = 3) uniform Noise {
+    vec4 noise;             // x a, y b: the half size's variance a Y + b
+} u;
+
+float variance(float y) { return max(1e-12, u.noise.x * max(y, 0.0) + u.noise.y); }
+
+void main()
+{
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(ab);
+    if (gid.x >= size.x || gid.y >= size.y) return;
+    vec4 m = texelFetch(first, gid, 0);
+    vec2 mp = texelFetch(second, gid, 0).xy;
+    float varI = max(0.0, m.y - m.x * m.x);
+    float level = max(pow(max(m.x, 0.0), 3.0), 1e-5);
+    float epsilon = variance(level) / pow(level, 4.0 / 3.0);
+    float a1 = (mp.x - m.x * m.z) / (varI + epsilon);
+    float a2 = (mp.y - m.x * m.w) / (varI + epsilon);
+    imageStore(ab, gid, vec4(a1, m.z - a1 * m.x, a2, m.w - a2 * m.x));
+}

@@ -1,4 +1,5 @@
-"""Each slide film's sharpness, and Vericolor III's, from its own datasheet's MTF.
+"""Each slide film's sharpness, and that of the colour negatives whose sheets
+plot an MTF (Vericolor III, EXR 50D and 200T), from its own datasheet's MTF.
 
 Sharpness in the engine comes from two of agx's stages (`bw_mtf.py` works
 through both): light scattering in the emulsion blurs, and the DIR couplers'
@@ -38,7 +39,7 @@ from scipy.optimize import least_squares
 
 from bw_mtf import TAIL_SIGMA_PER_LAMBDA, _gauss
 from datasheet import _flatten_path
-from vector_plots import VectorPlot, _curve_paths, _to_data, by_position, joined
+from vector_plots import VectorPlot, _curve_paths, _to_data, by_order, by_position, joined
 
 SHEETS = Path(__file__).resolve().parents[2] / "film spec sheets"
 REFERENCE_LOG_EXPOSURE = float(np.log10(0.5))     # one stop under mid-grey
@@ -111,6 +112,26 @@ VERICOLOR_III = _log_plot("e26-Vericolor_III.pdf", 3, (71.5, 373.2, 276.5, 543.9
                            (480.7, 7), (492.2, 5), (508.0, 3), (522.1, 2), (543.9, 1)))
 
 
+# Kodak's EXR motion picture negatives (H-1-5245 and H-1-5293, page 3): R, G
+# and B, starting together, EXR 50D's drawn as polylines and EXR 200T's as
+# curves; the green layer's is read, as E100's is, the three named by their
+# order at 50 cycles/mm. Rules read off each plot's gridlines.
+EXR_50D = _log_plot("Kodak EXR 50D 5245-1999.pdf", 2, (358.1, 279.5, 560.6, 432.5),
+                    ((358.1, 1), (379.82, 2), (392.47, 3), (401.82, 4), (408.45, 5), (429.84, 10), (452.44, 20),
+                     (481.37, 50), (503.07, 100), (524.46, 200)),
+                    ((279.5, 200), (298.73, 100), (309.27, 70), (318.91, 50), (333.67, 30), (345.42, 20),
+                     (365.6, 10), (375.84, 7), (386.08, 5), (400.24, 3), (412.89, 2), (432.5, 1)))
+EXR_200T = _log_plot("Kodak EXR 200T 5293-1999.pdf", 2, (362.6, 271.1, 554.8, 416.5),
+                     ((362.6, 1), (383.16, 2), (395.17, 3), (404.04, 4), (410.33, 5), (430.64, 10), (452.08, 20),
+                      (479.54, 50), (500.13, 100), (520.43, 200)),
+                     ((271.1, 200), (289.41, 100), (299.43, 70), (308.59, 50), (322.61, 30), (333.77, 20),
+                      (352.94, 10), (362.67, 7), (372.4, 5), (385.85, 3), (397.87, 2), (416.5, 1)))
+
+
+def _green_of_three(plot: VectorPlot, polylines: bool) -> np.ndarray:
+    return _as_curve(by_order(plot, ("B", "G", "R"), at_x=_L(50), polylines=polylines)["G"])
+
+
 def vericolor_iii() -> np.ndarray:
     curves = joined(VERICOLOR_III)
     if len(curves) != 1:
@@ -177,6 +198,10 @@ SHEET_MTF = {
     "kodak_ektachrome_100": ektachrome_100_green,
     **{stock: (lambda plot=plot: _single(plot)) for stock, plot in KODACHROME.items()},
     "kodak_vericolor_iii_160": vericolor_iii,
+    "kodak_exr_50d": lambda: _green_of_three(EXR_50D, polylines=True),
+    "kodak_exr_200t": lambda: _green_of_three(EXR_200T, polylines=False),
+    # the BBC's film-only measurement of 5251, one curve for the film
+    "kodak_5251_50t": lambda: __import__("kodak_1962_sheets").negative_mtf(),
 }
 
 

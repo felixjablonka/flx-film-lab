@@ -106,15 +106,32 @@ PAPER: dict[str, str] = {
 # strength the inhibition would take more than all of that contrast (b = 1.31,
 # where agx's own negatives reach 0.45-0.67), which no development reaches, and
 # a film held back as theirs are would not print that hard. It has no masking
-# couplers either.
-NO_COUPLERS = {"harman_phoenix_200"}
+# couplers either. Kodak's 5251 (1962) predates DIR couplers: "The couplers
+# contained in the red-sensitive and green-sensitive layers are themselves
+# colored to provide masking correction" (Kodak, SMPTE 1968, of 5254,
+# "structurally the same"), which its equivalent dyes carry, and its film-only
+# MTF never rises over 100% as an inhibitor's edge effect would make it.
+NO_COUPLERS = {"harman_phoenix_200", "kodak_5251_50t"}
+
+# The light a stock is balanced for, where agx's is not its sheet's. Kodak's
+# VISION3 200T and 500T sheets: "balanced for exposure with tungsten
+# illumination (3200K)", the light their curves are exposed to. agx balances
+# both for "T", a household incandescent bulb from NIST's tables (about 2813 K)
+# that agx gives no reason for, and a 3200 K lamp then printed them blue (b* -6
+# to -9). Only each layer's sensitivity level moves: set again so an 18.4% grey
+# in the sheet's light exposes every layer to 1, the way agx balances its
+# stocks (`reference_light`). The curves, dyes, couplers and grain are agx's.
+# The stocks built on them here (EXR 200T, Eterna 500T, Eterna Vivid 160T),
+# whose own sheets name the same 3200 K, take the light from them.
+REFERENCE_LIGHT = {"kodak_vision3_200t": "BB3200", "kodak_vision3_500t": "BB3200"}
 
 # Stocks whose enlarger filtration is solved at bake time for every colour
 # paper and carried in the neutral-filter table (`bake_packs.bake_shared`,
 # `print_neutral.neutral_filters`), as agx's own pairs are. Phoenix's unmasked
 # base wants twice the usual yellow, and the engine's own solve, started at
-# agx's default filtration, does not reach it on most papers.
-BAKED_FILTRATION = ("harman_phoenix_200",)
+# agx's default filtration, does not reach it on most papers. agx's table holds
+# the stocks in `REFERENCE_LIGHT` at agx's light; solved again in theirs.
+BAKED_FILTRATION = ("harman_phoenix_200", *REFERENCE_LIGHT)
 
 # Films far harder than a colour negative, whose softest paper grade is scaled
 # by how much (`bake_packs.softest_grade`), so that Contrast and Auto Contrast
@@ -128,6 +145,17 @@ WIDE_GRADES = ("harman_phoenix_200",)
 # Felix's pick: Phoenix a little softer than its curves print, Contrast -30
 # (R200.5), short of the -49 that would print it as hard as Portra 400.
 DEFAULT_CONTRAST = {"harman_phoenix_200": -30}
+
+
+def reference_light(profile):
+    """An agx profile in the light its sheet balances it for (`REFERENCE_LIGHT`),
+    in place; returned for chaining."""
+    light = REFERENCE_LIGHT.get(profile.info.stock)
+    if light is not None and profile.info.reference_illuminant != light:
+        from build_profiles import balance
+        profile.update_info(reference_illuminant=light)
+        balance(profile, window=False)
+    return profile
 
 
 def colour_matrix(stock: str, dir_couplers) -> None:
@@ -148,8 +176,9 @@ def slide_spatial(stock: str) -> dict:
     film_render = bake_packs.digested_for(profile).film_render
     colour_matrix(stock, film_render.dir_couplers)
     d = np.asarray(profile.data.density_curves, float)
-    return slide_mtf.fit(stock, profile.data.log_exposure, d - np.nanmin(d, axis=0),
-                         slide_mtf._matrix(film_render.dir_couplers), film_render.halation)
+    matrix = np.zeros((3, 3)) if stock in NO_COUPLERS else slide_mtf._matrix(film_render.dir_couplers)
+    return slide_mtf.fit(stock, profile.data.log_exposure, d - np.nanmin(d, axis=0), matrix,
+                         film_render.halation)
 
 
 def apply(stock: str, profile, film_render) -> dict:

@@ -1,0 +1,59 @@
+#version 440
+// Glow's source: the linear print weighted by a highlight mask measured on its
+// display brightness. glowGlowSelect.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2D src;
+layout(binding = 1, rgba32f) uniform writeonly image2D dst;
+layout(std140, binding = 2) uniform Effect {
+    vec4 a;                // x: t0, y: t1
+    vec4 b;
+    ivec4 flags;
+} u;
+
+// Glow's helpers (GlowKernels.swift's prelude).
+float encode1(float c)
+{
+    c = max(c, 0.0);
+    return c <= 0.0031308 ? c * 12.92 : 1.055 * pow(c, 1.0 / 2.4) - 0.055;
+}
+float decode1(float c)
+{
+    c = max(c, 0.0);
+    return c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4);
+}
+vec3 encode3(vec3 c) { return vec3(encode1(c.r), encode1(c.g), encode1(c.b)); }
+float ramp(float x, float t0, float t1) { return clamp((x - t0) / max(t1 - t0, 1.0e-4), 0.0, 1.0); }
+// adds light e to a with a smooth shoulder instead of a hard clip at 1
+float softAdd(float a, float e)
+{
+    if (e <= 0.0) return a;
+    float r = 1.0 - a;
+    if (r <= 1.0e-4) return a;
+    return 1.0 - r * exp(-e / r);
+}
+// Core Image's sRGB tone curves, extended past 0 and 1 by mirroring and
+// continuing (CILinearToSRGBToneCurve, CISRGBToneCurveToLinear)
+float toSRGB(float v)
+{
+    float a = abs(v);
+    float e = a <= 0.0031308 ? a * 12.92 : 1.055 * pow(a, 1.0 / 2.4) - 0.055;
+    return v < 0.0 ? -e : e;
+}
+float toLinear(float v)
+{
+    float a = abs(v);
+    float e = a <= 0.04045 ? a / 12.92 : pow((a + 0.055) / 1.055, 2.4);
+    return v < 0.0 ? -e : e;
+}
+
+void main()
+{
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(dst);
+    if (gid.x >= size.x || gid.y >= size.y) return;
+    vec3 lin = texelFetch(src, gid, 0).rgb;
+    float m = ramp(dot(encode3(lin), vec3(0.2126, 0.7152, 0.0722)), u.a.x, u.a.y);
+    imageStore(dst, gid, vec4(lin * m, 1.0));
+}

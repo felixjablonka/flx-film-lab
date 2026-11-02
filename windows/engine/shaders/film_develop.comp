@@ -1,0 +1,40 @@
+#version 440
+// filming.develop, first pass: log exposure -> negative CMY density through
+// the stock's own characteristic curves, min-subtracted. flx.metal film_develop.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2D logE;
+layout(binding = 1, rgba32f) uniform writeonly image2D dst;
+layout(std430, binding = 2) readonly buffer Curves {
+    float curves[];        // (256, 3) row-major
+};
+layout(std140, binding = 3) uniform DevelopUniforms {
+    vec4 axis;             // logE0, logEStep, edgeCap, diffusionFraction
+    vec4 gammaFactor;      // density_curve_gamma, per channel
+    vec4 densityMax;       // nanmax(density_curves, axis=0)
+    vec4 couplers;         // x: couplersAmount, y: isPositive
+} u;
+
+// agx utils/fast_interp.fast_interp: linear, clamped to the endpoint values,
+// on the uniform log-exposure axis.
+vec3 interpCurves(vec3 x, float logE0, float logEStep, vec3 gamma, int n)
+{
+    vec3 result;
+    for (int c = 0; c < 3; ++c) {
+        float pos = clamp((x[c] * gamma[c] - logE0) / logEStep, 0.0, float(n - 1));
+        int i0 = int(floor(pos));
+        int i1 = min(i0 + 1, n - 1);
+        result[c] = mix(curves[i0 * 3 + c], curves[i1 * 3 + c], pos - float(i0));
+    }
+    return result;
+}
+
+void main()
+{
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(dst);
+    if (gid.x >= size.x || gid.y >= size.y) return;
+    vec3 density = interpCurves(texelFetch(logE, gid, 0).rgb, u.axis.x, u.axis.y, u.gammaFactor.xyz, 256);
+    imageStore(dst, gid, vec4(density, 1.0));
+}

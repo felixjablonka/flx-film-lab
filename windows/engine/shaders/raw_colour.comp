@@ -1,0 +1,60 @@
+#version 440
+// Clipped highlights rebuilt in the camera's RGB balanced for the light, then
+// the colour transform to linear Rec.2020 and the gain. RawDecoder's
+// reconstructHighlights (its rebuild) and the transform after it.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2D src;
+layout(binding = 1) uniform sampler2D blocks;   // the block's colour, a 1 where known
+layout(binding = 2, rgba32f) uniform writeonly image2D dst;
+layout(std140, binding = 3) uniform Colour {
+    vec4 balance;
+    vec4 light;
+    vec4 matrix[3];         // columns
+    vec4 gain;              // x
+    ivec4 block;            // x: the block's size, y: 1 to rebuild the highlights
+} u;
+
+const float kClipped = 0.98;
+
+void main()
+{
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(dst);
+    if (gid.x >= size.x || gid.y >= size.y) return;
+    vec3 p = texelFetch(src, gid, 0).rgb;
+    if (u.block.y != 0) {
+        vec3 s = p / u.balance.xyz;
+        bvec3 clipped = bvec3(s.x >= kClipped, s.y >= kClipped, s.z >= kClipped);
+        int n = int(clipped.x) + int(clipped.y) + int(clipped.z);
+        if (n > 0) {
+            vec3 b = s / u.light.xyz;
+            if (n == 3) {
+                b = vec3(max(b.x, max(b.y, b.z)));
+            } else if (n == 2) {
+                float unclipped = !clipped.x ? b.x : !clipped.y ? b.y : b.z;
+                if (clipped.x) b.x = max(b.x, unclipped);
+                if (clipped.y) b.y = max(b.y, unclipped);
+                if (clipped.z) b.z = max(b.z, unclipped);
+            } else {
+                // components by name, not by a variable index, which
+                // Direct3D's compiler refuses to write to
+                int c = clipped.x ? 0 : clipped.y ? 1 : 2;
+                vec4 k = texelFetch(blocks, gid / u.block.x, 0);
+                vec3 m = k.w > 0.0 ? k.xyz : vec3(1.0);
+                float mc = c == 0 ? m.x : c == 1 ? m.y : m.z;
+                float estimate = 0.0;
+                if (c != 0) estimate += 0.5 * b.x * mc / max(m.x, 1e-6);
+                if (c != 1) estimate += 0.5 * b.y * mc / max(m.y, 1e-6);
+                if (c != 2) estimate += 0.5 * b.z * mc / max(m.z, 1e-6);
+                if (c == 0) b.x = max(b.x, estimate);
+                else if (c == 1) b.y = max(b.y, estimate);
+                else b.z = max(b.z, estimate);
+            }
+            p = b * u.light.xyz * u.balance.xyz;
+        }
+    }
+    p = (u.matrix[0].xyz * p.x + u.matrix[1].xyz * p.y + u.matrix[2].xyz * p.z) * u.gain.x;
+    imageStore(dst, gid, vec4(p, 1.0));
+}

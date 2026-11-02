@@ -1,0 +1,30 @@
+#version 440
+// DIR couplers, part 1: how much inhibitor each layer released (agx
+// model/couplers.compute_exposure_correction_dir_couplers, up to the blur).
+// flx.metal couplers_amount.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2D density;
+layout(binding = 1, rgba32f) uniform writeonly image2D dst;
+layout(std140, binding = 2) uniform Couplers {
+    vec4 matrix0;          // columns: donor k's release acts on receiver m through M[k][m]
+    vec4 matrix1;
+    vec4 matrix2;
+} c;
+layout(std140, binding = 3) uniform DevelopUniforms {
+    vec4 axis;             // logE0, logEStep, edgeCap, diffusionFraction
+    vec4 gammaFactor;
+    vec4 densityMax;
+    vec4 couplers;         // x: couplersAmount, y: isPositive
+} u;
+
+void main()
+{
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(dst);
+    if (gid.x >= size.x || gid.y >= size.y) return;
+    vec3 d = texelFetch(density, gid, 0).rgb;
+    vec3 silver = u.couplers.y != 0.0 ? (u.densityMax.xyz - d) : d;
+    imageStore(dst, gid, vec4(mat3(c.matrix0.xyz, c.matrix1.xyz, c.matrix2.xyz) * silver, 1.0));
+}

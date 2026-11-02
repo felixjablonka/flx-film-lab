@@ -1,0 +1,34 @@
+#version 440
+// One axis of RawLoader's Lanczos-3 scaling, from the weights the CPU
+// worked out (each output pixel's first source pixel and its taps), the
+// edges clamped. RawDecoder's scaleDown.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2D src;
+layout(binding = 1, rgba32f) uniform writeonly image2D dst;
+layout(std430, binding = 2) readonly buffer Weights {
+    float weights[];        // taps per output pixel
+};
+layout(std430, binding = 3) readonly buffer First {
+    int first[];            // the first source pixel of each output pixel
+};
+layout(std140, binding = 4) uniform Scale {
+    ivec4 params;           // x: the taps, y: 0 along the rows, 1 down the columns
+} u;
+
+void main()
+{
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(dst);
+    if (gid.x >= size.x || gid.y >= size.y) return;
+    ivec2 from = textureSize(src, 0);
+    int o = u.params.y == 0 ? gid.x : gid.y;
+    vec3 sum = vec3(0.0);
+    for (int i = 0; i < u.params.x; ++i) {
+        int s = first[o] + i;
+        ivec2 p = u.params.y == 0 ? ivec2(clamp(s, 0, from.x - 1), gid.y) : ivec2(gid.x, clamp(s, 0, from.y - 1));
+        sum += weights[o * u.params.x + i] * texelFetch(src, p, 0).rgb;
+    }
+    imageStore(dst, gid, vec4(sum, 1.0));
+}

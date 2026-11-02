@@ -1,0 +1,19 @@
+#version 440
+// Scale each pixel so that its neighbourhood averages to the grain-free
+// light: a gain, not an offset. flx.metal grain_restore_mean.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0, rgba32f) uniform image2D print;
+layout(binding = 1) uniform sampler2D meanGrainy;
+layout(binding = 2) uniform sampler2D meanGrainFree;
+
+void main()
+{
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(print);
+    if (gid.x >= size.x || gid.y >= size.y) return;
+    vec3 gain = clamp(max(texelFetch(meanGrainFree, gid, 0).rgb, 0.0) / max(texelFetch(meanGrainy, gid, 0).rgb, 1e-6),
+                      0.25, 4.0);
+    imageStore(print, gid, vec4(max(imageLoad(print, gid).rgb, 0.0) * gain, 1.0));
+}

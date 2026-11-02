@@ -1,5 +1,47 @@
 # Changelog
 
+## 1.3.0 (2026-11-02)
+
+FLX Film Lab for Windows, motion picture films and their print films, and
+the filters and white balances for shooting tungsten film: 41 film stocks
+and 13 print stocks in all.
+
+### FLX Film Lab for Windows
+- **Stills and Motion on Windows,** on the same film engine and film data as
+  the Mac app, with a RAW decoder of its own that gives each camera Apple's
+  colour. An installer for 64-bit Windows 10 and 11; the source is in
+  `windows/`.
+- **The Mac remains the main development platform.** The Windows app receives
+  limited testing, on a single configuration: Windows 11 with an NVIDIA RTX
+  graphics card.
+
+### New
+- **Motion picture films:** Kodak EXR 50D and EXR 200T, and Kodak 5251 50T,
+  Kodak's camera negative of 1962, each built from its own published data.
+- **Print films:** Fujifilm F-CP 3519, F-CP 3510 and Eterna-CP 3513DI, and
+  Kodak 5385, 5251's print film.
+- **Kodak Wratten 85 and 85B conversion filters,** for tungsten film in
+  daylight.
+- **Camera filters on every colour film,** where slides alone had the 81C and
+  812.
+- **Daylight D55 and Tungsten 3200 K white balances,** the films' own lights.
+  Daylight and Tungsten are now labelled Daylight D65 and Tungsten 2850 K.
+- **V-Log LUT pack:** the new films, and EXR 200T and 5251 converted for
+  daylight through an 85, EXR 200T also through an 85B.
+
+### Changed
+- Tungsten films are balanced for a 3200 K lamp, as their datasheets say,
+  instead of a household bulb: under Film reference a 3200 K lamp now prints
+  neutral, and household bulbs warm.
+- Picking a motion picture film moves the print onto its own print film, and
+  picking a still film moves it back onto its paper.
+- Fujifilm's motion picture films print on Fujifilm's F-CP 3510 instead of
+  Kodak 2383, in the LUT pack too.
+- The 81C is Kodak's Wratten 81C instead of Tiffen's, and prints almost the
+  same; the 812 stays Tiffen's.
+- The V-Log LUT pack leaves out Portra 800 pushed one and two stops; the app
+  keeps them.
+
 ## 1.2.1 (2026-10-29)
 
 ### Fixed

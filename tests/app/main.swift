@@ -255,6 +255,25 @@ func run() async throws {
     check(m.recipe.printStock == "kodak_portra_endura", "back to colour film, back to its colour paper")
     check(await settle(m) && m.displayImage != nil, "and it renders")
 
+    print("pick a motion picture film")
+    m.selectFilm("kodak_exr_200t")
+    check(m.recipe.printStock == "fujifilm_fcp_3519", "EXR 200T moves the print onto F-CP 3519 (\(m.recipe.printStock))")
+    m.selectFilm("fujifilm_eterna_500t")
+    check(m.recipe.printStock == "fujifilm_fcp_3510", "Eterna 500T onto its own, F-CP 3510")
+    m.selectFilm("kodak_5251_50t")
+    check(m.recipe.printStock == "kodak_5385", "5251 onto its companion print film, 5385 (\(m.recipe.printStock))")
+    m.recipe.printStock = "kodak_2393"
+    m.selectFilm("kodak_vision3_250d")
+    check(m.recipe.printStock == "kodak_2383", "Vision3 250D onto 2383, from a print film chosen by hand too")
+    m.selectFilm("kodak_portra_400")
+    check(m.recipe.printStock == "kodak_portra_endura", "a still film leaves the print film for its own paper")
+    m.recipe.printStock = "kodak_2383"
+    m.selectFilm("kodak_gold_200")
+    check(m.recipe.printStock == "kodak_2383", "a print film chosen for a still film stays")
+    m.selectFilm("kodak_portra_400")
+    m.recipe.printStock = "kodak_portra_endura"
+    check(await settle(m) && m.displayImage != nil, "and it renders")
+
     print("pick a slide after setting \"Print on paper\" by hand")
     // Set by hand on a negative, it stayed pinned, and every slide picked
     // afterwards printed on RA-4 paper, as a negative.
@@ -287,7 +306,15 @@ func run() async throws {
     m.selectFilm("fujifilm_provia_100f")
     check(m.recipe.lensFilter == "812", "a slide's warming filter stays on another slide")
     m.selectFilm("kodak_portra_400")
-    check(m.recipe.lensFilter == nil, "and goes on a colour negative")
+    check(m.recipe.lensFilter == "812", "and on a colour negative, which takes Tiffen's filters too")
+    check(await settle(m) && m.displayImage != nil, "and it renders")
+    var converted = m.recipe
+    converted.lensFilter = "85b"
+    m.recipe = converted
+    m.selectFilm("kodak_exr_200t")
+    check(m.recipe.lensFilter == "85b", "an 85B stays on a motion picture stock")
+    m.selectFilm("kodak_tri_x_400")
+    check(m.recipe.lensFilter == nil, "and goes on black and white, whose filters are Wratten's")
     check(await settle(m) && m.displayImage != nil, "and it renders")
 
     print("Phoenix opens a little softer, at Contrast -30 on its own scale")
@@ -326,10 +353,16 @@ func run() async throws {
           && negatives.contains("kodak_portra_400"),
           "Vision3 sits under Motion picture, Portra under Colour negative (\(cine.count) motion picture stocks)")
     let paperGroups = PackIndexEntry.groups(PackLibrary.shared.printStocks, films: false)
-    check(stocks(paperGroups, "Motion picture").contains("kodak_2383"),
-          "2383 print film sits under Motion picture among the papers")
+    let printFilms = stocks(paperGroups, "Motion picture")
+    check(["kodak_2383", "kodak_2393", "fujifilm_fcp_3519", "fujifilm_fcp_3510", "fujifilm_eterna_cp_3513di",
+           "kodak_5385"].allSatisfy(printFilms.contains),
+          "Kodak's and Fujifilm's print films sit under Motion picture among the papers (\(printFilms.count))")
     check(cine.contains("fujifilm_eterna_500t") && !negatives.contains("fujifilm_eterna_500t"),
           "Fujifilm's Eterna stocks sit under Motion picture too")
+    let eterna = try PackLibrary.shared.pack("fujifilm_eterna_500t").targetPrint
+    let exr = try PackLibrary.shared.pack("kodak_exr_200t").targetPrint
+    check(eterna == "fujifilm_fcp_3510" && exr == "fujifilm_fcp_3519",
+          "Fujifilm's motion picture negatives print on F-CP 3510, Kodak's EXR on F-CP 3519 (\(eterna ?? "-"), \(exr ?? "-"))")
 
     print("a file opened from Finder goes to the mode that reads it")
     let routes: [(String, AppMode)] = [("clip.mov", .motion), ("clip.mp4", .motion), ("frame.NEF", .stills),

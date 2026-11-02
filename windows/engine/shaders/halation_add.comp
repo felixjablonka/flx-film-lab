@@ -1,0 +1,24 @@
+#version 440
+// Back-reflection halation: E2 = E1 + a Σ_k w_k G(sigma_h sqrt(k)) E1,
+// renormalised so the added light does not also raise the exposure.
+// flx.metal halation_add.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2D src;
+layout(binding = 1) uniform sampler2D blurred;
+layout(binding = 2, rgba32f) uniform writeonly image2D dst;
+layout(std140, binding = 3) uniform Halation {
+    vec4 strength;         // a_tot per channel
+    ivec4 renormalize;     // x
+} u;
+
+void main()
+{
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(dst);
+    if (gid.x >= size.x || gid.y >= size.y) return;
+    vec3 e = texelFetch(src, gid, 0).rgb + u.strength.xyz * texelFetch(blurred, gid, 0).rgb;
+    if (u.renormalize.x != 0) e /= (1.0 + u.strength.xyz);
+    imageStore(dst, gid, vec4(e, 1.0));
+}

@@ -1,0 +1,45 @@
+#version 440
+// The highlights' block colours: per block of the picture, the sum of the
+// unclipped pixels' colour (the camera's RGB over the light's neutral) and
+// how many there are, one workgroup a block. The CPU fills the blocks
+// without. RawDecoder's reconstructHighlights.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2D src;
+layout(binding = 1, rgba32f) uniform writeonly image2D blocks;
+layout(std140, binding = 2) uniform Highlights {
+    vec4 balance;           // what the mosaic was balanced with
+    vec4 light;             // the light's neutral, largest channel 1
+    ivec4 block;            // x: its size, in pixels
+} u;
+
+const float kUnclipped = 0.75;
+
+shared vec4 partial[256];
+
+void main()
+{
+    ivec2 b = ivec2(gl_WorkGroupID.xy);
+    ivec2 size = textureSize(src, 0);
+    int t = int(gl_LocalInvocationIndex);
+    vec4 sum = vec4(0.0);
+    for (int dy = int(gl_LocalInvocationID.y); dy < u.block.x; dy += 16)
+        for (int dx = int(gl_LocalInvocationID.x); dx < u.block.x; dx += 16) {
+            ivec2 p = b * u.block.x + ivec2(dx, dy);
+            if (p.x >= size.x || p.y >= size.y)
+                continue;
+            vec3 s = texelFetch(src, p, 0).rgb / u.balance.xyz;
+            if (max(s.x, max(s.y, s.z)) < kUnclipped && min(s.x, min(s.y, s.z)) > 0.01)
+                sum += vec4(s / u.light.xyz, 1.0);
+        }
+    partial[t] = sum;
+    barrier();
+    for (int stride = 128; stride > 0; stride /= 2) {
+        if (t < stride)
+            partial[t] += partial[t + stride];
+        barrier();
+    }
+    if (t == 0)
+        imageStore(blocks, b, partial[0]);
+}

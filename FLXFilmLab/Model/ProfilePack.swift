@@ -58,19 +58,25 @@ struct HalationDefaults: Decodable {
 
 /// A camera filter a film can be shot through, with its own exposure LUT
 /// baked from the filter's transmittance (tools/bake/lens_filters.py): Kodak's
-/// Wratten filters for black and white, Tiffen's warming filters for slides.
+/// Wratten filters for black and white; for colour film Kodak's Wratten 81C,
+/// 85 and 85B and Tiffen's 812.
 struct LensFilterRef: Decodable, Hashable, Identifiable {
     let id: String
     let name: String
-    /// The Wratten number, for Kodak's filters; a Tiffen filter's name is its
-    /// own designation.
+    /// The Wratten number, for the black-and-white filters, named by their
+    /// colour; a colour film's filter's name is its own designation.
     let wratten: String?
     let file: String
     /// How much the filter cuts a mid-grey's exposure on this film. The LUT
     /// already opens up by it, as a photographer would.
     let factor: Float
+    /// The light the filter is made for, where its factor and the print time
+    /// are set, if not the film's own: daylight ("D55") for the 85 and 85B on
+    /// a tungsten film.
+    let light: String?
 
-    /// "Red, Wratten 25", or a Tiffen filter's own name, "Tiffen 81C". Plain
+    /// "Red, Wratten 25", or a colour film's filter's own name, "Wratten 85B",
+    /// "Tiffen 812". Plain
     /// ASCII, as it goes into a .cube's comments.
     var designation: String { wratten.map { "\(name), Wratten \($0)" } ?? name }
 }
@@ -132,6 +138,9 @@ struct ProfilePack: Decodable {
     let targetPrint: String?
     let referenceIlluminant: String
     let viewingIlluminant: String
+    /// agx's "still" or "cine": a motion picture film, or the print film one
+    /// prints on.
+    let use: String?
 
     let logExposure: [Float]            // (256,)
     let densityCurves: [Float]          // (256, 3) row-major
@@ -148,7 +157,8 @@ struct ProfilePack: Decodable {
     let defaults: StockDefaults
     let rgbToXYZ: [Float]?              // filming stocks only, (3, 3) row-major
     let tcLut: TcLutRef?
-    /// Black-and-white films only.
+    /// Kodak's Wratten filters for a black-and-white film; warming and
+    /// conversion filters, Wratten and Tiffen, for a colour one.
     let lensFilters: [LensFilterRef]?
     /// The softest paper grade, ISO R, that Contrast and Auto Contrast may
     /// reach with this film: absent for all but a film far harder than a
@@ -160,6 +170,7 @@ struct ProfilePack: Decodable {
     let gradeDefault: Float?
 
     var isPositive: Bool { type == "positive" }
+    var isMotionPicture: Bool { use == "cine" }
     /// `gradeSoftest`, or the grade range's own soft end.
     var softestGrade: Float { gradeSoftest ?? Constants.gradeMax }
     /// `gradeDefault`, or the neutral R115.

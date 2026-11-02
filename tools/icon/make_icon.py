@@ -125,9 +125,9 @@ def social_preview() -> Path:
     # Text, style, size, colour, and the space above it.
     lines = [
         ("FLX Film Lab", "Demi Bold", 92, (245, 245, 247), 0),
-        ("A Mac app for shooting digital photos", "Regular", 36, (199, 201, 207), 26),
-        ("as if they were film.", "Regular", 36, (199, 201, 207), 6),
-        ("34 film stocks · RAW photos · log video · LUTs", "Medium", 26, (138, 141, 150), 30),
+        ("A Mac and Windows app for shooting", "Regular", 36, (199, 201, 207), 26),
+        ("digital photos as if they were film.", "Regular", 36, (199, 201, 207), 6),
+        ("41 film stocks · RAW photos · log video · LUTs", "Medium", 26, (138, 141, 150), 30),
     ]
     faces = [font(style, size) for _, style, size, _, _ in lines]
     heights = [sum(face.getmetrics()) for face in faces]

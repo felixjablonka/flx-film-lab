@@ -124,12 +124,13 @@ FLX Film Lab is *not* a faithful reproduction:
    The split-contrast and regional-colour zones use the same lightness scale.
    Auto Contrast fits the frame's textured shadow-to-highlight range onto the
    paper rather than NegPy's textural-range formula.
-10. **19 colour profiles are built here rather than upstream** — every
+10. **22 colour profiles are built here rather than upstream** — every
    slide film (Provia 100F, Provia 400X, Astia 100F, Velvia 50, Velvia 100,
    Ektachrome E100, Kodachrome 25, 64 and 200), Superia 1600 and Superia Reala
    100, Agfa Optima II 100 and Portrait XPS 160, Fujifilm's Eterna Vivid
    160T, Eterna 500T and Reala 500D motion picture negatives, Kodak Royal Gold
-   100 and Vericolor III 160, and HARMAN Phoenix 200, in `profiles/`;
+   100 and Vericolor III 160, Kodak's EXR 50D, EXR 200T and 5251 50T motion
+   picture negatives, and HARMAN Phoenix 200, in `profiles/`;
    for the four agx also has (Provia 100F, Velvia 100, Ektachrome E100 and
    Kodachrome 64), they replace its profiles. Their characteristic curves,
    spectral sensitivities and, where a sheet plots them, dye spectra are
@@ -156,11 +157,15 @@ FLX Film Lab is *not* a faithful reproduction:
    table, as Superia 1600 is, has the filtration solved for a neutral mid-grey,
    as item 11's black-and-white negatives on colour paper do. The Status A and
    M responsivities in `tools/bake/data/densitometer/` are agx's digitisation
-   of ISO 5-3, after Giorgianni & Madden (2009). Slides can be shot through
-   Tiffen's 81C and 812 warming filters, their transmittance read off the
-   charts in Tiffen's *Filter Specifications* catalogue (pp. 13 and 16), with
-   the exposure opened up by each filter's factor for the green-sensitive
-   layer. Royal Gold 100 (Kodak E-41) and Vericolor III 160 (Kodak E-26) take
+   of ISO 5-3, after Giorgianni & Madden (2009). Colour films can be shot
+   through Kodak's Wratten 81C warming filter and 85 and 85B conversion
+   filters, their transmittance read off Kodak's Wratten 2 sheets for the 81
+   and 85 series, and Tiffen's own 812, read off Tiffen's *Filter
+   Specifications* catalogue (p. 16), each multiplied into the film's
+   spectral sensitivities, with the exposure opened up by each filter's
+   factor for the green-sensitive layer, taken in daylight for the 85 and 85B,
+   the light they are made for, where the print time is set too (agx has
+   camera filters for none of its stocks). Royal Gold 100 (Kodak E-41) and Vericolor III 160 (Kodak E-26) take
    less from agx: their base is their sheet's own D-min spectral density rather
    than a donor's base and mask. Their dyes are those of the agx negative that
    best fits what the sheet's midscale neutral adds over D-min (Ektar 100;
@@ -183,6 +188,32 @@ FLX Film Lab is *not* a faithful reproduction:
    - Its paper grades reach R400 rather than R180, by its contrast over Portra
      400's (`gradeSoftest`), and it opens at R200.5 (`gradeDefault`).
    - Its halation is agx's preset for a film with no antihalation layer.
+   Kodak's EXR 50D (H-1-5245, 1999, and its 2003 edition) and EXR 200T
+   (H-1-5293, 1999) take their curves, spectral sensitivities, base (D-min),
+   midscale neutral, MTF and per-layer granularity from their own sheets, and
+   EXR 50D its three dyes, which its 2003 edition plots; EXR 200T's dyes are
+   EXR 50D's, the sister stock's own, which add up to 200T's neutral without
+   moving. Mid-grey is placed at Kodak's normal exposure, camera stop 0 on the
+   2003 edition's scale over 50D's curves (10/EI lux-seconds), 200T by the
+   same rule at EI 200. Both sheets plot only to about three stops over normal;
+   the curves continue at their final gradient for 0.8 decades, as the
+   black-and-white negatives' do. From agx they take only the coupler model
+   and the light, of the Vision3 stock of the same balance and speed (for
+   200T the 3200 K lamp its own sheet names, item 16), and no spectral
+   adaptation window; they print on Fujifilm F-CP 3519 (item 15).
+   Kodak's 5251 50T (1962) takes its curves, spectral sensitivities and
+   equivalent dyes, with their negative lobes, from the figures of the paper
+   that introduced it (W. I. Kisner, Journal of the SMPTE 71(10), 1962), traced
+   off scans (`tools/bake/kodak_1962_sheets.py`); their log exposure axis is
+   unnumbered and read at the scale of their density, as Kodak draws its
+   curves (its 1968 paper on 5254, "structurally the same", marks the axis in
+   decades as long as its density units). EI 50 tungsten and the 3200 K
+   balance come from Kodak's announcement (American Cinematographer, June
+   1962), mid-grey at Kodak's normal exposure, 10/EI, on its ASA/ISO speed
+   point. It runs without DIR couplers, which it predates; the BBC's film-only
+   MTF (C. B. B. Wood, BBC Research Department Report 1966/31) sets its blur.
+   From agx it takes the base and mask of Vision3 200T, and its grain is EXR
+   200T's per-layer curves; it prints on Kodak 5385 (item 15).
 11. **Black-and-white stocks are built here, from datasheets alone** — Kodak
    Tri-X 400 (Kodak F-4017), Kodak T-Max 100 (Kodak Alaris F-4016), Ilford HP5
    Plus and Ilford Multigrade RC Deluxe
@@ -259,7 +290,8 @@ FLX Film Lab is *not* a faithful reproduction:
    to the parity references too, so parity still compares the engine with agx at
    equal parameters.
 13. **Slide films' sharpness is fitted to their datasheets' MTF**, and so is
-   Vericolor III's, the one colour negative whose sheet plots one
+   that of the colour negatives whose sheets plot one, Vericolor III, EXR 50D
+   and EXR 200T
    (`tools/bake/slide_mtf.py`), rather than taken from agx's defaults, with two
    engine changes agx does not have. agx's DIR couplers sharpen fine detail by
    1/(1 - b), b the share of a layer's contrast its inhibition takes, which
@@ -284,6 +316,51 @@ FLX Film Lab is *not* a faithful reproduction:
    flxrender's default. Only the suggestion changes, not the films' data, and
    agx's neutral-filtration table covers both pairs
    (`tools/bake/stock_overrides.py`).
+15. **Four motion picture print films are built here**, Fujifilm's F-CP 3519
+   (KB-918E), F-CP 3510 (KB-301E) and ETERNA-CP 3513DI (KB-505E), in
+   `profiles/` by `tools/bake/build_print_profiles.py`, as agx ships Kodak's
+   2383 and 2393. Their curves, spectral sensitivities, dyes, base (the
+   curves' D-min) and midscale neutral come from their own sheets: the dyes
+   less the floor all three share, half of what they add up to beyond the
+   sheet's grey, which each single-dye density holds once more (as plotted,
+   the yellow and magenta lie flat at about 0.05 where neither absorbs); the
+   green and blue curves moved back by the 1.0 and 2.0 decades the sheet
+   shifts them by; each layer's sensitivity level from where its curve lies
+   under the sheet's exposure (2854 K through CC-90Y, CC-60M and an SC-41, the
+   CC filters taken as gelatin of the sheet's own dye shapes). From agx they
+   take only its format and its conventions for a print stock: the dye-amount
+   scale of 2383 (each dye scaled so a unit reads in its own channel what
+   2383's does), its printer lamp (TH-KG3) and xenon projector (K75P), and
+   where mid-grey sits, log H 0 in each layer being its share of a neutral
+   grey of 18.4% luminance; and as much of the lamp collected as 2383, through
+   each one's filtration for Vision3 250D. Every colour negative's filtration
+   onto them is solved at bake time in agx's pipeline and carried in the
+   neutral-filtration table, as agx's table has its own negatives on its own
+   papers. Their sheets' CTF is not modelled: no print stage here blurs.
+   Fujifilm's motion picture negatives (Eterna Vivid 160T, Eterna 500T, Reala
+   500D) name F-CP 3510 as their reference paper, and Kodak's EXR 50D and 200T
+   F-CP 3519, where the agx Vision3 stocks they are built on name 2383.
+   Kodak's Eastman Color Print 5385 (1962), from the paper that introduced it
+   (W. I. Kisner, Journal of the SMPTE 71(10), 1962), traced off scans: its
+   curves (integral density, taken as Status A, read at the scale of their
+   density), spectral sensitivities and dyes, which add up to its neutral and
+   are taken as drawn. The paper moved each curve along the exposure axis, so
+   each layer's speed comes from the sensitivity plot's own levels, where its
+   curve reaches D-min + 1.0, rather than from where the curve lies. Kodak's
+   5251 names it as its reference paper.
+16. **Tungsten stocks are balanced for a 3200 K lamp**, the light their
+   datasheets name ("balanced for exposure with tungsten illumination
+   (3200K)", Kodak's Vision3 200T and 500T; Fujifilm's Eterna sheets expose
+   their curves to a "3200K tungsten light source"), where agx balances its
+   Vision3 200T and 500T for "T", a household incandescent bulb from NIST's
+   tables (about 2813 K). Of agx's data only each layer's sensitivity level
+   differs: set again so an 18.4% grey in that light exposes every layer to 1,
+   as agx sets it, before the spectral adaptation window. Their filtration
+   onto every colour paper is solved again in agx's pipeline and carried in
+   the neutral-filtration table, and the parity references print with it.
+   The stocks built here on them (EXR 200T, Eterna 500T, Eterna Vivid 160T,
+   5251 50T) take the same light, and Film reference decodes them all at the
+   Planckian 3200 K (`tools/bake/stock_overrides.py`).
 
 Everything else matches: `tests/parity` checks the film exposure and negative
 density taps as bit-exact and the final RGB to within 6e-4 across four
@@ -329,9 +406,38 @@ Insta360's, from the *Insta360 10-bit I-Log White Paper* (Insta360, June
 2026), which also puts its primaries at BT.2020's. No colour-science or
 OpenColorIO code is included.
 
+## The Windows app
+
+`windows/` holds FLX Film Lab for Windows: the same engine and film data,
+ported to C++ and GLSL compute on Qt's QRhi, with a RAW decoder of its own.
+Its own code is GPLv3, as the rest. It carries, each under its own licence,
+which the installer puts beside the app in `licenses/`:
+
+- **Qt 6.12** (Qt Base, Qt Shader Tools, Qt Multimedia), LGPL-3.0, linked
+  dynamically. Its source is Qt's own, 6.12.0, at download.qt.io.
+- **FFmpeg 8.1.3**, which reads and writes Motion's clips, LGPL-2.1 or later,
+  linked dynamically: the app's own build of FFmpeg's release source
+  (`windows/tools/ffmpeg/build.sh`), with no GPL or non-free part and only
+  what the app uses. Intel's libvpl (MIT) is linked into it for Intel's HEVC
+  encoder, and NVIDIA's and AMD's codec headers (MIT) are compiled in;
+  `licenses/FFmpeg - source.txt` names every source and how it was built, and
+  `FFmpeg - notices.txt` carries their notices.
+- **RawSpeed** (darktable), LGPL-2.1, and **LibRaw**, LGPL-2.1 or CDDL-1.0,
+  which unpack the RAW files, and **pugixml**, MIT, which reads RawSpeed's
+  camera list: the submodules in `windows/third_party`, at the commits the
+  port is built from.
+- **Lensfun's lens database**, CC BY-SA 3.0, for lens correction where a
+  camera's own file gives none. The port reads it with its own code, not
+  Lensfun's library.
+- **Apple's colour per camera** (`windows/engine/data/apple-colour.json`):
+  measured from macOS's own RAW decoding of raw.pixls.us's sample files
+  (CC0, a few CC BY-NC-SA, used only to measure; no sample is in the
+  repository or the app).
+
 ## App icon
 
-The app icon (`FLXFilmLab/Resources/AppIcon.icns`, the pictures made from it,
+The app icon (`FLXFilmLab/Resources/AppIcon.icns`, the Windows app's
+`windows/app/flx.ico`, the pictures made from it,
 `docs/images/icon.png` and `tools/icon/social-preview.png`, and the artwork they
 are made from) is © Felix Jablonka, all rights reserved. Neither the GPL nor CC BY-SA
 covers it: a fork or redistribution needs its own icon.

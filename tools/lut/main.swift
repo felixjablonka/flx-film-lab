@@ -34,8 +34,8 @@ guard let outputPath = args.first, !outputPath.hasPrefix("--") else {
       --film STOCK         film profile (default kodak_portra_800)
       --paper STOCK        print profile (default: the film's reference paper)
       --filter NAME        camera filter: blue, green, yellow, orange or red for a
-                           black-and-white film, 81c or 812 (Tiffen's warming
-                           filters) for a slide
+                           black-and-white film; 81c, 812, 85 or 85b (Wratten
+                           81C, Tiffen 812, Wratten 85, 85B) for a colour film
       --size N             lattice points per axis (default 65; 33 for monitors)
       --input MODE         the footage, and how the app hands it to the LUT:
                              code          Nikon N-Log, code value / 1023: a Zf writes
@@ -162,7 +162,7 @@ do {
     let filter = film.lensFilter(recipe.lensFilter)
     if option("--filter") != nil, recipe.lensFilter != nil, filter == nil {
         let names = film.lensFilters?.map(\.id).joined(separator: ", ")
-        fail("\(film.name) has no \(recipe.lensFilter!) filter" + (names.map { "; it has \($0)" } ?? "; only black-and-white and slide stocks take one"))
+        fail("\(film.name) has no \(recipe.lensFilter!) filter" + (names.map { "; it has \($0)" } ?? "; it takes none"))
     }
     let start = CFAbsoluteTimeGetCurrent()
     let baker = try LookBaker()

@@ -300,8 +300,8 @@ final class DocumentModel: ObservableObject {
     // MARK: - Stocks
 
     /// Change film the way the stock picker does: crossing between colour and
-    /// black and white also moves the print onto the new film's own paper
-    /// (`Recipe.loadingFilm`).
+    /// black and white also moves the print onto the new film's own paper, and
+    /// a motion picture film onto its own print film (`Recipe.loadingFilm`).
     func selectFilm(_ stock: String) {
         guard stock != recipe.filmStock else { return }
         recipe = recipe.loadingFilm(stock)
@@ -415,9 +415,11 @@ final class DocumentModel: ObservableObject {
         switch whiteBalance {
         case .filmReference:
             let name = filmPack?.referenceIlluminant ?? "D55"
-            return String(format: "%@ · %.0f K", name, filmReferenceTemperature)
+            return String(format: "%@ · %.0f K", name.hasPrefix("BB") ? "Tungsten" : name, filmReferenceTemperature)
         case .asShot: return "camera as-shot"
-        case .daylight: return "6504 K"
+        case .daylightD55: return "D55 · 5503 K"
+        case .daylight: return "D65 · 6504 K"
+        case .tungsten3200: return "3200 K"
         case .tungsten: return "2850 K"
         case .custom: return String(format: "%.0f K · tint %+.0f", customTemperature, customTint)
         }

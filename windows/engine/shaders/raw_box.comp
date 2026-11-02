@@ -1,0 +1,25 @@
+#version 440
+// The mean over 2r + 1 pixels along one axis, the window cut to the picture
+// at its edges: one half of a square box mean. RawDetail's boxMean.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2D src;
+layout(binding = 1, rgba32f) uniform writeonly image2D dst;
+layout(std140, binding = 2) uniform Box {
+    ivec4 params;           // x: the radius, y: 0 along the rows, 1 down the columns
+} u;
+
+void main()
+{
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(dst);
+    if (gid.x >= size.x || gid.y >= size.y) return;
+    ivec2 axis = u.params.y == 0 ? ivec2(1, 0) : ivec2(0, 1);
+    int at = u.params.y == 0 ? gid.x : gid.y, extent = u.params.y == 0 ? size.x : size.y;
+    int lo = max(0, at - u.params.x), hi = min(extent - 1, at + u.params.x);
+    vec4 sum = vec4(0.0);
+    for (int i = lo; i <= hi; ++i)
+        sum += texelFetch(src, gid + axis * (i - at), 0);
+    imageStore(dst, gid, sum / float(hi - lo + 1));
+}

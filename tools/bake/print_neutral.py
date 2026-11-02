@@ -13,12 +13,15 @@ each step's L*a*b* against the paper's viewing light.
 from __future__ import annotations
 
 import dataclasses
+import json
+from pathlib import Path
 
 import colour
 import numpy as np
 
 import stock_overrides
 from spektrafilm import init_params
+from spektrafilm.profiles.io import load_profile, profile_from_dict
 from spektrafilm.runtime.params_builder import digest_params
 from spektrafilm.runtime.pipeline import SimulationPipeline
 
@@ -26,10 +29,20 @@ WORKING = "ITU-R BT.2020"
 MID_GREY = 0.184
 
 
-def _pipeline(profile, paper: str, filters):
-    # init_params loads a film by name from agx's own set; the profile itself replaces it
-    params = init_params(film_profile="kodak_portra_400", print_profile=paper)
+def _paper(paper):
+    """A paper or print film: a profile as it is, or one named, this repo's
+    own (`profiles/`) before agx's."""
+    if not isinstance(paper, str):
+        return paper
+    local = Path(__file__).resolve().parents[2] / "profiles" / f"{paper}.json"
+    return profile_from_dict(json.loads(local.read_text())) if local.exists() else load_profile(paper)
+
+
+def _pipeline(profile, paper, filters):
+    # init_params loads stocks by name from agx's own set; the profiles themselves replace them
+    params = init_params(film_profile="kodak_portra_400", print_profile="kodak_2383")
     params.film = profile
+    params.print = _paper(paper)
     params.io.input_color_space = WORKING
     params.io.input_cctf_decoding = False
     params.io.output_color_space = WORKING
@@ -55,7 +68,7 @@ def _lab(rgb: np.ndarray) -> np.ndarray:
     return colour.XYZ_to_Lab(xyz, colour.CCS_ILLUMINANTS["CIE 1931 2 Degree Standard Observer"]["D65"])
 
 
-def printed(profile, paper: str, filters, stops) -> np.ndarray:
+def printed(profile, paper, filters, stops) -> np.ndarray:
     """L*a*b* of greys at `stops` relative to 18%, printed with (magenta, yellow)."""
     v = MID_GREY * 2.0 ** np.asarray(stops, float)
     image = np.repeat(v.reshape(1, -1, 1), 3, axis=2)
@@ -63,7 +76,7 @@ def printed(profile, paper: str, filters, stops) -> np.ndarray:
     return _lab(out)
 
 
-def neutral_filters(profile, paper: str, start=(65.0, 55.0)) -> np.ndarray:
+def neutral_filters(profile, paper, start=(65.0, 55.0)) -> np.ndarray:
     """Magenta and yellow that print mid-grey neutral: Newton from agx's
     defaults, a step cut short wherever the whole one would print less neutral
     (from far off, as Phoenix's unmasked base starts, it overshoots)."""
@@ -91,7 +104,7 @@ def neutral_filters(profile, paper: str, start=(65.0, 55.0)) -> np.ndarray:
     return my
 
 
-def wedge(profile, paper: str, stops=(-3, -2, -1, 0, 1, 2)) -> np.ndarray:
+def wedge(profile, paper, stops=(-3, -2, -1, 0, 1, 2)) -> np.ndarray:
     """The wedge's L*a*b*, mid-grey printed neutral."""
     return printed(profile, paper, neutral_filters(profile, paper), stops)
 

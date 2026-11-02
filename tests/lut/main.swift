@@ -412,6 +412,43 @@ do {
     check(b.blue > none.blue + 3 && b.red < none.red - 3, "blue filter: blues lighter, reds darker")
     check(gr.green > none.green + 3 && gr.red < none.red, "green filter: greens (foliage) lighter, reds darker")
 
+    // The pack's tungsten films through the orange filters that convert them,
+    // shot as its read-me says: the camera at 3200 K, so daylight records blue,
+    // and the filter, its factor built in, converts it. A metered grey card in
+    // daylight, as the LUT presents it to the film, which takes the camera's
+    // white for its own 3200 K light: D55 through the film's RGB-to-XYZ,
+    // inverted, in V-Gamut.
+    print("      Daylight at 3200 K:  filter   L*    a*    b*")
+    for (name, film, paper, filters) in [("EXR 200T", "kodak_exr_200t", "fujifilm_fcp_3519", ["85", "85b"]),
+                                         ("5251", "kodak_5251_50t", "kodak_5385", ["85"])] {
+        let x: Float = 0.33242, y: Float = 0.34743
+        let bt2020 = try PackLibrary.shared.pack(film).rgbToXYZMatrix.inverse * (SIMD3(x / y, 1, (1 - x - y) / y) * 0.18)
+        let daylight = VLog.toBT2020.inverse * SIMD3<Double>(bt2020)
+        let daylightCard = SIMD3(Float(VLog.code(linear: daylight.x)), Float(VLog.code(linear: daylight.y)),
+                                 Float(VLog.code(linear: daylight.z)))
+        var card: [String: SIMD3<Double>] = [:]
+        for filter in [nil] + filters as [String?] {
+            let lut = try baker.bake(recipe: recipe(film, paper) { $0.lensFilter = filter }, size: 33, input: .vlog, output: srgb)
+            let g = lab(lut.sample(daylightCard), srgb)
+            card[filter ?? "none"] = g
+            print(String(format: "      %-9@            %-5@ %5.1f %+5.1f %+5.1f", name as NSString,
+                         (filter ?? "none") as NSString, g.x, g.y, g.z))
+        }
+        let bare = card["none"]!
+        func cast(_ c: SIMD3<Double>) -> Double { hypot(c.y, c.z) }
+        check(bare.z < -10, String(format: "%@ without a filter prints daylight blue (b* %+.1f)", name, bare.z))
+        if let c = card["85"] {
+            // rated to take daylight to 3400 K, it leaves a 3200 K film no warmer than neutral
+            check(cast(c) < 0.4 * cast(bare) && abs(c.y) < 3 && c.z < 1 && c.x > 40 && c.x < 62,
+                  String(format: "%@ through the 85: a mid-grey, neutral to a little cool (L* %.1f a* %+.1f b* %+.1f)",
+                         name, c.x, c.y, c.z))
+        }
+        if let c = card["85b"] {
+            check(c.z > 2 && cast(c) < 0.7 * cast(bare) && c.x > 40 && c.x < 62,
+                  String(format: "%@ through the 85B: a mid-grey, a little warm (L* %.1f a* %+.1f b* %+.1f)", name, c.x, c.y, c.z))
+        }
+    }
+
     // Max DR: the camera at -1 EV records scene stop s at s - 1. The LUT's +1 EV
     // and softer print put midtones back and roll the extra stop into paper white.
     // The S9's sensor (the Zf's and S5's) holds about +6 stops over grey at either
