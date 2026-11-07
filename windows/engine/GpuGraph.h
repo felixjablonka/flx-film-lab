@@ -4,6 +4,7 @@
 
 #include <rhi/qrhi.h>
 
+#include <cstdio>
 #include <map>
 #include <memory>
 #include <string>
@@ -16,6 +17,19 @@
 // textures by their place in the order the layout makes them and their size;
 // bindings by kernel and what they bind. A layout's uploads go with the next
 // frame. And Glow's effects, which both lay on their finished picture.
+
+// FLX_GPU_STATS: each texture of 10 MB or more as it is made, to see where
+// the GPU's memory goes.
+inline void noteTexture(const char *what, QSize size, QRhiTexture::Format format)
+{
+    static const bool on = qEnvironmentVariableIsSet("FLX_GPU_STATS");
+    const int bytes = format == QRhiTexture::RGBA32F ? 16 : format == QRhiTexture::RGBA16F ? 8
+        : format == QRhiTexture::R32F ? 4 : format == QRhiTexture::RGBA8 ? 4 : 4;
+    const double mb = double(size.width()) * size.height() * bytes / 1e6;
+    if (on && mb >= 10)
+        std::fprintf(stderr, "texture %s %dx%d %.0f MB\n", what, size.width(), size.height(), mb);
+}
+
 class GpuGraph
 {
 public:
@@ -60,8 +74,10 @@ protected:
     QRhiTexture *applyEffects(QRhiTexture *print, const EffectsParams &e, QRhiTexture::Format working);
 
     // Runs the passes from `first`, the layout's uploads before them and the
-    // readbacks after; the wall time, in seconds.
-    double run(const std::vector<std::pair<QRhiTexture *, QRhiReadbackResult *>> &readbacks, size_t first = 0);
+    // readbacks after, of textures and of storage buffers; the wall time, in
+    // seconds.
+    double run(const std::vector<std::pair<QRhiTexture *, QRhiReadbackResult *>> &readbacks, size_t first = 0,
+               const std::vector<std::pair<QRhiBuffer *, QRhiReadbackResult *>> &buffers = {});
     // a float readback as float32, from half precision where it is
     std::vector<float> floats(const QRhiReadbackResult &r, QRhiTexture *texture) const;
 

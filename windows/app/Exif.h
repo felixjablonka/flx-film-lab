@@ -11,6 +11,10 @@
 // at what settings, where. Zero or empty where the source has none.
 struct ExportMetadata {
     QString make, model, lensMake, lensModel, artist, description;
+    // What made the print (Provenance): the software with its version, and
+    // the film, its filter and the paper, for the user comment and, when the
+    // camera left it blank, the description.
+    QString software, provenance;
     double shutter = 0, aperture = 0, focalLength = 0;  // seconds, f-number, mm
     int iso = 0, focalLength35 = 0;
     long long taken = 0;            // seconds since 1970, local time as the camera wrote it

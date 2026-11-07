@@ -87,6 +87,23 @@ COLOUR: dict[str, dict] = {
     # Gold 200's chroma on the same Ektacolor Edge, 1.19x. On agx's coupler
     # strength it printed 1.36x, beyond any film agx's set has.
     "kodak_royal_gold_100": {"interlayer": 0.59},
+    # Konica's CENTURIA SUPER 100: "brilliantly colored portrayals of
+    # foreground subjects" with "perfect reproduction of skin tone colors",
+    # "the best selection for outdoor snapshots": what Kodak says of Gold 200
+    # ("Saturated colors", "Bright, colorful prints", for "general
+    # picture-taking"), so Gold 200's chroma on the same Ektacolor Edge, 1.19x.
+    # SUPER 1600's sheet puts its colour in no words: SUPER 100's, of the same
+    # series and emulsion technologies. On the coupler strength of agx's X-TRA
+    # 400, whose dyes they take, they printed 1.45x and 1.47x, beyond any film
+    # agx's set has.
+    "konica_centuria_super_100": {"interlayer": 0.43},
+    "konica_centuria_super_1600": {"interlayer": 0.41},
+    # Konica's IMPRESA 50 Professional: "subtle color tones that no other film
+    # can capture with this much fidelity", "extremely fine shadings of color
+    # plus delicate contrast": natural colour, Portra 160's chroma, measured on
+    # the paper IMPRESA prints on, Ektacolor Edge (1.145x; 1.045x on Portra
+    # Endura). On X-TRA 400's coupler strength it printed 1.35x.
+    "konica_impresa_50": {"interlayer": 0.47},
 }
 
 # Each stock's reference paper, where it is not agx's `target_print`: what

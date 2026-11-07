@@ -245,6 +245,7 @@ do {
             "grain": grainOn,
             "shaped": !GeometryMap(resolved.geometry, sourceWidth: width, sourceHeight: height, wholeFrame: false).isIdentity,
             "effects": resolved.effects?.isActive ?? false,
+            "curves": !(resolved.curves?.isIdentity ?? true),
             "dodgeBurn": !resolved.masks.filter(\.enabled).isEmpty,
         ],
         "exposureEV": exposureEV,
@@ -303,6 +304,9 @@ do {
     try write("edgeScale.f32", width: edge.count / 3, height: 1, channels: 3, floats: edge)
     let shift = setup.toneShift.isEmpty ? [Float](repeating: 0, count: 2) : setup.toneShift
     try write("toneShift.f32", width: shift.count, height: 1, channels: 1, floats: shift)
+    if let curves = resolved.curves, !curves.isIdentity {
+        try write("printCurves.f32", width: PrintCurves.tableSize, height: 3, channels: 1, floats: curves.table())
+    }
     try write("toneLut.f32", width: Constants.toneLutWidth, height: Constants.toneLutHeight, channels: 4,
               floats: setup.toneLUT)
     try write("tcLut.f32", width: tc.size, height: tc.size, channels: 3, floats: tc.values)
@@ -318,7 +322,15 @@ do {
     guard let linear = renderer.readLinear() else { fail("no linear print") }
     try write("rgb_out.f32", width: outWidth, height: outHeight, channels: 4, floats: linear)
     guard let display = renderer.makeDisplayImage(colorSpaceName: resolved.outputColorSpace),
-          let bytes = display.dataProvider?.data as Data? else { fail("no display image") }
+          var bytes = display.dataProvider?.data as Data? else { fail("no display image") }
+    // Red first, as the port's: from 1.4.0 the Mac's screen image holds blue,
+    // green, red, alpha, the order Core Animation draws from.
+    if display.bitmapInfo.contains(.byteOrder32Little) {
+        bytes.withUnsafeMutableBytes { raw in
+            let p = raw.bindMemory(to: UInt8.self)
+            for i in stride(from: 0, to: p.count - 3, by: 4) { p.swapAt(i, i + 2) }
+        }
+    }
     try write("display.u8", width: outWidth, height: outHeight, channels: 4, type: 1, payload: bytes)
 
     print(String(format: "%@: %d x %d, %@ on %@, %+.2f EV, render %.3f s -> %@",

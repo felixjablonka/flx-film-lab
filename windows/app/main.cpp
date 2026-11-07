@@ -12,6 +12,8 @@
 //   --bench N           with --screenshot: first N renders, each with the exposure moved, timed
 //   --cropping          with --screenshot: the crop being drawn
 //   --select ID         with --screenshot: a mask or gradient selected, its handles showing
+//   --loupe X,Y,W,H     the loupe open at X,Y (fractions of the print), W x H pixels of the print
+//   --save-loupe PNG    with --loupe: the loupe's picture, once printed
 //   --white-balance WB  once it has rendered, this white balance (decoding again): Daylight, As shot, ...
 //
 // With a movie, which opens in Motion:
@@ -132,13 +134,17 @@ int main(int argc, char **argv)
                                    QStringLiteral("name"));
     const QCommandLineOption exportLUT(QStringLiteral("export-lut"), QStringLiteral("Motion: the look as a .cube."),
                                        QStringLiteral("path"));
+    const QCommandLineOption loupe(QStringLiteral("loupe"), QStringLiteral("Open the loupe at X,Y, W x H."),
+                                   QStringLiteral("x,y,w,h"));
+    const QCommandLineOption saveLoupe(QStringLiteral("save-loupe"), QStringLiteral("The loupe's picture to PNG."),
+                                       QStringLiteral("png"));
     parser.addOptions({screenshot, exportTo, size, recipe, preview, savePreview, bench, cropping, select, whiteBalance,
-                       at, play, codec, exportLUT});
+                       at, play, codec, exportLUT, loupe, saveLoupe});
     parser.addHelpOption();
     parser.process(app);
 
     // the test switches run an app of their own; anything else is handed on
-    const bool testing = parser.isSet(screenshot) || parser.isSet(exportTo) || parser.isSet(exportLUT);
+    const bool testing = parser.isSet(screenshot) || parser.isSet(exportTo) || parser.isSet(exportLUT) || parser.isSet(saveLoupe);
     const QStringList files = parser.positionalArguments();
     if (!testing && handOver(files.isEmpty() ? QString() : QFileInfo(files.first()).absoluteFilePath()))
         return 0;
@@ -179,7 +185,7 @@ int main(int argc, char **argv)
         window.openFile(files.first());
 
     // the test switches with a movie: wait until its frame is graded
-    if ((parser.isSet(screenshot) || parser.isSet(exportTo) || parser.isSet(exportLUT)) && !files.isEmpty()
+    if ((parser.isSet(screenshot) || parser.isSet(exportTo) || parser.isSet(exportLUT) || parser.isSet(saveLoupe)) && !files.isEmpty()
         && isMovie(files.first())) {
         auto *poll = new QTimer(&app);
         auto stage = std::make_shared<int>(0);      // 0 opening, 1 seek, 2 play, 3 export, 4 done
@@ -327,6 +333,20 @@ int main(int argc, char **argv)
                 *quiet = 0;
                 return;
             }
+            if (parser.isSet(loupe) && !document.loupeOn()) {
+                const QStringList v = parser.value(loupe).split(QLatin1Char(','));
+                if (v.size() == 4) {
+                    document.moveLoupe(QPointF(v[0].toDouble(), v[1].toDouble()));
+                    document.setLoupeSize(QSize(v[2].toInt(), v[3].toInt()));
+                    document.setLoupeOn(true);
+                }
+                *quiet = 0;
+                return;
+            }
+            if (document.loupeOn() && (document.loupeBusy() || document.loupeImage().isNull())) {
+                *quiet = 0;
+                return;
+            }
             if (parser.isSet(exportTo) && !*exportStarted) {
                 const QString path = QFileInfo(parser.value(exportTo)).absoluteFilePath();
                 const QString ext = QFileInfo(path).suffix().toLower();
@@ -342,6 +362,8 @@ int main(int argc, char **argv)
                 window.grab().save(parser.value(screenshot));
             if (parser.isSet(savePreview))
                 document.displayImage().save(parser.value(savePreview));
+            if (parser.isSet(saveLoupe))
+                document.loupeImage().save(parser.value(saveLoupe));
             if (!benched->empty()) {
                 std::vector<double> t(benched->begin() + 1, benched->end());
                 std::sort(t.begin(), t.end());

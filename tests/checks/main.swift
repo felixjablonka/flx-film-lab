@@ -1,6 +1,7 @@
 import Foundation
 import CoreGraphics
 import ImageIO
+import CoreImage
 import simd
 @testable import FLXCore
 
@@ -1019,7 +1020,8 @@ print("colour negatives built from datasheets print a full, grey range")
 do {
     let negatives = ["fujifilm_superia_1600", "fujifilm_superia_reala_100", "agfa_optima_ii_100", "agfa_portrait_xps_160",
                      "fujifilm_eterna_vivid_160t", "fujifilm_eterna_500t", "fujifilm_reala_500d", "kodak_royal_gold_100",
-                     "kodak_vericolor_iii_160", "harman_phoenix_200"]
+                     "kodak_vericolor_iii_160", "konica_centuria_super_100", "konica_centuria_super_1600",
+                     "konica_impresa_50", "harman_phoenix_200"]
     let wedge: [Float] = [-3, -2, -1, 0, 1, 2]
     renderer.setImage(greyWedge(wedge), width: wedge.count, height: 1)
     for film in negatives {
@@ -1417,7 +1419,7 @@ do {
     let bytes = CFDataGetBytePtr(screen.dataProvider!.data)!
     let centre = ((h / 2) * w + w / 2) * 4 + 3
     let emptyCorner = bytes[3] == 0, fullCentre = bytes[centre] == 255
-    check(screen.width == w && screen.alphaInfo == .premultipliedLast && emptyCorner && fullCentre,
+    check(screen.width == w && screen.alphaInfo == .premultipliedFirst && emptyCorner && fullCentre,
           "drawing the crop, the whole frame shows, its corners empty where levelling leaves them")
 }
 
@@ -1570,6 +1572,233 @@ do {
     var quarter = FrameGeometry.identity
     quarter.turn(clockwise: false)
     check(ev(quarter) == whole, "nor does turning a print that is not cropped")
+}
+
+print("curves pass through their points, never overshoot, and reach the file and the histogram")
+do {
+    // The straight curve's table is the identity, to the float.
+    let straight = PrintCurves().table()
+    let n = PrintCurves.tableSize
+    let worst = (0..<n).map { abs(Double(straight[$0]) - Double($0) / Double(n - 1)) }.max() ?? 1
+    check(PrintCurves().isIdentity && worst < 1e-6,
+          String(format: "the straight curve gives every value back (off by %.1e at most)", worst))
+
+    // An S-curve through its points, flat beyond its ends, inside 0...1, and
+    // rising wherever its points rise.
+    let s = [CurvePoint(x: 0.05, y: 0), CurvePoint(x: 0.25, y: 0.18), CurvePoint(x: 0.5, y: 0.5),
+             CurvePoint(x: 0.75, y: 0.84), CurvePoint(x: 1, y: 0.97)]
+    let spline = PrintCurves.Spline(s)
+    let through = s.map { abs(spline($0.x) - $0.y) }.max() ?? 1
+    let samples = (0...1000).map { spline(Double($0) / 1000) }
+    let rising = zip(samples, samples.dropFirst()).allSatisfy { $0 <= $1 + 1e-12 }
+    check(through < 1e-12 && rising && samples.allSatisfy { (0...1).contains($0) }
+          && spline(0.01) == 0 && spline(1) == 0.97,
+          "an S-curve passes through its points, rises with them, stays within 0...1 and is flat past its ends")
+    // A peak in the points is a peak in the curve, not an overshoot past it.
+    let peak = PrintCurves.Spline([CurvePoint(x: 0, y: 0), CurvePoint(x: 0.4, y: 0.9),
+                                   CurvePoint(x: 0.6, y: 0.9), CurvePoint(x: 1, y: 0.2)])
+    let top = (0...1000).map { peak(Double($0) / 1000) }.max() ?? 2
+    check(abs(top - 0.9) < 1e-9, String(format: "a plateau at 0.9 tops out at %.6f", top))
+
+    // On the GPU: a grey wedge printed with curves comes out of the export's
+    // read as the curves give its encoded values, and straight curves change
+    // nothing at all.
+    func srgb(_ v: Float) -> Float { v <= 0.0031308 ? v * 12.92 : 1.055 * pow(v, 1 / 2.4) - 0.055 }
+    let wedgeStops: [Float] = [-4, -3, -2, -1, -0.5, 0, 0.5, 1, 2, 3]
+    let wedge = try Renderer()
+    wedge.measuresHistogram = true
+    wedge.setImage(greyWedge(wedgeStops), width: wedgeStops.count, height: 1)
+    let plain = try baseRecipe(film: "kodak_portra_400")
+    let before = try render(wedge, plain)
+    let plainBins = wedge.histogram
+    var curved = plain
+    var c = PrintCurves()
+    c.rgb = [CurvePoint(x: 0, y: 0.04), CurvePoint(x: 0.5, y: 0.62), CurvePoint(x: 1, y: 0.96)]
+    c.red = [CurvePoint(x: 0, y: 0), CurvePoint(x: 0.5, y: 0.45), CurvePoint(x: 1, y: 1)]
+    curved.curves = c
+    let after = try render(wedge, curved)
+    let curvedBins = wedge.histogram
+    let all = PrintCurves.Spline(c.rgb), red = PrintCurves.Spline(c.red), plainSpline = PrintCurves.Spline(PrintCurves.straight)
+    var off: Float = 0
+    for (b, a) in zip(before, after) {
+        for ch in 0..<3 {
+            let given = Double(min(max(srgb(max(b[ch], 0)), 0), 1))
+            let want = (ch == 0 ? red : plainSpline)(all(given))
+            off = max(off, abs(srgb(a[ch]) - Float(want)))
+        }
+    }
+    check(off < 2e-4, String(format: "the print's encoded values follow the curves within %.1e (RGB lifted, red lowered)", off))
+    var same = plain
+    same.curves = PrintCurves()
+    let unchanged = try render(wedge, same)
+    check(zip(before, unchanged).allSatisfy { $0 == $1 }, "straight curves leave the print bit for bit as it was")
+
+    // The histogram counts every pixel once per channel, and under curves
+    // keeps the print as they were given it.
+    let counted = (0..<3).map { ch in (0..<256).reduce(0) { $0 + Int(curvedBins?.after[ch * 256 + $1] ?? 0) } }
+    check(counted == [wedgeStops.count, wedgeStops.count, wedgeStops.count] && plainBins?.before == nil,
+          "the histogram counts each pixel once in each channel")
+    check(curvedBins?.before == plainBins?.after && curvedBins?.after != plainBins?.after,
+          "under curves it is taken twice: of the print as given, and as finished")
+    let mid = Int((srgb(after[5].y) * 255).rounded())
+    check((curvedBins?.after[256 + mid] ?? 0) >= 1,
+          "the finished print's mid-grey lands in the bin its 8-bit value falls in")
+
+    // A recipe saved before there were curves still opens, with none.
+    var old = try JSONSerialization.jsonObject(with: JSONEncoder().encode(plain)) as! [String: Any]
+    old.removeValue(forKey: "curves")
+    let reopened = try JSONDecoder().decode(Recipe.self, from: JSONSerialization.data(withJSONObject: old))
+    check(reopened.curves == nil && reopened == plain, "a recipe saved before curves existed opens without any")
+}
+
+print("the loupe's part of a frame prints as the whole print does there")
+do {
+    // A frame with texture, hard edges and points of light far past white,
+    // so halation, the couplers, the grain and the effects all reach across
+    // the part's edges.
+    let fw = 1500, fh = 1000
+    var frame = [Float](repeating: 1, count: fw * fh * 4)
+    var state: UInt32 = 12345
+    func noise() -> Float { state = state &* 1664525 &+ 1013904223; return Float(state >> 8) / 16777216 }
+    for y in 0..<fh {
+        for x in 0..<fw {
+            let i = (y * fw + x) * 4
+            let base: Float = 0.04 + 0.25 * Float(x) / Float(fw) + ((x / 60 + y / 60) % 2 == 0 ? 0.08 : 0)
+            frame[i] = base * (0.9 + 0.2 * noise())
+            frame[i + 1] = base * (0.85 + 0.2 * noise())
+            frame[i + 2] = base * (0.8 + 0.25 * noise())
+        }
+    }
+    for (cx, cy) in [(700, 420), (760, 610), (300, 300), (1180, 200), (40, 900)] {
+        for y in (cy - 6)...(cy + 6) {
+            for x in (cx - 6)...(cx + 6) {
+                let i = (y * fw + x) * 4
+                frame[i] = 40; frame[i + 1] = 36; frame[i + 2] = 30
+            }
+        }
+    }
+    func encoded(_ v: Float) -> Float {
+        let c = max(v, 0)
+        return min(c <= 0.0031308 ? c * 12.92 : 1.055 * pow(c, 1 / 2.4) - 0.055, 1)
+    }
+
+    let whole = try Renderer(), loupe = try Renderer()
+    whole.grainSeed = 7
+    loupe.grainSeed = 7
+    whole.setImage(frame, width: fw, height: fh)
+    loupe.holdFrame(frame, width: fw, height: fh)
+    check(loupe.holdsFrame, "the frame is held at full size")
+
+    /// The worst difference, in the file's values, between the whole print
+    /// and the loupe's part over each window.
+    func worst(_ recipe: Recipe, windows: [CGRect], beyond: CIImage? = nil) throws -> Float {
+        let setup = try RenderSetupBuilder.build(recipe: recipe, exposureEV: Float(recipe.exposureEV))
+        let masks = recipe.masks.filter(\.enabled)
+        if masks.isEmpty { whole.clearDodgeBurn(); loupe.clearDodgeBurn() } else {
+            let map = MaskRasterizer.rasterize(masks: masks, width: fw, height: fh)
+            whole.setDodgeBurnMap(map)
+            loupe.setDodgeBurnMap(map)
+        }
+        _ = try whole.render(setup: setup, recipe: recipe)
+        let all = whole.readLinear()!
+        let ow = Int(whole.outputSize.width)
+        let map = GeometryMap(recipe.geometry, sourceWidth: fw, sourceHeight: fh)
+        let reach = Renderer.reach(setup: setup, recipe: recipe, frameWidth: fw, frameHeight: fh,
+                                   shaped: !map.isIdentity)
+        var off: Float = 0
+        for window in windows {
+            let (part, box) = Renderer.loupeRegions(window: window, map: map, reach: reach)
+            guard loupe.setWindow(x: Int(box.minX), y: Int(box.minY), width: Int(box.width), height: Int(box.height))
+            else { return .infinity }
+            _ = try loupe.render(setup: setup, recipe: recipe, part: Renderer.Part(rect: part, beyond: beyond))
+            let made = loupe.madeRect, piece = loupe.readLinear()!
+            let mw = Int(made.width)
+            for y in Int(window.minY)..<Int(window.maxY) {
+                for x in Int(window.minX)..<Int(window.maxX) {
+                    let a = (y * ow + x) * 4, b = ((y - Int(made.minY)) * mw + (x - Int(made.minX))) * 4
+                    for c in 0..<3 { off = max(off, abs(encoded(all[a + c]) - encoded(piece[b + c]))) }
+                }
+            }
+        }
+        return off
+    }
+
+    // Everything the film stage spreads, at its widest.
+    var r = try baseRecipe(film: "kodak_portra_400")
+    r.grainEnabled = true
+    r.halationEnabled = true
+    r.halationScale = 4
+    r.halationAmount = 2
+    r.couplersDiffusion = 3
+    r.grainScale = 4
+    let windows = [CGRect(x: 600, y: 330, width: 200, height: 180), CGRect(x: 0, y: 820, width: 160, height: 180),
+                   CGRect(x: 1340, y: 0, width: 160, height: 140)]
+    let setup = try RenderSetupBuilder.build(recipe: r, exposureEV: 0)
+    let reach = Renderer.reach(setup: setup, recipe: r, frameWidth: fw, frameHeight: fh, shaped: false)
+    let flat = try worst(r, windows: windows)
+    check(flat < 1e-4, String(format: "unshaped, with halation, couplers and grain at their widest (a %d px reach): off by %.1e at most", reach.film, flat))
+
+    // Turned, mirrored, levelled and cropped, with a mask and a gradient on
+    // the frame.
+    var shapedRecipe = r
+    var g = FrameGeometry()
+    g.turn(clockwise: true)
+    g.flip(horizontal: true)
+    g.setStraighten(3.2)
+    g.setAspect(.free, frame: CGSize(width: fh, height: fw))
+    g.setCrop(CGRect(x: 80, y: 120, width: 760, height: 1180), frame: CGSize(width: fh, height: fw))
+    shapedRecipe.geometry = g
+    var mask = LocalMask()
+    mask.points = [CGPoint(x: 0.35, y: 0.3), CGPoint(x: 0.6, y: 0.32), CGPoint(x: 0.55, y: 0.6), CGPoint(x: 0.33, y: 0.55)]
+    mask.stops = 0.8
+    shapedRecipe.masks = [mask]
+    var gradient = ExposureGradient()
+    gradient.points = [CGPoint(x: 0.5, y: 0.2), CGPoint(x: 0.5, y: 0.5)]
+    gradient.exposureEV = -1.5
+    shapedRecipe.gradients = [gradient]
+    let shapedMap = GeometryMap(g, sourceWidth: fw, sourceHeight: fh)
+    let sw = shapedMap.outputWidth, sh = shapedMap.outputHeight
+    let shapedWindows = [CGRect(x: sw / 2 - 100, y: sh / 2 - 90, width: 200, height: 180),
+                         CGRect(x: 0, y: 0, width: 150, height: 150),
+                         CGRect(x: sw - 170, y: sh - 160, width: 170, height: 160)]
+    let shaped = try worst(shapedRecipe, windows: shapedWindows)
+    check(shaped < 1e-4, String(format: "turned, mirrored, levelled and cropped, with a mask and a gradient: off by %.1e at most", shaped))
+
+    // Bloom & Glow reach past any part: the light beyond it comes from the
+    // preview's print, made here at half the frame's size.
+    var glowing = r
+    var look = GlowLook.off
+    look.bloom.enabled = true
+    look.bloom.amount = 60
+    look.bloom.size = 90
+    look.bloom.haze = 60
+    look.glow.enabled = true
+    look.glow.amount = 60
+    look.glow.size = 85
+    glowing.effects = look
+    let preview = try Renderer()
+    preview.grainSeed = 7
+    preview.keepsPrintBeforeEffects = true
+    var half = [Float](repeating: 1, count: (fw / 2) * (fh / 2) * 4)
+    for y in 0..<(fh / 2) {
+        for x in 0..<(fw / 2) {
+            for c in 0..<3 {
+                var sum: Float = 0
+                for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] { sum += frame[((2 * y + dy) * fw + 2 * x + dx) * 4 + c] }
+                half[(y * (fw / 2) + x) * 4 + c] = sum / 4
+            }
+        }
+    }
+    preview.setImage(half, width: fw / 2, height: fh / 2)
+    _ = try preview.render(setup: try RenderSetupBuilder.build(recipe: glowing, exposureEV: 0), recipe: glowing)
+    let far = preview.printBeforeEffects.flatMap {
+        CIImage(mtlTexture: $0, options: [.colorSpace: CGColorSpace(name: CGColorSpace.extendedLinearSRGB)!])
+    }
+    let withFar = try worst(glowing, windows: windows, beyond: far)
+    let without = try worst(glowing, windows: windows)
+    check(far != nil && withFar < 2e-3 && withFar < without / 2,
+          String(format: "Bloom & Glow at their widest, the light beyond the part from the preview: off by %.1e at most (%.1e from the part alone)",
+                 withFar, without))
 }
 
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) check(s) failed")

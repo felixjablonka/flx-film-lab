@@ -116,6 +116,13 @@ SHEET_RMS: dict[str, tuple[float, str, str]] = {
     "kodak_vericolor_iii_160": (_pgi(39), "visual", "Kodak Print Grain Index 39 (4x6)"),
     "kodak_ultramax_400": (5.0, "visual", "no sheet; Kodak's consumer line, as Gold 200"),
     "harman_phoenix_200": (7.0, "visual", "none published ('strong visible grain'); as Superia 1600"),
+    "konica_centuria_super_100": (4.0, "visual", "Konica CENTURIA SUPER 100 sheet (48 um)"),
+    "konica_centuria_super_1600": (6.0, "visual", "Konica CENTURIA SUPER 1600 sheet (48 um)"),
+    # IMPRESA 50's sheet claims "the highest level of granularity ... of any
+    # color print film" (1998) and gives no figure: Konica's own step from
+    # SUPER 100 to 1600 (4 to 6 over four stops), carried down one stop.
+    "konica_impresa_50": (round(4.0 * 0.5 ** (np.log(6 / 4) / np.log(16)), 2), "visual",
+                          "none published; Konica's CENTURIA SUPER 100 to 1600 step, at ISO 50"),
     # slides
     "fujifilm_provia_100f": (8.0, "visual", "Fujifilm Provia 100F sheet"),
     "fujifilm_provia_400x": (11.0, "visual", "Fujifilm Provia 400X sheet"),

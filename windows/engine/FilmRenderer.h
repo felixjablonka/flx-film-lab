@@ -45,7 +45,9 @@ public:
     // RGB, and the image-sized textures for it, kept until the next. Past
     // 12 MP the intermediates are half precision, as the Mac's
     // (Renderer.setImage). Throws std::runtime_error.
-    void setPicture(const float *rgba, int width, int height);
+    // A part of a frame (the loupe's box) gives its frame's pixel count, so
+    // it works in the frame's precision.
+    void setPicture(const float *rgba, int width, int height, qint64 framePixels = 0);
 
     // Uploads the setup's tables and LUTs, and lays out every pass of the
     // render, for the picture set (or the setup's own, when it carries one).
@@ -55,9 +57,20 @@ public:
     // Runs the passes once, reading the stages back into `taps` when it is
     // given. Returns the frame's wall time, in seconds.
     double render(Taps *taps);
-    // Runs them, reading back the screen's 8-bit image (RGBA) and the linear
-    // print (RGBA float32), each where asked for.
-    double render(std::vector<uint8_t> *display, std::vector<float> *linear);
+    // The print's histogram (histogram_rgb): how many of its pixels hold each
+    // of the 256 values an 8-bit file would, red's 256, then green's, then
+    // blue's; of the finished print, and of what the curves are given when
+    // there are curves.
+    struct Histogram {
+        std::vector<uint32_t> after, before;
+    };
+    // Runs them, reading back the screen's 8-bit image (RGBA), the linear
+    // print (RGBA float32) and the histogram, each where asked for; the
+    // histogram only when measured (setMeasuresHistogram).
+    double render(std::vector<uint8_t> *display, std::vector<float> *linear, Histogram *histogram = nullptr);
+    // Whether the passes laid out from now on measure the histogram: the
+    // preview's do.
+    void setMeasuresHistogram(bool measures) { m_measuresHistogram = measures; }
 
     QSize size() const { return m_size; }
     // the print's: the frame's, or a shaped print's own
@@ -78,18 +91,26 @@ public:
 
 private:
     uint64_t filmKey(const RenderSetup &s) const;
-    double runPasses(const std::vector<std::pair<QRhiTexture *, QRhiReadbackResult *>> &readbacks);
+    double runPasses(const std::vector<std::pair<QRhiTexture *, QRhiReadbackResult *>> &readbacks,
+                     const std::vector<std::pair<QRhiBuffer *, QRhiReadbackResult *>> &buffers = {});
 
     // The stages of Renderer.render that take more than one pass.
     void blur(QRhiTexture *from, QRhiTexture *to, float sigma);
     QRhiTexture *halation(QRhiTexture *source, QRhiTexture *destination, QRhiTexture *scratch1, QRhiTexture *scratch2);
-    void drawGrain(QRhiTexture *clean, QRhiTexture *target, QRhiTexture *scratch1, QRhiTexture *scratch2);
+    // where the grain's pixels lie in the frame, or in the shaped print
+    struct Origin {
+        uint32_t x, y;
+    };
+    void drawGrain(QRhiTexture *clean, QRhiTexture *target, QRhiTexture *scratch1, QRhiTexture *scratch2,
+                   Origin origin);
     void printNegative(QRhiTexture *negative, QRhiTexture *into);
 
     Blur m_blurKind;
     const RenderSetup *m_setup = nullptr;           // during load()
     // the film stage's passes, and what its inputs hash to
     bool m_skipsUnchangedFilm = false;
+    bool m_measuresHistogram = false;
+    QRhiBuffer *m_binsAfter = nullptr, *m_binsBefore = nullptr;     // the last layout's
     size_t m_filmPasses = 0;
     uint64_t m_filmKey = 0;
     std::optional<uint64_t> m_renderedFilmKey;

@@ -124,6 +124,19 @@ WARMING = (
 TIFFEN = SHEETS / "Tiffen Filter Specifications.pdf"
 _CHART_FRAME = (0.58, 0.59, 0.6)
 
+# An orthochromatic film sees nothing past 565 nm, where an orange or red
+# filter starts to pass: it takes the filters its sheet gives factors for
+# (Ilford Ortho Plus: yellow, deep yellow, tricolour blue and green).
+ONLY = {"ilford_ortho_plus": ("blue", "green", "yellow")}
+
+
+def filters_for(stock: str, channel_model: str):
+    """The camera filters a film takes: Kodak's Wratten set on black and
+    white, warming and conversion filters on colour."""
+    if channel_model != "bw":
+        return WARMING
+    return tuple(f for f in FILTERS if f.id in ONLY.get(stock, (f.id,)))
+
 
 def _close(a, b, tolerance: float = 0.02) -> bool:
     return a is not None and max(abs(x - y) for x, y in zip(a, b)) < tolerance

@@ -158,7 +158,40 @@ BW_RMS_GRANULARITY = {
     "kodak_tri_x_400_push2": 19.0,
     "agfa_apx_25": 7.0,         # Agfa's range sheet, REFINAL 6 min at 20 C
     "kodak_t_max_100": 8.0,     # Kodak F-4016, D-76 at 20 C
+    # HARMAN publishes no granularity for any of its films; each takes the
+    # Kodak film of its own class (Felix's pick, 2026-11-06). Delta 100 and 400
+    # are Ilford's tabular-grain (core-shell) emulsions, T-Max's class: T-Max
+    # 100's and T-Max 400's measured 8 and 10 (Kodak F-4016, F-4043; D-76 at
+    # 20 C, read at net diffuse density 1.00 through 48 um). FP4 Plus, Pan F
+    # Plus and Ortho Plus are Ilford's classical emulsions, HP5 Plus's class:
+    # HP5 Plus's 17, stepped to their speeds as Agfa's own classical range
+    # steps with speed (`apx_step`).
+    "ilford_delta_100": 8.0,
+    "ilford_delta_400": 10.0,
 }
+
+
+# Agfa's measurements of one classical emulsion family at three speeds, APX
+# 25, 100 and 400 (REFINAL 6 min at 20 C): RMS 7, 9 and 14, the only series
+# here of one maker's one technology. Granularity grows with speed more
+# slowly than its square root: 1.29x from 25 to 100, 1.56x from 100 to 400.
+# (Kodak's tabular T-Max grows 1.25x from 100 to 400.)
+APX_RMS = ((25, 7.0), (100, 9.0), (400, 14.0))
+
+
+def apx_step(iso: float, rms: float = 17.0, at_iso: float = 400.0) -> float:
+    """`rms` at `at_iso`, carried to `iso` as APX's RMS goes between them
+    (log RMS against log speed, piecewise linear through Agfa's three)."""
+    speeds, values = np.log10([s for s, _ in APX_RMS]), np.log10([v for _, v in APX_RMS])
+    apx = lambda s: 10 ** np.interp(np.log10(s), speeds, values)   # noqa: E731
+    return round(float(rms * apx(iso) / apx(at_iso)), 1)
+
+
+BW_RMS_GRANULARITY.update({
+    "ilford_fp4_plus": apx_step(125),
+    "ilford_pan_f_plus": apx_step(50),
+    "ilford_ortho_plus": apx_step(80),
+})
 
 
 def bw_defaults(profile, out: dict) -> dict:
@@ -530,7 +563,7 @@ def bake_profile(stock: str, out_dir: Path, tc_lut_size_note: dict) -> dict:
         # every film takes camera filters: Kodak's Wratten set on black and
         # white, warming and conversion filters on colour
         import lens_filters
-        filters = lens_filters.FILTERS if p.info.channel_model == "bw" else lens_filters.WARMING
+        filters = lens_filters.filters_for(stock, p.info.channel_model)
         pack["lensFilters"] = bake_lens_filters(stock, sensitivity, adaptation, out_dir,
                                                 p.info.reference_illuminant, filters)
 
@@ -618,12 +651,17 @@ def main() -> int:
     print(f"baking {len(stocks)} profiles -> {out_dir}")
     index = {"schema": 1, "filming": [], "printing": []}
     index_path = out_dir / "index.json"
+    illuminant_names: set[str] = set()
     if args.only and index_path.exists():
-        # Rebaking a few stocks leaves the rest of the index as it was.
+        # Rebaking a few stocks leaves the rest of the index as it was, and
+        # shared.json keeps the lights those stocks still name (the tungsten
+        # films' BB3200, which no other stock does).
         index = json.loads(index_path.read_text())
         for stage in ("filming", "printing"):
             index[stage] = [e for e in index[stage] if e["stock"] not in set(stocks)]
-    illuminant_names: set[str] = set()
+            for entry in index[stage]:
+                kept = json.loads((out_dir / f"{entry['stock']}.json").read_text())
+                illuminant_names.update((kept["referenceIlluminant"], kept["viewingIlluminant"]))
     tc_lut_shapes: dict = {}
 
     for stock in stocks:

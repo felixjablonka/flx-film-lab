@@ -13,6 +13,7 @@ layout(std140, binding = 2) uniform GrainLayer {
     vec4 tableTop;         // net density at the table's last sample, per record
     vec4 scale;            // pixelArea (um^2 of film), sizeSquared, amount
     uvec4 ids;             // seed, monochrome, layer (0 fast, 1 medium, 2 slow), samples per record
+    uvec4 origin;          // where the pixels lie in the frame (or the shaped print): a part draws its grains
 } u;
 layout(std430, binding = 3) readonly buffer Selwyn {
     float selwyn[];        // [record][sample][layer], OD^2 um^2
@@ -48,7 +49,7 @@ void main()
     if (gid.x >= size.x || gid.y >= size.y) return;
     vec3 density = texelFetch(clean, gid, 0).rgb;
     uint samples = u.ids.w;
-    uint pixel = hashCombine(uint(gid.x), uint(gid.y));
+    uint pixel = hashCombine(uint(gid.x) + u.origin.x, uint(gid.y) + u.origin.y);
     float field = 0.0;
     vec3 grain;
     for (int c = 0; c < 3; ++c) {

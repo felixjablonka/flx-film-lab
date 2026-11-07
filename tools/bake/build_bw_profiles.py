@@ -17,6 +17,10 @@ Six stocks, each from its maker's own sheet in `film spec sheets/`:
   characteristic curve, vector plots labelled in text.
 - Ilford Multigrade RC Deluxe: spectral sensitivity and the curves for each
   filter grade, bitmaps, traced.
+- Ilford Delta 100, Delta 400, FP4 Plus, Pan F Plus and Ortho Plus (HARMAN
+  technology's technical information, 2018-19): the wedge spectrogram and the
+  characteristic curve for the developer and time each sheet names, bitmaps
+  on a ruled grid, traced (`harman_sheet`).
 
 Unlike `build_profiles.py`, nothing here is inherited from a donor: a
 black-and-white emulsion is one silver layer with a flat spectral density, so
@@ -36,7 +40,12 @@ Choices the datasheets leave open, and how they are made here:
   unlabelled scale. Read literally as tungsten-weighted they give HP5 Plus a
   red-filter factor of 12-16x at any plausible scale, against the 8x
   photographers use and the 9x Kodak's data gives Tri-X. Read as the film's own
-  relative log sensitivity they give 6x, so that is how they are read.
+  relative log sensitivity they give 6x, so that is how they are read. Ortho
+  Plus's sheet bears this out with numbers of its own: it rates the film ISO 80
+  in daylight and 40 in tungsten light, and its spectrogram read this way puts
+  daylight 1.92 times as effective as tungsten at equal illuminance, where read
+  as tungsten-weighted it gives 2.45; its daylight factor for a yellow filter,
+  2.5, comes out 2.7 through Kodak's Wratten 8, against 5.3.
 - Neopan 1600 is rated EI 1600, but its D-76 curve for that rating (7 1/2
   min) puts the ISO speed point at about ISO 750: the rating is a push of
   about a stop, as Fujifilm's development table implies. Mid-grey goes where
@@ -131,6 +140,28 @@ APX25 = Film("agfa_apx_25", "Agfa APX 25", 25,
 NEOPAN = Film("fujifilm_neopan_1600", "Fujifilm Neopan 1600", NEOPAN_EI,
               "Fujifilm data sheet AF3-608E, NEOPAN 1600 Super Presto / Professional, 35 mm, "
               "D-76 developer, small tank, 7 1/2 min at 20 C (Fujifilm's time for EI 1600).")
+# HARMAN technology's current sheets, each with the characteristic curve for
+# the developer and time it names. Their curves come out at about the normal
+# contrast Ilford sets its bold times for (G-bar 0.62): Delta 100 0.65, Delta
+# 400 0.64, FP4 Plus 0.68, Pan F Plus 0.71.
+DELTA100 = Film("ilford_delta_100", "Ilford Delta 100", 100,
+                "HARMAN technology, ILFORD DELTA 100 PROFESSIONAL technical information (Nov 2018), roll film "
+                "(as representative of 35 mm and sheet film), ID-11 stock 8 1/2 min at 20 C, intermittent "
+                "agitation.")
+DELTA400 = Film("ilford_delta_400", "Ilford Delta 400", 400,
+                "HARMAN technology, ILFORD DELTA 400 PROFESSIONAL technical information (Nov 2018), ID-11 stock "
+                "8 min at 24 C, intermittent agitation: the sheet's only characteristic curve, at Ilford's "
+                "normal contrast (G-bar 0.62; the curve's own 0.64).")
+FP4 = Film("ilford_fp4_plus", "Ilford FP4 Plus", 125,
+           "HARMAN technology, ILFORD FP4 PLUS technical information (Nov 2018), roll film (as representative "
+           "of 35 mm and sheet film), ILFOTEC HC (1+31) 8 min at 20 C, intermittent agitation.")
+PANF = Film("ilford_pan_f_plus", "Ilford Pan F Plus", 50,
+            "HARMAN technology, ILFORD PAN F PLUS technical information (Dec 2018), roll film (as representative "
+            "of 35 mm), ILFOTEC HC (1+31) 4 min at 20 C, intermittent agitation.")
+ORTHO = Film("ilford_ortho_plus", "Ilford Ortho Plus", 80,
+             "HARMAN technology, ILFORD ORTHO PLUS technical information (Oct 2019), ID-11 stock 8 min at 20 C, "
+             "intermittent agitation: the lower of the sheet's two pictorial curves, G-bar 0.62 (Ilford calls "
+             "0.62-0.70 normal for camera use, and rates the film ISO 80 to daylight in ID-11 at normal contrast).")
 PAPER_STOCK = "ilford_multigrade_rc_deluxe"
 PAPER_NAME = "Ilford Multigrade RC Deluxe"
 
@@ -521,6 +552,117 @@ def multigrade_sheet() -> tuple[np.ndarray, dict[str, np.ndarray]]:
     return spectral, curves
 
 
+def harman_spectrogram(pdf: str, page: int, index: int) -> np.ndarray:
+    """(wavelength, value as plotted) off one of HARMAN's 2018-19 wedge
+    spectrograms: one black curve in a frame (light grey on Ortho Plus), a tick
+    for 1.0 and one for 0.5 on its right edge, and 400 to 650 nm lettered under
+    it, all drawn into the bitmap."""
+    img = _bitmap(str(SHEETS / pdf), page, index)
+    dark, ruled = img < 120, img < 200
+    h, w = dark.shape
+    cols, rows = _lines(ruled.sum(axis=0), 0.5 * h), _lines(ruled.sum(axis=1), 0.5 * w)
+    left, right, top, bottom = cols[0], cols[-1], rows[0], rows[-1]
+    strip = ruled[int(top) + 2:int(bottom) - 1, int(right) + 1:int(right) + 11]
+    ticks = [g.mean() + int(top) + 2 for g in _runs(strip.sum(axis=1) >= 3, gap=2)]
+    assert len(ticks) == 2, (pdf, "ticks", ticks)
+    ky, by = _fit_axis([(ticks[0], 1.0), (ticks[1], 0.5)])
+    # each label's glyphs, as a group of inked columns under the frame
+    under = dark[int(bottom) + 4:int(bottom) + 40, int(left):int(right) + 30]
+    labels = [g.mean() + int(left) for g in _runs(under.sum(axis=0) > 0, gap=9) if len(g) > 8]
+    assert len(labels) == 6, (pdf, "labels", labels)
+    kx, bx = _fit_axis(list(zip(labels, np.arange(400.0, 651.0, 50.0))))
+    xs, ys = [], []
+    for x in range(int(left) + 4, int(right) - 3):
+        runs = _runs(dark[int(top) + 4:int(bottom) - 3, x])
+        if runs:
+            xs.append(x)
+            ys.append(runs[0].mean() + int(top) + 4)
+    return np.stack([kx * np.asarray(xs, float) + bx, ky * np.asarray(ys) + by], axis=-1)
+
+
+def harman_curves(pdf: str, page: int, index: int, x_values, y_values, n: int = 1,
+                  exclude=()) -> list[np.ndarray]:
+    """(relative log E, density) for each of `n` curves, densest first, off a
+    HARMAN characteristic-curve bitmap ruled every 0.5 in both: `x_values` and
+    `y_values` name its rules left to right and top to bottom (a rule too faint
+    to find, Ortho Plus's density 0, left out). `exclude` blanks labels."""
+    img = _bitmap(str(SHEETS / pdf), page, index)
+    dark = img < 120
+    h, w = dark.shape
+    vx, hy = _lines(dark.sum(axis=0), 0.40 * h), _lines(dark.sum(axis=1), 0.40 * w)
+    assert len(vx) == len(x_values) and len(hy) == len(y_values), (pdf, vx, hy)
+    kx, bx = _fit_axis(list(zip(vx, x_values)))
+    ky, by = _fit_axis(list(zip(hy, y_values)))
+    clean = dark.copy()
+    for v in vx:
+        clean[:, int(round(v)) - 2:int(round(v)) + 3] = False
+    for y in hy:
+        clean[int(round(y)) - 2:int(round(y)) + 3, :] = False
+    for x0, y0, x1, y1 in exclude:
+        clean[y0:y1, x0:x1] = False
+    top = int(hy[0]) - 3
+    bottom = int(round(hy[-1] + (hy[-1] - hy[-2] if y_values[-1] > 0 else 0))) + 4
+    out, last = [[] for _ in range(n)], []
+    for x in range(int(vx[0]) + 3, int(vx[-1]) - 2):
+        # One curve: a stroke is joined across the band a rule was erased from.
+        # Several, thin and close: strokes are kept apart, as drawn.
+        runs = [r for r in _runs(clean[top:bottom, x], gap=6 if n == 1 else 1) if 2 <= len(r) <= 16]
+        centres = [r.mean() + top for r in runs]
+        if n == 1:
+            if len(centres) == 1:
+                out[0].append((x, centres[0]))
+            continue
+        # Curves sharing a toe split from one stroke; apart, they are taken top
+        # to bottom; where a stroke is missing, each curve takes only one where
+        # its own course puts it, so it neither swaps nor reaches a label.
+        if not last:
+            if len(centres) == 1:
+                last = centres * n
+            continue
+        near = sorted(c for c in centres if min(abs(c - l) for l in last) <= 8)
+        if len(near) == n:
+            last, moved = near, range(n)
+        else:
+            moved = []
+            for k in range(n):
+                if len(out[k]) >= 2:
+                    (x1, y1), (x2, y2) = out[k][-2:]
+                    expect, reach = y2 + (y2 - y1) / max(x2 - x1, 1e-6) * (x - x2), 4 + 0.5 * (x - x2)
+                else:
+                    expect, reach = last[k], 6
+                own = [c for c in centres if abs(c - expect) <= reach]
+                if own:
+                    last[k] = min(own, key=lambda c: abs(c - expect))
+                    moved.append(k)
+        for k in moved:
+            out[k].append((x, last[k]))
+    return [np.array([(kx * x + bx, ky * y + by) for x, y in c]) for c in out]
+
+
+# Each HARMAN sheet: its file, the spectrogram's (page, image), and the curve
+# plot's (page, image, rules across, rules down, curves, labels to blank, which
+# curve), pages and images counted from 0.
+_HARMAN_GRID = (np.arange(0.0, 4.51, 0.5), np.arange(3.0, -0.01, -0.5))
+HARMAN_SHEETS = {
+    "ilford_delta_100": ("Delta-100_201811.pdf", (0, 2), (3, 0, *_HARMAN_GRID, 1, (), 0)),
+    "ilford_delta_400": ("Delta-400_201811.pdf", (0, 1), (5, 0, *_HARMAN_GRID, 1, (), 0)),
+    "ilford_fp4_plus": ("FP4-Plus_201811.pdf", (0, 2), (4, 0, *_HARMAN_GRID, 1, (), 0)),
+    "ilford_pan_f_plus": ("Pan-F-Plus_201812.pdf", (0, 2), (3, 0, *_HARMAN_GRID, 1, (), 0)),
+    # ID-11 at 10 and 8 min, labelled "G 0.70" and "G 0.62" beside them: the 8.
+    "ilford_ortho_plus": ("Ortho-Plus_201910.pdf", (0, 2),
+                          (2, 2, np.arange(0.0, 4.01, 0.5), np.arange(3.5, 0.49, -0.5), 2,
+                           ((395, 172, 462, 194), (450, 216, 522, 242)), 1)),
+}
+
+
+def harman_sheet(film: Film) -> tuple[np.ndarray, np.ndarray]:
+    """(wavelength, relative log sensitivity) and (relative log E, density)."""
+    pdf, (sp, si), (cp, ci, xv, yv, n, exclude, pick) = HARMAN_SHEETS[film.stock]
+    spectral = harman_spectrogram(pdf, sp, si)
+    curve = harman_curves(pdf, cp, ci, xv, yv, n=n, exclude=exclude)[pick]
+    return spectral, curve[np.argsort(curve[:, 0])]
+
+
 # --------------------------------------------------------------------------
 # Profiles
 # --------------------------------------------------------------------------
@@ -755,6 +897,14 @@ def main() -> int:
     write(build_film(HP5, spectral, curve,
                      "Spectral sensitivity: Ilford's wedge spectrogram read as relative log "
                      "sensitivity (read as tungsten-weighted it implies a 12-16x red filter factor)."))
+    for film in (DELTA100, DELTA400, FP4, PANF, ORTHO):
+        spectral, curve = harman_sheet(film)
+        note = ("Spectral sensitivity: Ilford's wedge spectrogram to tungsten light, read as relative log "
+                "sensitivity, as HP5 Plus's; Ortho Plus's own ratings, ISO 80 to daylight and 40 to tungsten, "
+                "bear the reading out.")
+        if film is ORTHO:
+            note += " Orthochromatic: the spectrogram ends at 565 nm, and the film sees nothing redder."
+        write(build_film(film, spectral, curve, note, created="2026-11-06"))
     spectral, curve = apx25_sheet()
     # Agfa plots against absolute lux-seconds, as Kodak does.
     absolute = float(np.log10(0.65 * 12.5 / APX25.iso))

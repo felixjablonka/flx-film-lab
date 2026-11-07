@@ -69,6 +69,24 @@ final class ClipExporter: @unchecked Sendable {
         return settings
     }
 
+    /// The source's metadata, with FLX Film Lab, its version and the film,
+    /// filter and paper in place of the camera's software and description.
+    static func metadata(_ source: [AVMetadataItem], provenance: Exporter.Provenance) -> [AVMetadataItem] {
+        let replaced: Set<AVMetadataIdentifier> = [.quickTimeMetadataSoftware, .quickTimeMetadataDescription,
+                                                   .quickTimeUserDataSoftware, .quickTimeUserDataDescription,
+                                                   .commonIdentifierSoftware, .commonIdentifierDescription]
+        var items = source.filter { item in item.identifier.map { !replaced.contains($0) } ?? true }
+        for (identifier, value) in [(AVMetadataIdentifier.quickTimeMetadataSoftware, provenance.software),
+                                    (.quickTimeMetadataDescription, provenance.description)] {
+            let item = AVMutableMetadataItem()
+            item.identifier = identifier
+            item.value = value as NSString
+            item.dataType = kCMMetadataBaseDataType_UTF8 as String
+            items.append(item)
+        }
+        return items
+    }
+
     /// Export `source` graded with `look` (its print already baked into
     /// `lut`) to `destination`. `progress` runs on an arbitrary queue.
     func export(source: URL, to destination: URL, look: MotionLook, lut: LookLUT,
@@ -127,7 +145,7 @@ final class ClipExporter: @unchecked Sendable {
             writer.add(input)
             audio.append((output, input))
         }
-        writer.metadata = metadata
+        writer.metadata = Self.metadata(metadata, provenance: Exporter.Provenance(recipe: look.recipe))
 
         guard reader.startReading() else {
             throw ExportError.cannotRead(reader.error?.localizedDescription ?? "unknown error")

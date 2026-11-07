@@ -1,4 +1,5 @@
 #include "FilmRenderer.h"
+#include "PrintCurves.h"
 
 #include "Filters.h"
 
@@ -34,6 +35,7 @@ struct GrainLayerBlock {
     Vec4 tableTop;
     Vec4 scale;                     // pixelArea, sizeSquared, amount
     uint32_t ids[4];                // seed, monochrome, layer, samples
+    uint32_t origin[4];             // where the pixels lie in the frame or the shaped print
 };
 struct ConvolveBlock {
     IVec4 params;                   // radius, axis, first layer
@@ -113,6 +115,12 @@ uint64_t FilmRenderer::filmKey(const RenderSetup &s) const
     h.value(s.stages.couplers);
     h.value(s.stages.grain);
     h.value(s.shape.active.x);          // the grain on the frame, or on a shaped print
+    if (s.part) {                       // a part of a frame: where its box lies
+        h.value(s.part->frameWidth);
+        h.value(s.part->frameHeight);
+        h.value(s.part->boxX);
+        h.value(s.part->boxY);
+    }
     h.value(s.fileSeed);
     h.value(s.monochrome);
     const QByteArray stock = s.stock.toUtf8();
@@ -211,7 +219,8 @@ QRhiTexture *FilmRenderer::halation(QRhiTexture *source, QRhiTexture *destinatio
 
 // 2c — the grain, per emulsion layer, fast, medium and slow, each spread over
 // its own dye clouds and laid on the clean density (Renderer.drawGrain).
-void FilmRenderer::drawGrain(QRhiTexture *clean, QRhiTexture *target, QRhiTexture *scratch1, QRhiTexture *scratch2)
+void FilmRenderer::drawGrain(QRhiTexture *clean, QRhiTexture *target, QRhiTexture *scratch1, QRhiTexture *scratch2,
+                             Origin origin)
 {
     const RenderSetup &s = *m_setup;
     const float size = float(s.recipe.grainScale);
@@ -220,7 +229,8 @@ void FilmRenderer::drawGrain(QRhiTexture *clean, QRhiTexture *target, QRhiTextur
     for (uint32_t layer = 0; layer < 3; ++layer) {
         const GrainLayerBlock u{{s.grain.tableDensityMax[0], s.grain.tableDensityMax[1], s.grain.tableDensityMax[2], 0},
                                 {m_pitch * m_pitch, size * size, float(s.recipe.grainAmount), 0},
-                                {seed, s.monochrome ? 1u : 0u, layer, uint32_t(s.grain.samples)}};
+                                {seed, s.monochrome ? 1u : 0u, layer, uint32_t(s.grain.samples)},
+                                {origin.x, origin.y, 0, 0}};
         pass("film_grain_layer", {input(0, clean), B::imageStore(1, kCompute, scratch1, 0),
                                   B::uniformBuffer(2, kCompute, uniform(u)), B::bufferLoad(3, kCompute, selwyn)});
         // each record's clouds for this layer, in pixels, padded to one radius
@@ -257,13 +267,17 @@ void FilmRenderer::printNegative(QRhiTexture *negative, QRhiTexture *into)
                             B::uniformBuffer(7, kCompute, m_shapeU)});
 }
 
-void FilmRenderer::setPicture(const float *rgba, int width, int height)
+void FilmRenderer::setPicture(const float *rgba, int width, int height, qint64 framePixels)
 {
     const QSize size(width, height);
-    if (size != m_size || !m_source) {
+    // a part of a frame works in the frame's precision, so it prints as the whole does
+    const QRhiTexture::Format intermediate =
+        (framePixels > 0 ? framePixels : qint64(width) * height) > 12'000'000 ? QRhiTexture::RGBA16F : QRhiTexture::RGBA32F;
+    if (size != m_size || !m_source || intermediate != m_intermediate) {
         m_pictureResources.clear();
         m_size = size;
         auto make = [&](QRhiTexture::Format format, bool loadStore) {
+            noteTexture("picture", m_size, format);
             QRhiTexture *t = m_rhi->newTexture(format, m_size, 1,
                                                loadStore ? QRhiTexture::UsedWithLoadStore : QRhiTexture::Flags());
             m_pictureResources.emplace_back(t);
@@ -274,7 +288,7 @@ void FilmRenderer::setPicture(const float *rgba, int width, int height)
         // Full-resolution work needs a dozen image-sized textures, 8 GB at
         // 45 MP in float32: past 12 MP they drop to half precision, as the
         // Mac's do, which is plenty for linear light and density.
-        m_intermediate = qint64(width) * height > 12'000'000 ? QRhiTexture::RGBA16F : QRhiTexture::RGBA32F;
+        m_intermediate = intermediate;
         m_source = make(QRhiTexture::RGBA32F, false);
         m_raw = make(m_intermediate, true);
         m_rawB = make(m_intermediate, true);
@@ -320,6 +334,7 @@ void FilmRenderer::ensureShaped(QSize size)
         return;
     m_shapedResources.clear();
     auto make = [&](QRhiTexture::Format format) {
+        noteTexture("shaped", size, format);
         QRhiTexture *t = m_rhi->newTexture(format, size, 1, QRhiTexture::UsedWithLoadStore);
         m_shapedResources.emplace_back(t);
         if (!t->create())
@@ -350,8 +365,10 @@ void FilmRenderer::load(const RenderSetup &s)
     m_setup = &s;
     m_passSize = m_size;
 
-    // The film's scale, and the grain's seed, as the Mac engine had them.
-    m_pitch = pixelSizeUm(s.width, s.height, s.recipe.frameLongMM, s.recipe.frameShortMM);
+    // The film's scale, and the grain's seed, as the Mac engine had them:
+    // a part's scale is its frame's.
+    const int frameWidth = s.part ? s.part->frameWidth : s.width, frameHeight = s.part ? s.part->frameHeight : s.height;
+    m_pitch = pixelSizeUm(frameWidth, frameHeight, s.recipe.frameLongMM, s.recipe.frameShortMM);
     if (std::abs(m_pitch - s.pixelSizeUm) > 1e-6f * s.pixelSizeUm)
         fail(QStringLiteral("pixel pitch %1 um, the Mac's %2").arg(m_pitch).arg(s.pixelSizeUm));
     if (s.stages.grain && (fnv1a(s.stock.toStdString()) ^ (s.fileSeed * 0x9E3779B9u)) != s.grainSeed)
@@ -449,7 +466,8 @@ void FilmRenderer::load(const RenderSetup &s)
     QRhiTexture *grainFree = nullptr;
     if (s.stages.grain && !shaped) {
         QRhiTexture *target = negative == cmyB ? cmy : cmyB;
-        drawGrain(negative, target, scratchA, scratchB);
+        drawGrain(negative, target, scratchA, scratchB,
+                  s.part ? Origin{uint32_t(s.part->boxX), uint32_t(s.part->boxY)} : Origin{0, 0});
         grainFree = negative;
         negative = target;
     }
@@ -468,12 +486,14 @@ void FilmRenderer::load(const RenderSetup &s)
         const QSize out(std::max(s.outputWidth, 1), std::max(s.outputHeight, 1));
         ensureShaped(out);
         m_passSize = out;
+        // a part's pixels from where they lie in the box held
         pass("apply_geometry", {input(0, negative), B::imageStore(1, kCompute, m_shapedNegative, 0),
-                                B::uniformBuffer(2, kCompute, m_shapeU)});
+                                B::uniformBuffer(2, kCompute, s.part ? uniform(s.part->held) : m_shapeU)});
         negative = m_shapedNegative;
         grainFree = nullptr;
         if (s.stages.grain) {
-            drawGrain(m_shapedNegative, m_shapedGrainy, m_shapedScratchA, m_shapedScratchB);
+            drawGrain(m_shapedNegative, m_shapedGrainy, m_shapedScratchA, m_shapedScratchB,
+                      s.part ? Origin{uint32_t(s.part->printX), uint32_t(s.part->printY)} : Origin{0, 0});
             negative = m_shapedGrainy;
             grainFree = m_shapedNegative;
         }
@@ -504,6 +524,28 @@ void FilmRenderer::load(const RenderSetup &s)
     //      sizes the frame's, so the preview blooms as the export does
     if (s.effects.active())
         printed = applyEffects(printed, s.effects, m_intermediate);
+    // 3d — the curves (PrintCurves), last of all, on the print as its file
+    //      encodes it, so the export carries them as the screen does. The
+    //      histogram is taken of the finished print, and, for the curves'
+    //      graph, of the print they were given.
+    m_binsAfter = m_binsBefore = nullptr;
+    const auto histogram = [&](QRhiBuffer *&bins) {
+        bins = storage(nullptr, 768 * sizeof(uint32_t));
+        pass("histogram_rgb", {input(0, printed), B::bufferLoadStore(1, kCompute, bins),
+                               B::uniformBuffer(2, kCompute, encodeU)});
+    };
+    if (m_measuresHistogram && !s.printCurves.empty())
+        histogram(m_binsBefore);
+    if (!s.printCurves.empty()) {
+        struct CurvesBlock {
+            IVec4 modes;            // encoding, the table's samples a channel
+        } curves{{s.encode.modes.x, PrintCurves::tableSize, 0, 0}};
+        QRhiBuffer *table = storage(s.printCurves.data(), s.printCurves.size() * sizeof(float));
+        pass("apply_curves", {B::imageLoadStore(0, kCompute, printed, 0), B::bufferLoad(1, kCompute, table),
+                              B::uniformBuffer(2, kCompute, uniform(curves))});
+    }
+    if (m_measuresHistogram)
+        histogram(m_binsAfter);
     // 4 — the screen's encoding
     pass("encode_display", {input(0, printed), B::imageStore(1, kCompute, display, 0),
                             B::uniformBuffer(2, kCompute, encodeU)});
@@ -538,15 +580,34 @@ double FilmRenderer::render(Taps *taps)
     return seconds;
 }
 
-double FilmRenderer::render(std::vector<uint8_t> *display, std::vector<float> *linear)
+double FilmRenderer::render(std::vector<uint8_t> *display, std::vector<float> *linear, Histogram *histogram)
 {
-    QRhiReadbackResult screen, print;
+    QRhiReadbackResult screen, print, after, before;
     std::vector<std::pair<QRhiTexture *, QRhiReadbackResult *>> readbacks;
+    std::vector<std::pair<QRhiBuffer *, QRhiReadbackResult *>> buffers;
     if (display)
         readbacks.push_back({m_display, &screen});
     if (linear)
         readbacks.push_back({m_printed, &print});
-    const double seconds = runPasses(readbacks);
+    if (histogram && m_binsAfter) {
+        buffers.push_back({m_binsAfter, &after});
+        if (m_binsBefore)
+            buffers.push_back({m_binsBefore, &before});
+    }
+    const double seconds = runPasses(readbacks, buffers);
+    const auto bins = [](const QRhiReadbackResult &r) {
+        std::vector<uint32_t> out(768, 0);
+        if (size_t(r.data.size()) >= out.size() * sizeof(uint32_t))
+            std::memcpy(out.data(), r.data.constData(), out.size() * sizeof(uint32_t));
+        return out;
+    };
+    if (histogram) {
+        *histogram = {};
+        if (m_binsAfter)
+            histogram->after = bins(after);
+        if (m_binsBefore)
+            histogram->before = bins(before);
+    }
     if (display) {
         const size_t pixels = size_t(m_display->pixelSize().width()) * m_display->pixelSize().height();
         if (size_t(screen.data.size()) != pixels * 4)
@@ -559,10 +620,11 @@ double FilmRenderer::render(std::vector<uint8_t> *display, std::vector<float> *l
 }
 
 // the film stage again only where its inputs moved
-double FilmRenderer::runPasses(const std::vector<std::pair<QRhiTexture *, QRhiReadbackResult *>> &readbacks)
+double FilmRenderer::runPasses(const std::vector<std::pair<QRhiTexture *, QRhiReadbackResult *>> &readbacks,
+                               const std::vector<std::pair<QRhiBuffer *, QRhiReadbackResult *>> &buffers)
 {
     const size_t first = m_skipsUnchangedFilm && m_renderedFilmKey == m_filmKey ? m_filmPasses : 0;
-    const double seconds = run(readbacks, first);
+    const double seconds = run(readbacks, first, buffers);
     m_renderedFilmKey = m_filmKey;
     return seconds;
 }

@@ -23,7 +23,7 @@ cd "$(dirname "$0")"
 
 APP_NAME="FLX Film Lab"
 # The version a release is built as; the release workflow sets it from the tag.
-VERSION="${VERSION:-1.3.0}"
+VERSION="${VERSION:-1.4.0}"
 # The binary inside the bundle, which refuse_if_running looks for.
 EXECUTABLE="FLXFilmLab"
 # The oldest macOS this is built to run on, on Apple Silicon only (since 1.1.2;
@@ -41,6 +41,7 @@ ENGINE_SOURCES=(
   FLXFilmLab/Model/Constants.swift
   FLXFilmLab/Model/ProfilePack.swift
   FLXFilmLab/Model/Recipe.swift
+  FLXFilmLab/Model/PrintCurves.swift
   FLXFilmLab/Model/FrameGeometry.swift
   FLXFilmLab/Engine/FilmMath.swift
   FLXFilmLab/Engine/ToneCurve.swift
@@ -89,12 +90,14 @@ APP_SOURCES=(
   FLXFilmLab/Motion/UI/MotionContentView.swift
   FLXFilmLab/App/RenderEngine.swift
   FLXFilmLab/App/Presets.swift
+  FLXFilmLab/App/EditHistory.swift
   FLXFilmLab/App/DocumentModel.swift
   FLXFilmLab/App/AppMode.swift
   FLXFilmLab/App/FLXFilmLabApp.swift
   FLXFilmLab/UI/ControlVocabulary.swift
   FLXFilmLab/UI/Controls.swift
-  FLXFilmLab/UI/CurvePlotView.swift
+  FLXFilmLab/UI/CurvesView.swift
+  FLXFilmLab/UI/LoupeView.swift
   FLXFilmLab/UI/MaskOverlay.swift
   FLXFilmLab/UI/CropOverlay.swift
   FLXFilmLab/UI/InspectorView.swift
@@ -111,6 +114,7 @@ CORE_SOURCES=(
   FLXFilmLab/Motion/App/ClipModel.swift
   FLXFilmLab/App/RenderEngine.swift
   FLXFilmLab/App/Presets.swift
+  FLXFilmLab/App/EditHistory.swift
   FLXFilmLab/App/DocumentModel.swift
   FLXFilmLab/App/AppMode.swift
   FLXFilmLab/UI/ControlVocabulary.swift

@@ -115,6 +115,8 @@ RenderSetup loadSetup(const QString &directory)
     s.spectral = readDump(dir.filePath("spectral.f32"));
     s.curves = readDump(dir.filePath("curves.f32"));
     s.toneShift = readDump(dir.filePath("toneShift.f32"));
+    if (field(s.json, "stages").toObject().value("curves").toBool())
+        s.printCurves = readDump(dir.filePath("printCurves.f32")).floats;
     s.toneLut = readDump(dir.filePath("toneLut.f32"));
     s.tcLut = readDump(dir.filePath("tcLut.f32"));
 

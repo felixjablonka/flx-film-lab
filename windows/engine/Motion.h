@@ -49,6 +49,7 @@ struct MotionLook {
     ExportSettings exportSettings;
     int version = 2;
 
+    bool operator==(const MotionLook &) const = default;
     static MotionLook initial();
     // a clip opened for the first time: this look with the dials for one clip
     // (exposure, tone, colour) back at their defaults, its format read from it

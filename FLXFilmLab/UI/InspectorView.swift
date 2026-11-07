@@ -8,19 +8,49 @@ struct InspectorView: View {
     private var vocabulary: Vocabulary { Vocabulary(rawValue: vocabularyRaw) ?? .photographic }
 
     var body: some View {
+        let r = model.recipe, v = vocabulary
+        // Every slider tick changes the recipe, and remaking all eleven
+        // sections for it took 11 ms of the main thread a tick, two thirds of
+        // all it did while a slider was dragged. Each section is remade only
+        // when what it shows has changed: its key holds everything it reads.
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                cropSection
-                stockSection
-                exposureSection
-                gradientSection
-                printSection
-                shadowHighlightSection
-                colourSection
-                localSection
-                effectsSection
-                filmCharacterSection
-                outputSection
+                Redrawn(Inputs(r.frameGeometry, model.isCropping, model.isLevelling, model.hasImage)) {
+                    cropSection
+                }
+                Redrawn(Inputs(r.filmStock, r.printStock, r.filmFormat, r.cameraSharpness, r.scanFilm)) {
+                    stockSection
+                }
+                Redrawn(Inputs(r.filmStock, r.exposureEV, r.autoExposure, model.meteredExposureEV, r.lensFilter,
+                               model.whiteBalance, model.customTemperature, model.customTint, model.isDecoding)) {
+                    exposureSection
+                }
+                Redrawn(Inputs(r.exposureGradients, selectedMask)) { gradientSection }
+                Redrawn(Inputs(r.filmStock, r.curves, r.autoDensity, r.brightness, model.meteredBrightness,
+                               r.density, r.autoGrade, r.grade, model.meteredGrade, r.shadowGrade,
+                               r.highlightGrade, v)) {
+                    printSection
+                }
+                Redrawn(Inputs(r.filmStock, r.printStock, r.scanFilm, r.shadows, r.highlights, r.toe, r.toeWidth,
+                               r.shoulder, r.shoulderWidth, r.snap, r.gradeTrim, r.toeTrim, r.shoulderTrim,
+                               r.snapTrim, v)) {
+                    shadowHighlightSection
+                }
+                Redrawn(Inputs(r.filmStock, r.printStock, r.scanFilm, r.filterShiftY, r.filterShiftM, r.shadowCMY,
+                               r.highlightCMY, r.preflashExposure, v)) {
+                    colourSection
+                }
+                Redrawn(Inputs(r.masks, selectedMask, v)) { localSection }
+                Redrawn(Inputs(r.effects)) { effectsSection }
+                Redrawn(Inputs(r.filmStock, r.couplersEnabled, r.couplersAmount, r.couplersDiffusion,
+                               r.cameraSharpness, r.halationEnabled, r.halationAmount, r.halationScale,
+                               r.scatterAmount, r.grainEnabled, r.grainAmount, r.grainScale, r.glareEnabled,
+                               r.glareAmount, r.densityCurveGamma)) {
+                    filmCharacterSection
+                }
+                Redrawn(Inputs(r.outputColorSpace, r.gamutCompress, v, model.proxyMaxDimension)) {
+                    outputSection
+                }
             }
             .padding(.horizontal, 12)
             .padding(.bottom, 24)
@@ -314,12 +344,8 @@ struct InspectorView: View {
     // MARK: Print
 
     private var printSection: some View {
-        Section("The Print", subtitle: "How bright the print is, and how much contrast it carries.") {
-            // The resolved recipe carries what the meters chose, so the curve
-            // shows the contrast and brightness actually being printed.
-            CurvePlotView(paper: printsOnPaper.wrappedValue ? model.paperPack : nil,
-                          recipe: model.resolvedRecipe ?? model.recipe)
-                .padding(.bottom, 4)
+        Section("The Print", subtitle: "How bright the print is, how much contrast it carries, and the curves laid on it last.") {
+            PrintGraphs(preview: model.preview, curves: $model.recipe.curves)
 
             ToggleRow(title: "Auto brightness",
                       isOn: autoToggle(\.autoDensity, value: \.brightness, reading: { model.meteredBrightness }),
@@ -640,8 +666,23 @@ struct InspectorView: View {
                 ForEach(DocumentModel.previewSizes, id: \.self) { Text("\($0) px").tag($0) }
             }
             .controlSize(.small).font(.system(size: 11))
-            .help("The preview's long side. Larger is sharper on screen and slower to redraw: on an M4 Pro a print control redraws 2560 px in about 23 ms and 4096 px in about 57. A file smaller than this is shown at its own size, never enlarged, and export is always at full size. Kept between launches.")
+            .help("The preview's long side. Larger is sharper on screen and slower to redraw: on an M4 Pro a print control redraws 2560 px in about 29 ms and 4096 px in about 73. A file smaller than this is shown at its own size, never enlarged, and export is always at full size. Kept between launches.")
         }
+    }
+}
+
+/// The histogram and the curves: they follow every frame, so they watch the
+/// preview themselves, and a finished frame redraws them and nothing else
+/// of the inspector.
+private struct PrintGraphs: View {
+    @ObservedObject var preview: PrintPreview
+    @Binding var curves: PrintCurves?
+
+    var body: some View {
+        HistogramView(bins: preview.histogram?.after)
+            .padding(.bottom, 6)
+        CurvesEditor(curves: $curves, histogram: preview.histogram)
+            .padding(.bottom, 6)
     }
 }
 

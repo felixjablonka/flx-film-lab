@@ -168,6 +168,14 @@ func run() async throws {
     let exported = try await ClipInfo.load(out)
     check(exported.codecName == "HEVC" && exported.bitDepth == 10 && Int(exported.frameRate.rounded()) == 30,
           "as \(exported.summary)")
+    let items = (try? await AVURLAsset(url: out).load(.metadata)) ?? []
+    func text(_ identifier: AVMetadataIdentifier) async -> String? {
+        guard let item = items.first(where: { $0.identifier == identifier }) else { return nil }
+        return try? await item.load(.stringValue)
+    }
+    let software = await text(.quickTimeMetadataSoftware), described = await text(.quickTimeMetadataDescription)
+    check(software == "FLX Film Lab" && described == "Film: Kodak Portra 800; paper: Kodak Professional Portra Endura",
+          "and names FLX Film Lab, the film and the paper in its metadata: \(described ?? "-")")
 
     print("export a LUT")
     let cube = dir.appendingPathComponent("look.cube")
@@ -226,6 +234,66 @@ func run() async throws {
     UserDefaults.standard.removeObject(forKey: ClipModel.lookDefaultsKey)
 }
 
+/// ⌘Z and ⇧⌘Z on a clip's look, as in Stills: one step per change, named
+/// resets, a history for each clip, and how files are written left out.
+@MainActor
+func undoRedo() async throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("flx-motionundo-\(getpid())")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer {
+        try? FileManager.default.removeItem(at: dir)
+        UserDefaults.standard.removeObject(forKey: ClipModel.lookDefaultsKey)
+    }
+    let a = dir.appendingPathComponent("A.mov"), b = dir.appendingPathComponent("B.mov")
+    try TestClip.write(to: a, width: 320, height: 180, frames: 6, fps: 24, audio: false)
+    try TestClip.write(to: b, width: 320, height: 180, frames: 6, fps: 25, audio: false)
+    UserDefaults.standard.removeObject(forKey: ClipModel.lookDefaultsKey)
+    let m = ClipModel()
+    m.playback.player.isMuted = true
+    m.history.mouseIsDown = { false }
+    m.history.joinInterval = 0
+    func pause() async { try? await Task.sleep(for: .milliseconds(80)) }
+    let names = { m.history.stacks.undo.map(\.name) }
+
+    print("undo and redo")
+    m.open(a)
+    check(await settled(m) && m.clip?.url == a && m.history.undoName == nil, "a clip opens with nothing to undo")
+    m.look.recipe.brightness = 0.1
+    await pause()
+    m.look.effects.glow.enabled = true
+    await pause()
+    check(names() == ["Brightness", "Effects"], "each change is a step: \(names())")
+    m.look.export.codec = .hevc10
+    await pause()
+    check(names() == ["Brightness", "Effects"], "how files are written is not")
+    m.history.undo()
+    check(!m.look.effects.glow.enabled && m.look.export.codec == .hevc10,
+          "⌘Z turns the glow off again and leaves the codec as chosen")
+    check(await settled(m) && m.bakedRecipe == m.effectiveRecipe, "and the look is baked again")
+    m.history.redo()
+    check(m.look.effects.glow.enabled && m.history.redoName == nil, "⇧⌘Z turns it back on")
+    m.resetTone()
+    check(m.history.undoName == "Reset Tone" && m.look.recipe.brightness == 0, "a reset is a step called by its name")
+    m.history.undo()
+    check(m.look.recipe.brightness == 0.1, "which ⌘Z undoes")
+
+    m.open(b)
+    check(await settled(m) && m.clip?.url == b && m.history.undoName == nil, "the next clip has its own history")
+    m.look.recipe.shadows = 0.2
+    await pause()
+    m.open(a)
+    check(await settled(m) && names() == ["Brightness", "Effects"] && m.history.redoName == "Reset Tone",
+          "going back to the first, its history is as it was: \(names())")
+    m.open(a)
+    check(await settled(m) && names() == ["Brightness", "Effects"], "and opening it again keeps it")
+    m.history.undo()
+    m.history.undo()
+    check(m.look.recipe.brightness == 0 && !m.look.effects.glow.enabled, "undone to how it opened")
+    m.open(b)
+    check(await settled(m) && names() == ["Shadows"], "the other clip kept its own")
+}
+
 try await run()
+try await undoRedo()
 print(failures == 0 ? "\nall app checks pass" : "\n\(failures) app check(s) failed")
 exit(failures == 0 ? 0 : 1)

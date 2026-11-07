@@ -378,6 +378,8 @@ BuiltSetup SetupBuilder::build(const Recipe &recipe, float exposureEV, int width
     // the frame as it is, and the screen's encoding
     s.shape.columns = {1, 0, 0, 1};
     s.encode.modes = {recipe.outputColorSpace == "ProPhoto RGB" ? 2 : 1, 0, 0, 0};
+    if (recipe.curves && !recipe.curves->isIdentity())
+        s.printCurves = recipe.curves->table();
     s.encode.columns = s.shape.columns;
 
     // the tables and LUTs

@@ -1,7 +1,7 @@
 #include "Inspector.h"
 
 #include "AppSettings.h"
-#include "CurvePlot.h"
+#include "CurvesView.h"
 #include "Document.h"
 #include "Theme.h"
 #include "Widgets.h"
@@ -623,15 +623,26 @@ void Inspector::buildGradients()
 void Inspector::buildPrint()
 {
     auto *section = new Section(QStringLiteral("The Print"),
-                                QStringLiteral("How bright the print is, and how much contrast it carries."));
+                                QStringLiteral("How bright the print is, how much contrast it carries, and the curves "
+                                               "laid on it last."));
     m_content->layout()->addWidget(section);
     QVBoxLayout *body = section->body();
 
-    // the resolved recipe carries what the meters chose, so the curve shows
-    // the print actually being made
-    auto *plot = new CurvePlot;
-    body->addWidget(plot);
-    body->addSpacing(4);
+    // the finished print's histogram, and the curves laid on it last; they
+    // follow every frame
+    auto *histogram = new HistogramView;
+    body->addWidget(histogram);
+    body->addSpacing(6);
+    auto *curves = new CurvesEditor;
+    body->addWidget(curves);
+    body->addSpacing(6);
+    connect(curves, &CurvesEditor::curvesChanged, this, [this](const std::optional<PrintCurves> &c) {
+        edit([&](Recipe &r) { r.curves = c; });
+    });
+    connect(&m_doc, &Document::imageChanged, this, [this, histogram, curves] {
+        histogram->setBins(m_doc.histogram().after);
+        curves->setHistogram(m_doc.histogram());
+    });
 
     auto *autoBrightness = new ToggleRow(QStringLiteral("Auto brightness"));
     autoBrightness->setHelp(QStringLiteral(
@@ -708,8 +719,7 @@ void Inspector::buildPrint()
         autoContrast->setChecked(r.autoGrade);
         split->setText(m_vocabulary == Vocabulary::Photographic ? QStringLiteral("Split contrast")
                                                                 : QStringLiteral("Split grade"));
-        plot->show(m_doc.printsOnPaper() ? m_doc.paperPack() : nullptr, m_doc.resolvedRecipe().value_or(r),
-                   m_doc.packs().shared());
+        curves->setCurves(r.curves);
     });
 }
 

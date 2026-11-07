@@ -167,7 +167,8 @@ do {
     try Exporter.write(linear: linear, width: Int(renderer.outputSize.width),
                        height: Int(renderer.outputSize.height),
                        to: outputURL, format: format, colorSpace: resolved.outputColorSpace,
-                       metadata: RawLoader.metadata(of: inputURL))
+                       metadata: RawLoader.metadata(of: inputURL),
+                       provenance: Exporter.Provenance(recipe: resolved))
     print("wrote    \(outputURL.path)")
 } catch {
     fail("error: \(error)")

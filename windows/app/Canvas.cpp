@@ -6,6 +6,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMouseEvent>
+#include <QFontMetricsF>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPushButton>
@@ -60,6 +61,7 @@ Canvas::Canvas(Document &document, QWidget *parent)
                               .arg(theme::accent().name(), theme::accent().lighter(115).name()));
     connect(m_open, &QPushButton::clicked, this, &Canvas::openRequested);
     setMouseTracking(true);
+    connect(&m_doc, &Document::loupeChanged, this, qOverload<>(&QWidget::update));
 
     // while cropping: what the drags do, and the way out
     m_cropBar = new QWidget(this);
@@ -179,6 +181,8 @@ void Canvas::paintEvent(QPaintEvent *)
             paintCrop(p);
         else
             paintMasks(p);
+        if (m_doc.loupeOn() && !m_doc.isCropping())
+            paintLoupe(p);
     } else {
         // the placeholder
         const QColor ink = light ? QColor(60, 60, 60) : theme::secondary();
@@ -325,6 +329,14 @@ void Canvas::paintCrop(QPainter &p)
 
 void Canvas::mousePressEvent(QMouseEvent *e)
 {
+    // the loupe, over everything else on the print: held where it was taken,
+    // so it moves with the pointer instead of jumping to centre on it
+    if (m_doc.loupeOn() && !m_doc.isCropping() && e->button() == Qt::LeftButton
+        && loupeRect().contains(e->position())) {
+        m_loupeGrab = e->position() - loupeRect().center();
+        setCursor(Qt::ClosedHandCursor);
+        return;
+    }
     if (!m_doc.isCropping() && e->button() == Qt::LeftButton && !m_doc.displayImage().isNull()) {
         // the nearest of the selected item's handles, within reach
         const std::vector<PointD> handles = selectedHandles();
@@ -354,6 +366,13 @@ void Canvas::mousePressEvent(QMouseEvent *e)
 
 void Canvas::mouseMoveEvent(QMouseEvent *e)
 {
+    if (m_loupeGrab) {
+        const QRect target = pictureRect();
+        const QPointF at = e->position() - *m_loupeGrab;
+        m_doc.moveLoupe(QPointF((at.x() - target.left()) / std::max(target.width(), 1),
+                                (at.y() - target.top()) / std::max(target.height(), 1)));
+        return;
+    }
     if (m_handle >= 0) {
         // the handle moves by the drag, not to the cursor
         const QPointF shift = e->position() - m_handleStart;
@@ -427,6 +446,11 @@ void Canvas::mouseMoveEvent(QMouseEvent *e)
 
 void Canvas::mouseReleaseEvent(QMouseEvent *e)
 {
+    if (m_loupeGrab) {
+        m_loupeGrab.reset();
+        setCursor(Qt::OpenHandCursor);
+        return;
+    }
     if (m_handle >= 0) {
         m_handle = -1;
         m_handleOrigin.clear();
@@ -729,3 +753,59 @@ void Canvas::paintMasks(QPainter &p)
     }
     p.restore();
 }
+
+// MARK: - The loupe
+
+QRectF Canvas::loupeRect() const
+{
+    const QRect target = pictureRect();
+    const QPointF c(target.left() + m_doc.loupeCentre().x() * target.width(),
+                    target.top() + m_doc.loupeCentre().y() * target.height());
+    return {c.x() - kLoupe / 2, c.y() - kLoupe / 2, kLoupe, kLoupe};
+}
+
+// The print at 100% under a square dragged over it: one pixel of the export
+// to one pixel of the screen, as the export will have it.
+void Canvas::paintLoupe(QPainter &p)
+{
+    const qreal dpr = devicePixelRatioF();
+    const int side = int(std::lround(kLoupe * dpr));
+    m_doc.setLoupeSize(QSize(side, side));
+    const QRectF square = loupeRect();
+    p.save();
+    for (int i = 8; i > 0; i -= 2) {                // its shadow
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(0, 0, 0, 18));
+        p.drawRoundedRect(square.adjusted(-i * 0.5, -i * 0.5 + 3, i * 0.5, i * 0.5 + 3), 8 + i * 0.5, 8 + i * 0.5);
+    }
+    QPainterPath clip;
+    clip.addRoundedRect(square, 8, 8);
+    p.fillPath(clip, QColor(0, 0, 0, 153));
+    p.setClipPath(clip);
+    QImage image = m_doc.loupeImage();
+    if (!image.isNull()) {
+        image.setDevicePixelRatio(dpr);
+        p.drawImage(square.topLeft(), image);
+    }
+    if (m_doc.loupeLoading()) {
+        p.setPen(Qt::white);
+        p.setFont(theme::small());
+        p.drawText(square, Qt::AlignCenter, QStringLiteral("Reading the picture at full size…"));
+    }
+    p.setClipping(false);
+    p.setBrush(Qt::NoBrush);
+    p.setPen(QPen(QColor(255, 255, 255, 217), 1.5));
+    p.drawRoundedRect(square.adjusted(0.75, 0.75, -0.75, -0.75), 8, 8);
+    // "100%"
+    p.setFont(theme::mono(10));
+    const QString badge = QStringLiteral("100%");
+    const QSizeF text = QFontMetricsF(p.font()).size(0, badge) + QSizeF(10, 4);
+    const QRectF pill(square.right() - text.width() - 6, square.bottom() - text.height() - 6, text.width(), text.height());
+    p.setPen(Qt::NoPen);
+    p.setBrush(QColor(0, 0, 0, 128));
+    p.drawRoundedRect(pill, pill.height() / 2, pill.height() / 2);
+    p.setPen(Qt::white);
+    p.drawText(pill, Qt::AlignCenter, badge);
+    p.restore();
+}
+

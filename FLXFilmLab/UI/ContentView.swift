@@ -128,118 +128,14 @@ struct ContentView: View {
 
     // MARK: Canvas
 
+    /// The print and what is drawn on it, and the status line under it. They
+    /// watch the preview themselves, so a finished frame redraws them alone.
     private var canvas: some View {
-        ZStack {
-            background.color
-                .animation(.easeInOut(duration: 0.18), value: backgroundRaw)
-
-            if let image = model.displayImage {
-                GeometryReader { geo in
-                    let fitted = fit(imageSize: CGSize(width: image.width, height: image.height),
-                                     into: geo.size)
-                    ZStack {
-                        Image(decorative: image, scale: 1, orientation: .up)
-                            .resizable()
-                            .interpolation(.high)
-                            .frame(width: fitted.width, height: fitted.height)
-                            // Lighter contact shadow on a light surround, so the
-                            // frame reads as an edge rather than a vignette.
-                            .shadow(color: .black.opacity(background.isLight ? 0.22 : 0.5),
-                                    radius: background.isLight ? 10 : 18, y: 5)
-
-                        if model.isCropping {
-                            CropOverlay(model: model, size: fitted, onLightBackground: background.isLight)
-                        } else {
-                            MaskOverlay(masks: $model.recipe.masks, gradients: $model.recipe.gradients,
-                                        selected: $selectedMask,
-                                        frame: CGRect(origin: .zero, size: fitted),
-                                        map: model.displayMap,
-                                        onLightBackground: background.isLight)
-                                .frame(width: fitted.width, height: fitted.height)
-                        }
-                    }
-                    .frame(width: geo.size.width, height: geo.size.height)
-                }
-                .padding(28)
-                .overlay(alignment: .top) { if model.isCropping { cropBar } }
-            } else {
-                VStack(spacing: 10) {
-                    Image(systemName: "camera.aperture")
-                        .font(.system(size: 42, weight: .ultraLight))
-                        .foregroundStyle(.tertiary)
-                    Text("Drop a RAW file here")
-                        .font(.system(size: 14, weight: .medium)).foregroundStyle(.secondary)
-                    Text("Nikon NEF, Leica DNG, and the other formats macOS reads")
-                        .font(.system(size: 11)).foregroundStyle(.tertiary)
-                    Button("Open…") { isImporting = true }
-                        .buttonStyle(.borderedProminent).controlSize(.small).padding(.top, 6)
-                }
-                .colorScheme(background.isLight ? .light : .dark)
+        PrintCanvas(model: model, preview: model.preview, selectedMask: $selectedMask,
+                    background: background, open: { isImporting = true })
+            .overlay(alignment: .bottom) {
+                StatusLine(model: model, preview: model.preview, background: background)
             }
-
-            if let error = model.errorMessage {
-                VStack {
-                    Spacer()
-                    Text(error)
-                        .font(.system(size: 11))
-                        .padding(.horizontal, 12).padding(.vertical, 7)
-                        .background(.red.opacity(0.85), in: Capsule())
-                        .foregroundStyle(.white)
-                        .padding(.bottom, 14)
-                }
-            }
-        }
-        .overlay(alignment: .bottom) { statusBar }
-    }
-
-    /// While cropping: what the drags do, and the way out.
-    private var cropBar: some View {
-        HStack(spacing: 10) {
-            Text(model.isLevelling
-                 ? "Draw a line along something that should be level or upright"
-                 : "Drag a corner or an edge · drag inside to move")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-            Toggle(isOn: $model.isLevelling) { Label("Level", systemImage: "level") }
-                .toggleStyle(.button).controlSize(.small)
-                .help("Draw a line on the picture along a horizon, or along an upright, and the picture is levelled to it.")
-            Button("Cancel") { model.endCropping(keep: false) }
-                .keyboardShortcut(.cancelAction).controlSize(.small)
-            Button("Done") { model.endCropping(keep: true) }
-                .keyboardShortcut(.defaultAction).controlSize(.small)
-        }
-        .padding(.horizontal, 12).padding(.vertical, 6)
-        .background(.ultraThinMaterial, in: Capsule())
-        .colorScheme(background.isLight ? .light : .dark)
-        .padding(.top, 8)
-    }
-
-    private var statusBar: some View {
-        HStack(spacing: 10) {
-            Text(model.status)
-            if model.lastRenderMilliseconds > 0 {
-                Text(String(format: "%.0f ms", model.lastRenderMilliseconds))
-                    .foregroundStyle(.tertiary)
-            }
-            if model.isDecoding {
-                Text("decoding…").foregroundStyle(.orange.opacity(0.9))
-            }
-            if model.isRendering || model.isDecoding {
-                ProgressView().controlSize(.small).scaleEffect(0.55).frame(width: 12, height: 12)
-            }
-        }
-        .font(.system(size: 10, design: .monospaced))
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 10).padding(.vertical, 5)
-        .background(.ultraThinMaterial, in: Capsule())
-        .colorScheme(background.isLight ? .light : .dark)
-        .padding(.bottom, 10)
-    }
-
-    private func fit(imageSize: CGSize, into container: CGSize) -> CGSize {
-        guard imageSize.width > 0, imageSize.height > 0 else { return .zero }
-        let scale = min(container.width / imageSize.width, container.height / imageSize.height)
-        return CGSize(width: imageSize.width * scale, height: imageSize.height * scale)
     }
 
     // MARK: Toolbar
@@ -282,6 +178,12 @@ struct ContentView: View {
                 .help("Crop, turn and level the print (⌘R): the whole frame shows with the crop on it. Return keeps the crop, Escape goes back.")
         }
         ToolbarItem {
+            Toggle(isOn: $model.loupeOn) { Label("Loupe", systemImage: "magnifyingglass") }
+                .keyboardShortcut("l", modifiers: .command)
+                .disabled(!model.hasImage)
+                .help("The print at 100% (⌘L), as the export will have it: drag the loupe over the print. While it is open the picture is held at full size.")
+        }
+        ToolbarItem {
             ToolbarChoice(selection: $exportFormat)
                 .help("The format Export writes.")
         }
@@ -322,6 +224,146 @@ struct ContentView: View {
             Label("Presets", systemImage: "film.stack")
         }
         .help("Presets: settings saved by name, to put on any image later, in this session or another. A preset holds what Copy Settings copies; the image it is put on keeps its own masks, gradients and crop.")
+    }
+}
+
+/// The print on its surround, with the crop or the masks drawn on it and the
+/// loupe over it.
+private struct PrintCanvas: View {
+    @ObservedObject var model: DocumentModel
+    @ObservedObject var preview: PrintPreview
+    @Binding var selectedMask: UUID?
+    let background: CanvasBackground
+    let open: () -> Void
+
+    var body: some View {
+        ZStack {
+            background.color
+                .animation(.easeInOut(duration: 0.18), value: background)
+
+            if let image = preview.image {
+                GeometryReader { geo in
+                    let fitted = fit(imageSize: CGSize(width: image.width, height: image.height),
+                                     into: geo.size)
+                    ZStack {
+                        Image(decorative: image, scale: 1, orientation: .up)
+                            .resizable()
+                            .interpolation(.high)
+                            .frame(width: fitted.width, height: fitted.height)
+                            // Lighter contact shadow on a light surround, so the
+                            // frame reads as an edge rather than a vignette.
+                            .shadow(color: .black.opacity(background.isLight ? 0.22 : 0.5),
+                                    radius: background.isLight ? 10 : 18, y: 5)
+
+                        if model.isCropping {
+                            CropOverlay(model: model, preview: preview, size: fitted,
+                                        onLightBackground: background.isLight)
+                        } else {
+                            MaskOverlay(masks: $model.recipe.masks, gradients: $model.recipe.gradients,
+                                        selected: $selectedMask,
+                                        frame: CGRect(origin: .zero, size: fitted),
+                                        map: preview.map,
+                                        onLightBackground: background.isLight)
+                                .frame(width: fitted.width, height: fitted.height)
+                        }
+                    }
+                    .frame(width: geo.size.width, height: geo.size.height)
+                    .overlay {
+                        if model.loupeOn, !model.isCropping {
+                            LoupeView(model: model, preview: preview,
+                                      print: CGRect(x: (geo.size.width - fitted.width) / 2,
+                                                    y: (geo.size.height - fitted.height) / 2,
+                                                    width: fitted.width, height: fitted.height))
+                        }
+                    }
+                    .coordinateSpace(name: "canvas")
+                }
+                .padding(28)
+                .overlay(alignment: .top) { if model.isCropping { cropBar } }
+            } else {
+                VStack(spacing: 10) {
+                    Image(systemName: "camera.aperture")
+                        .font(.system(size: 42, weight: .ultraLight))
+                        .foregroundStyle(.tertiary)
+                    Text("Drop a RAW file here")
+                        .font(.system(size: 14, weight: .medium)).foregroundStyle(.secondary)
+                    Text("Nikon NEF, Leica DNG, and the other formats macOS reads")
+                        .font(.system(size: 11)).foregroundStyle(.tertiary)
+                    Button("Open…", action: open)
+                        .buttonStyle(.borderedProminent).controlSize(.small).padding(.top, 6)
+                }
+                .colorScheme(background.isLight ? .light : .dark)
+            }
+
+            if let error = model.errorMessage {
+                VStack {
+                    Spacer()
+                    Text(error)
+                        .font(.system(size: 11))
+                        .padding(.horizontal, 12).padding(.vertical, 7)
+                        .background(.red.opacity(0.85), in: Capsule())
+                        .foregroundStyle(.white)
+                        .padding(.bottom, 14)
+                }
+            }
+        }
+    }
+
+    /// While cropping: what the drags do, and the way out.
+    private var cropBar: some View {
+        HStack(spacing: 10) {
+            Text(model.isLevelling
+                 ? "Draw a line along something that should be level or upright"
+                 : "Drag a corner or an edge · drag inside to move")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            Toggle(isOn: $model.isLevelling) { Label("Level", systemImage: "level") }
+                .toggleStyle(.button).controlSize(.small)
+                .help("Draw a line on the picture along a horizon, or along an upright, and the picture is levelled to it.")
+            Button("Cancel") { model.endCropping(keep: false) }
+                .keyboardShortcut(.cancelAction).controlSize(.small)
+            Button("Done") { model.endCropping(keep: true) }
+                .keyboardShortcut(.defaultAction).controlSize(.small)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 6)
+        .background(.ultraThinMaterial, in: Capsule())
+        .colorScheme(background.isLight ? .light : .dark)
+        .padding(.top, 8)
+    }
+
+    private func fit(imageSize: CGSize, into container: CGSize) -> CGSize {
+        guard imageSize.width > 0, imageSize.height > 0 else { return .zero }
+        let scale = min(container.width / imageSize.width, container.height / imageSize.height)
+        return CGSize(width: imageSize.width * scale, height: imageSize.height * scale)
+    }
+}
+
+/// What the image on screen is, and whether a frame or a decode is on its way.
+private struct StatusLine: View {
+    @ObservedObject var model: DocumentModel
+    @ObservedObject var preview: PrintPreview
+    let background: CanvasBackground
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text(model.status)
+            if preview.milliseconds > 0 {
+                Text(String(format: "%.0f ms", preview.milliseconds))
+                    .foregroundStyle(.tertiary)
+            }
+            if model.isDecoding {
+                Text("decoding…").foregroundStyle(.orange.opacity(0.9))
+            }
+            if preview.isRendering || model.isDecoding {
+                ProgressView().controlSize(.small).scaleEffect(0.55).frame(width: 12, height: 12)
+            }
+        }
+        .font(.system(size: 10, design: .monospaced))
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 10).padding(.vertical, 5)
+        .background(.ultraThinMaterial, in: Capsule())
+        .colorScheme(background.isLight ? .light : .dark)
+        .padding(.bottom, 10)
     }
 }
 

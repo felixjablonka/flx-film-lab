@@ -2,10 +2,13 @@
 
 #include "Packs.h"
 #include "Presets.h"
+#include "EditHistory.h"
 #include "Recipe.h"
 #include "RenderEngine.h"
 
 #include <QImage>
+#include <QPointF>
+#include <QSize>
 #include <QObject>
 #include <QThread>
 
@@ -46,6 +49,8 @@ public:
     void setCustomTint(double tint);
 
     const QImage &displayImage() const { return m_display; }
+    // the print's histogram as it is on screen, and before its curves
+    const PrintHistogram &histogram() const { return m_histogram; }
     QString status() const { return m_status; }
     QString errorMessage() const { return m_error; }
     void clearError();
@@ -151,11 +156,33 @@ public:
     void resetColour();
     void resetFilmCharacter();
 
+    // Undo and redo for the image on screen (EditHistory): one step per
+    // gesture, each image with its own history for the session.
+    EditHistory<Look> &history() { return *m_history; }
+
+    // The loupe (Ctrl+L): the print at 100%, one pixel of the export to one
+    // of the screen, under a square dragged over the print. While it is open
+    // the picture is held at full size, decoded as the export decodes it,
+    // and only the part under the loupe is printed from it.
+    bool loupeOn() const { return m_loupeOn; }
+    void setLoupeOn(bool on);
+    // the loupe's centre, in fractions of the print as it shows
+    QPointF loupeCentre() const { return m_loupeCentre; }
+    void moveLoupe(QPointF centre);
+    // the loupe's size in pixels of the screen, one to a pixel of the print
+    void setLoupeSize(QSize pixels);
+    const QImage &loupeImage() const { return m_loupeImage; }
+    bool loupeLoading() const { return m_loupeLoading; }
+    // reading the picture or printing the loupe's part: for the tests
+    bool loupeBusy() const { return m_loupeLoading || m_loupeInFlight || m_loupeAgain; }
+
 signals:
     // Anything the controls, the toolbar or the status show.
     void changed();
     // A new frame for the canvas.
     void imageChanged();
+    // A new picture under the loupe, or the loupe opened, moved or put away.
+    void loupeChanged();
 
 private:
     struct Loaded {
@@ -172,7 +199,16 @@ private:
                       int generation);
     void adopt(const RenderEngine::Source &source, const DecodeKey &key);
     void put(const Look &look);
+    // a whole set of edits at once, decoded and rendered again as need be
+    void restore(const Look &look);
+    // the edits are about to change: the history's step opens on them as they are
+    void edited() { m_history->note([this] { return m_edits; }); }
     void scheduleRender();
+    // the picture held at full size for the loupe as the image on screen
+    // decodes, read again when it decodes otherwise
+    void syncLoupe();
+    void requestLoupe();
+    void closeLoupe();
     void finishRender(std::optional<RenderEngine::Output> output, const QString &error, int sourceID);
     QString statusLine() const;
     // Runs `work` on the engine's thread.
@@ -187,6 +223,7 @@ private:
 
     Look m_edits;
     QImage m_display;
+    PrintHistogram m_histogram;
     QString m_status = QStringLiteral("Open a RAW file to begin");
     QString m_error;
     QString m_file;                            // the image on screen
@@ -206,6 +243,16 @@ private:
     Metered m_metered;
     std::optional<Recipe> m_resolved;
     std::map<QString, Look> m_editsByImage;
+    std::unique_ptr<EditHistory<Look>> m_history;
+    // every other image's undo history; the one on screen's is m_history's
+    std::map<QString, EditHistory<Look>::Stacks> m_historyByImage;
+    std::optional<EditHistory<Look>::Mark> m_historyBeforeCropping;
+    bool m_loupeOn = false, m_loupeLoading = false, m_loupeInFlight = false, m_loupeAgain = false;
+    QPointF m_loupeCentre{0.5, 0.5};
+    QSize m_loupeSize;
+    QImage m_loupeImage;
+    std::optional<DecodeKey> m_fullFrameKey;    // what the picture held at full size, or on its way, decodes with
+    int m_loupeGeneration = 0;                  // a read made stale by a newer one, or by putting the loupe away
     std::optional<std::pair<Look, QString>> m_copied;
     PresetStore m_presetStore;
     std::vector<Preset> m_presets;

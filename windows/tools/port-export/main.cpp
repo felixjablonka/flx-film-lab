@@ -6,6 +6,7 @@
 //                  [--film STOCK] [--exposure EV] [--bloom] [--glow] [--packs DIR] [--backend NAME]
 
 #include "ClipExport.h"
+#include "Provenance.h"
 #include "SetupBuilder.h"
 
 #include <QElapsedTimer>
@@ -101,6 +102,10 @@ int main(int argc, char **argv)
                           : display == "apple" ? LutOutput::AppleDisplay
                                                : LutOutput::SRGB;
         options.seconds = seconds;
+        // as the app's export names what made the clip; a tool has no version
+        const Provenance made = provenance(recipe, packs, "");
+        options.software = made.software;
+        options.description = made.description;
         QElapsedTimer clock;
         clock.start();
         int lastShown = -1;

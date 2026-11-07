@@ -16,7 +16,6 @@ class Choice;
 class StockPicker;
 class Segmented;
 class LinkButton;
-class CurvePlot;
 class QLabel;
 struct Recipe;
 

@@ -10,6 +10,8 @@
 
 #include <QColorSpace>
 #include <QImage>
+#include <QPointF>
+#include <QRect>
 #include <QString>
 
 #include <map>
@@ -36,6 +38,15 @@ struct DecodeKey {
     double temperature = 5500, tint = 0;
     int maxDimension = 0;               // the long side; 0 keeps the full size
     bool operator==(const DecodeKey &) const = default;
+};
+
+// A print's histogram (PrintHistogram): how many of its pixels hold each
+// value an 8-bit file would, red's 256 bins, then green's, then blue's; of
+// the finished print, and of what the curves are given when there are any.
+struct PrintHistogram {
+    std::vector<uint32_t> after, before;
+    // what the curves are given
+    const std::vector<uint32_t> &input() const { return before.empty() ? after : before; }
 };
 
 // What the meters read, for the controls whose auto is on.
@@ -82,6 +93,7 @@ public:
         Recipe resolved;                // the recipe as printed, every metered value in
         Metered metered;
         GeometryMap map;                // where the image's pixels come from in the frame
+        PrintHistogram histogram;
         double milliseconds = 0;
         QString breakdown;              // where the time went
     };
@@ -101,6 +113,19 @@ public:
     // The picture at full size with `recipe`, metered on the preview as the
     // screen shows it, written to `path`. Throws std::runtime_error.
     void exportTo(const Recipe &recipe, const DecodeKey &key, const QString &path, ExportFormat format);
+
+    // The loupe (DocumentModel's on the Mac): the picture at full size,
+    // decoded as the export decodes it, held in memory while it is open; on
+    // the GPU only the box under the loupe.
+    void holdFullFrame(DecodedPicture &&picture, const QString &path);
+    void releaseFullFrame();
+    bool holdsFullFrame() const { return !m_full.floats.empty(); }
+    // The print at 100% under the loupe: `width` x `height` pixels of the
+    // full-size print centred at `centre` (fractions of the print), printed
+    // as the export prints those pixels: the box held with margins enough
+    // for every blur that reaches into it. A null image when no frame is
+    // held. Throws std::runtime_error.
+    QImage renderLoupe(const Recipe &recipe, QPointF centre, int width, int height);
 
     // The backend's name, once there is a device.
     QString backendName() const;
@@ -125,6 +150,23 @@ private:
     std::unique_ptr<SetupBuilder> m_builder;
 
     Dump m_picture;                     // the preview's decode, RGBA float32, for the meters
+    // A renderer of parts of a frame held at full size: the box it holds,
+    // and the masks its map was drawn for.
+    struct PartRenderer {
+        std::unique_ptr<FilmRenderer> renderer;
+        QRect box;
+        std::optional<std::vector<LocalMask>> masks;
+    };
+    // `window` of the whole print of `full` at full size, printed as part of
+    // it (RenderSetup::Part): with margins that add up every kernel's radius
+    // that reaches into it, the box at most `most` pixels a side. Its screen
+    // image, its linear print, each where asked for, `window` alone.
+    void printPart(PartRenderer &part, const Dump &full, const std::string &fileName, const Recipe &resolved,
+                   const QRect &window, int most, std::vector<uint8_t> *display, std::vector<float> *linear);
+    // the loupe's: the frame at full size, and its renderer
+    Dump m_full;
+    std::string m_fullFileName;
+    PartRenderer m_loupe;
     std::string m_fileName;             // the grain's seed
     int m_sourceID = 0;
 

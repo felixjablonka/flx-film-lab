@@ -1,0 +1,47 @@
+#version 440
+// The curves (PrintCurves::table) on the finished linear print: each channel
+// encoded as the file will be, looked up between the table's two nearest
+// samples, and decoded back to linear light. flx.metal apply_curves.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0, rgba32f) uniform image2D print;
+layout(std430, binding = 1) readonly buffer Table { float table[]; };
+layout(std140, binding = 2) uniform Curves {
+    ivec4 modes;           // x: encoding (1 the sRGB curve, 2 ProPhoto's), y: samples a channel
+} u;
+
+vec3 encodeOutput(vec3 c, int encoding)
+{
+    if (encoding == 2) return pow(c, vec3(1.0 / 1.80078125));
+    return mix(1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, c * 12.92, lessThanEqual(c, vec3(0.0031308)));
+}
+
+vec3 decodeOutput(vec3 e, int encoding)
+{
+    if (encoding == 2) return pow(e, vec3(1.80078125));
+    return mix(pow((e + 0.055) / 1.055, vec3(2.4)), e / 12.92, lessThanEqual(e, vec3(0.04045)));
+}
+
+// One channel's value through its table. (Direct3D's compiler takes no
+// write to a vector by a variable index, so the channels are not a loop.)
+float lookup(float e, int c, int n)
+{
+    float x = e * float(n - 1);
+    int i = min(int(x), n - 2);
+    float t = x - float(i);
+    return mix(table[c * n + i], table[c * n + i + 1], t);
+}
+
+void main()
+{
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(print);
+    if (gid.x >= size.x || gid.y >= size.y) return;
+    vec4 p = imageLoad(print, gid);
+    vec3 e = clamp(encodeOutput(max(p.rgb, 0.0), u.modes.x), 0.0, 1.0);
+    int n = u.modes.y;
+    vec3 o = vec3(lookup(e.x, 0, n), lookup(e.y, 1, n), lookup(e.z, 2, n));
+    p.rgb = decodeOutput(o, u.modes.x);
+    imageStore(print, gid, p);
+}

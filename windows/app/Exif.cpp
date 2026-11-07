@@ -120,15 +120,20 @@ ExifDirectories exifDirectories(const ExportMetadata &m, int width, int height, 
 {
     ExifDirectories d;
     auto text = [](uint16_t tag, const QString &s) { return tiffEntry(tag, kAscii, uint32_t(tiffText(s).size()), tiffText(s)); };
-    if (!m.description.isEmpty())
-        d.ifd0.push_back(text(270, m.description));
+    // Cameras fill the description with spaces, or NULs, when there is
+    // nothing to say.
+    const QString said = QString(m.description).remove(QChar(0)).trimmed();
+    if (!said.isEmpty())
+        d.ifd0.push_back(text(270, said));
+    else if (!m.provenance.isEmpty())
+        d.ifd0.push_back(text(270, m.provenance));
     if (!m.make.isEmpty())
         d.ifd0.push_back(text(271, m.make));
     if (!m.model.isEmpty())
         d.ifd0.push_back(text(272, m.model));
     // the pixels were turned upright on decode
     d.ifd0.push_back(tiffEntry(274, kShort, 1, tiffShorts({1})));
-    d.ifd0.push_back(text(305, QStringLiteral("FLX Film Lab")));
+    d.ifd0.push_back(text(305, m.software.isEmpty() ? QStringLiteral("FLX Film Lab") : m.software));
     QString when;
     if (m.taken > 0)
         when = QDateTime::fromSecsSinceEpoch(m.taken).toString(QStringLiteral("yyyy:MM:dd HH:mm:ss"));
@@ -152,6 +157,11 @@ ExifDirectories exifDirectories(const ExportMetadata &m, int width, int height, 
     }
     if (m.focalLength > 0)
         d.exif.push_back(tiffEntry(37386, kRational, 1, rationals({fraction(m.focalLength, 10)})));
+    if (!m.provenance.isEmpty()) {
+        // UserComment: its character code, then the text, unterminated
+        const QByteArray comment = QByteArray("ASCII\0\0\0", 8) + m.provenance.toLatin1();
+        d.exif.push_back(tiffEntry(37510, kUndefined, uint32_t(comment.size()), comment));
+    }
     d.exif.push_back(tiffEntry(40960, kUndefined, 4, QByteArray("0100", 4)));     // FlashpixVersion, which EXIF requires
     // EXIF names one colour space, sRGB; for the rest the profile says which
     if (srgb)

@@ -337,3 +337,43 @@ struct LensFilterPicker: View {
         String(format: "%.1f×, %.1f stops", factor, log2(max(factor, 1)))
     }
 }
+
+/// What a view shows, compared value by value: the values may be of any
+/// equatable types.
+struct Inputs: Equatable {
+    private let values: [any Equatable]
+
+    init(_ values: any Equatable...) { self.values = values }
+
+    static func == (a: Inputs, b: Inputs) -> Bool {
+        a.values.count == b.values.count && zip(a.values, b.values).allSatisfy { $0.sameValue(as: $1) }
+    }
+}
+
+private extension Equatable {
+    func sameValue(as other: any Equatable) -> Bool { (other as? Self) == self }
+}
+
+/// `content`, made again only when `inputs` change. Its controls write to
+/// the document as they would anyway; only remaking them waits for a change
+/// in what they show, so `inputs` has to hold everything `content` reads.
+struct Redrawn<Content: View>: View {
+    let inputs: Inputs
+    let content: () -> Content
+
+    init(_ inputs: Inputs, @ViewBuilder content: @escaping () -> Content) {
+        self.inputs = inputs
+        self.content = content
+    }
+
+    var body: some View {
+        Keyed(inputs: inputs, content: content).equatable()
+    }
+
+    private struct Keyed: View, Equatable {
+        let inputs: Inputs
+        let content: () -> Content
+        static func == (a: Keyed, b: Keyed) -> Bool { a.inputs == b.inputs }
+        var body: some View { content() }
+    }
+}

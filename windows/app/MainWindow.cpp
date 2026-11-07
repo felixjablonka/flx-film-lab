@@ -161,6 +161,24 @@ MainWindow::MainWindow(Document &document, MotionDocument &motion, QWidget *pare
 
     QMenu *edit = menuBar()->addMenu(QStringLiteral("&Edit"));
     m_editMenu = edit->menuAction();
+    // the half on screen's; a text field being typed in keeps its own
+    m_undo = menuAction(edit, QStringLiteral("&Undo"), QKeySequence::Undo, this, [this] {
+        if (m_mode == Mode::Motion)
+            m_motion.history().undo();
+        else
+            m_doc.history().undo();
+    });
+    m_redo = menuAction(edit, QStringLiteral("&Redo"), QKeySequence::Redo, this, [this] {
+        if (m_mode == Mode::Motion)
+            m_motion.history().redo();
+        else
+            m_doc.history().redo();
+    });
+    m_redo->setShortcuts({QKeySequence(Qt::CTRL | Qt::Key_Y), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_Z)});
+    // the Edit menu is hidden in Motion; its keys work there too
+    addAction(m_undo);
+    addAction(m_redo);
+    edit->addSeparator();
     m_copy = menuAction(edit, QStringLiteral("&Copy Settings"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_C), this,
                        [this] { m_doc.copySettings(); });
     m_paste = menuAction(edit, QStringLiteral("&Paste Settings"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_V), this,
@@ -169,6 +187,11 @@ MainWindow::MainWindow(Document &document, MotionDocument &motion, QWidget *pare
     m_crop = menuAction(edit, QStringLiteral("C&rop"), QKeySequence(Qt::CTRL | Qt::Key_R), this,
                         [this] { m_doc.setCropping(!m_doc.isCropping()); });
     m_crop->setCheckable(true);
+    m_loupe = menuAction(edit, QStringLiteral("&Loupe"), QKeySequence(Qt::CTRL | Qt::Key_L), this,
+                         [this] { m_doc.setLoupeOn(!m_doc.loupeOn()); });
+    m_loupe->setCheckable(true);
+    m_loupe->setToolTip(QStringLiteral("The print at 100% (Ctrl+L), as the export will have it: drag the loupe over "
+                                       "the print. While it is open the picture is held at full size."));
     m_crop->setToolTip(QStringLiteral("Crop, turn and level the print (Ctrl+R): the whole frame shows with the crop on "
                                       "it. Return keeps the crop, Escape goes back."));
     m_turnLeft = menuAction(edit, QStringLiteral("Turn &Left"), QKeySequence(Qt::CTRL | Qt::Key_BracketLeft), this,
@@ -274,8 +297,9 @@ MainWindow::MainWindow(Document &document, MotionDocument &motion, QWidget *pare
     m_presetsButton->setToolTip(QStringLiteral(
         "Presets: settings saved by name, to put on any image later, in this session or another. A preset holds what "
         "Copy Settings copies; the image it is put on keeps its own masks, gradients and crop."));
-    m_stillsItems = {m_copy, m_paste, bar->addWidget(m_presetsButton), m_crop};
+    m_stillsItems = {m_copy, m_paste, bar->addWidget(m_presetsButton), m_crop, m_loupe};
     bar->addAction(m_crop);
+    bar->addAction(m_loupe);
 
     bar->addAction(m_logFootage);
     m_motionItems.push_back(m_logFootage);
@@ -366,6 +390,12 @@ void MainWindow::refresh()
     const QString shown = motion ? m_motion.clipPath() : m_doc.filePath();
     setWindowTitle(shown.isEmpty() ? QStringLiteral("FLX Film Lab")
                                    : QFileInfo(shown).fileName() + QStringLiteral(" — FLX Film Lab"));
+    const auto undoName = motion ? m_motion.history().undoName() : m_doc.history().undoName();
+    const auto redoName = motion ? m_motion.history().redoName() : m_doc.history().redoName();
+    m_undo->setText(undoName ? QStringLiteral("&Undo %1").arg(QString::fromStdString(*undoName)) : QStringLiteral("&Undo"));
+    m_undo->setEnabled(undoName.has_value());
+    m_redo->setText(redoName ? QStringLiteral("&Redo %1").arg(QString::fromStdString(*redoName)) : QStringLiteral("&Redo"));
+    m_redo->setEnabled(redoName.has_value());
     m_copy->setEnabled(!motion && m_doc.canCopySettings());
     m_paste->setEnabled(!motion && m_doc.canPasteSettings());
     m_paste->setToolTip(m_doc.canPasteSettings()
@@ -375,6 +405,8 @@ void MainWindow::refresh()
                                              "another."));
     m_crop->setEnabled(!motion && m_doc.hasImage());
     m_crop->setChecked(m_doc.isCropping());
+    m_loupe->setEnabled(!motion && m_doc.hasImage());
+    m_loupe->setChecked(m_doc.loupeOn());
     const bool canExport = motion ? m_motion.clip().has_value() && !m_motion.isExporting() : m_doc.canExport();
     m_export->setEnabled(canExport);
     m_exportMenu->setEnabled(canExport);

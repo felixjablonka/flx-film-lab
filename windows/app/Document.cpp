@@ -1,7 +1,10 @@
 #include "Document.h"
+#include "EditNames.h"
+#include "AppSettings.h"
 
 #include "AppSettings.h"
 
+#include <QApplication>
 #include <QFileInfo>
 #include <QtMath>
 #include <QTimer>
@@ -92,6 +95,16 @@ Document::Document(const AppData &data, QObject *parent)
     if (std::find(sizes.begin(), sizes.end(), saved) != sizes.end())
         m_previewSize = saved;
     m_presets = m_presetStore.load();
+    m_history = std::make_unique<EditHistory<Look>>(
+        this, [this] { return m_edits; }, [this](const Look &look) { restore(look); },
+        [this](const Look &a, const Look &b) {
+            const ProfilePack *film = tryPack(*m_packs, b.recipe.filmStock);
+            const Vocabulary v = appSettings().value("vocabulary").toString() == QStringLiteral("Darkroom")
+                ? Vocabulary::Darkroom : Vocabulary::Photographic;
+            return lookChangeName(a, b, v, film && film->isMonochrome());
+        },
+        [this] { emit changed(); });
+    m_history->joinSeconds = QApplication::doubleClickInterval() / 1000.0;
 }
 
 Document::~Document()
@@ -153,6 +166,7 @@ void Document::clearError()
 
 void Document::setRecipe(const Recipe &recipe)
 {
+    edited();
     const std::string oldFilm = m_edits.recipe.filmStock;
     m_edits.recipe = recipe;
     if (!m_applyingEdits) {
@@ -169,6 +183,7 @@ void Document::setWhiteBalance(WhiteBalance wb)
 {
     if (wb == m_edits.whiteBalance)
         return;
+    edited();
     m_edits.whiteBalance = wb;
     if (!m_applyingEdits)
         syncSource();
@@ -177,6 +192,7 @@ void Document::setWhiteBalance(WhiteBalance wb)
 
 void Document::setCustomTemperature(double kelvin)
 {
+    edited();
     m_edits.customTemperature = kelvin;
     if (!m_applyingEdits && m_edits.whiteBalance == WhiteBalance::Custom)
         syncSource();
@@ -185,6 +201,7 @@ void Document::setCustomTemperature(double kelvin)
 
 void Document::setCustomTint(double tint)
 {
+    edited();
     m_edits.customTint = tint;
     if (!m_applyingEdits && m_edits.whiteBalance == WhiteBalance::Custom)
         syncSource();
@@ -331,8 +348,16 @@ void Document::adopt(const RenderEngine::Source &source, const DecodeKey &key)
     if (key.path != m_file) {
         // switching images: the outgoing one's edits put away, the incoming
         // one's brought out, all at once
-        if (!m_file.isEmpty())
+        EditHistory<Look>::Stacks steps;
+        if (const auto it = m_historyByImage.find(key.path); it != m_historyByImage.end()) {
+            steps = std::move(it->second);
+            m_historyByImage.erase(it);
+        }
+        steps = m_history->swap(std::move(steps));
+        if (!m_file.isEmpty()) {
             m_editsByImage[m_file] = m_edits;
+            m_historyByImage[m_file] = std::move(steps);
+        }
         const Look incoming = edits(key.path);
         m_applyingEdits = true;
         m_edits = incoming;
@@ -351,6 +376,7 @@ void Document::adopt(const RenderEngine::Source &source, const DecodeKey &key)
     }
     m_loaded = Loaded{key, source.id, source.width, source.height, source.camera};
     m_status = statusLine();
+    syncLoupe();
     // the incoming edits may want a decode of their own
     syncSource();
     scheduleRender();
@@ -388,7 +414,7 @@ void Document::copySettings()
 void Document::pasteSettings()
 {
     if (canPasteSettings())
-        put(m_copied->first);
+        m_history->named("Paste Settings", [this] { put(m_copied->first); });
 }
 
 // Copied or saved settings onto the image on screen: film, paper, print or
@@ -396,6 +422,7 @@ void Document::pasteSettings()
 // Masks, gradients and the crop belong to the frame they were made for.
 void Document::put(const Look &look)
 {
+    edited();
     Look pasted = look;
     pasted.recipe.gradients = m_edits.recipe.gradients;
     pasted.recipe.masks = m_edits.recipe.masks;
@@ -407,6 +434,16 @@ void Document::put(const Look &look)
     m_edits = pasted;
     m_applyingEdits = false;
     // the white balance is decoded in, and a film-reference one follows the stock
+    syncSource();
+    scheduleRender();
+    emit changed();
+}
+
+void Document::restore(const Look &look)
+{
+    m_applyingEdits = true;
+    m_edits = look;
+    m_applyingEdits = false;
     syncSource();
     scheduleRender();
     emit changed();
@@ -447,7 +484,7 @@ void Document::applyPreset(const Preset &preset)
         emit changed();
         return;
     }
-    put(preset.look);
+    m_history->named("Apply Preset", [&] { put(preset.look); });
 }
 
 void Document::deletePreset(const QString &name)
@@ -556,12 +593,14 @@ void Document::finishRender(std::optional<RenderEngine::Output> output, const QS
     // a frame for an image since replaced is dropped; the follow-up draws the new one
     if (output && m_loaded && sourceID == m_loaded->sourceID) {
         m_display = std::move(output->image);
+        m_histogram = std::move(output->histogram);
         m_resolved = std::move(output->resolved);
         m_metered = output->metered;
         m_lastMilliseconds = output->milliseconds;
         m_displayMap = output->map;
         m_lastBreakdown = output->breakdown;
         emit imageChanged();
+        requestLoupe();
     }
     if (!error.isEmpty())
         m_error = error;
@@ -615,6 +654,9 @@ void Document::setCropping(bool on)
     m_isCropping = on;
     m_shapeBeforeCropping = on ? std::optional<FrameGeometry>(m_edits.recipe.geometry) : std::nullopt;
     if (!on)
+        QTimer::singleShot(0, this, [this] { requestLoupe(); });
+    m_historyBeforeCropping = on ? std::optional(m_history->mark()) : std::nullopt;
+    if (!on)
         m_isLevelling = false;
     if (!m_applyingEdits)
         scheduleRender();
@@ -629,15 +671,30 @@ void Document::setLevelling(bool on)
     emit changed();
 }
 
+// A cancelled crop never happened: the steps it took come off the undo
+// history, so the next Ctrl+Z undoes what came before it. When something
+// other than the shape was changed meanwhile, going back is a step of its own.
 void Document::endCropping(bool keep)
 {
     if (!keep && m_shapeBeforeCropping) {
         Recipe r = m_edits.recipe;
         r.geometry = *m_shapeBeforeCropping;
         r.shaped = !r.geometry.isIdentity();
-        m_applyingEdits = true;
-        setRecipe(r);
-        m_applyingEdits = false;
+        const auto onlyShape = [](const Look &a, const Look &b) {
+            Look c = a;
+            c.recipe.geometry = b.recipe.geometry;
+            c.recipe.shaped = b.recipe.shaped;
+            return c == b;
+        };
+        const auto goBack = [&] {
+            m_applyingEdits = true;
+            setRecipe(r);
+            m_applyingEdits = false;
+        };
+        if (m_historyBeforeCropping && m_history->rewind(*m_historyBeforeCropping, onlyShape))
+            m_history->unrecorded(goBack);
+        else
+            m_history->named("Cancel Crop", goBack);
     }
     setCropping(false);
 }
@@ -709,10 +766,12 @@ void Document::level(PointD a, PointD b)
 
 void Document::resetGeometry()
 {
-    Recipe r = m_edits.recipe;
-    r.geometry = {};
-    r.shaped = false;
-    setRecipe(r);
+    m_history->named("Reset Crop", [&] {
+        Recipe r = m_edits.recipe;
+        r.geometry = {};
+        r.shaped = false;
+        setRecipe(r);
+    });
 }
 
 // MARK: - Graduated exposure, dodge & burn
@@ -796,81 +855,215 @@ void Document::removeMask(const std::string &id)
 // The Negative Exposure section: exposure, its meter, and white balance.
 void Document::resetExposure()
 {
-    Recipe r = m_edits.recipe;
-    const Recipe defaults;
-    r.exposureEV = defaults.exposureEV;
-    r.autoExposure = defaults.autoExposure;
-    m_applyingEdits = true;
-    m_edits.whiteBalance = WhiteBalance::FilmReference;
-    m_edits.customTemperature = 5500;
-    m_edits.customTint = 0;
-    m_applyingEdits = false;
-    syncSource();
-    setRecipe(r);
+    m_history->named("Reset Exposure", [&] {
+        edited();   // the white balance changes before the recipe does
+        Recipe r = m_edits.recipe;
+        const Recipe defaults;
+        r.exposureEV = defaults.exposureEV;
+        r.autoExposure = defaults.autoExposure;
+        m_applyingEdits = true;
+        m_edits.whiteBalance = WhiteBalance::FilmReference;
+        m_edits.customTemperature = 5500;
+        m_edits.customTint = 0;
+        m_applyingEdits = false;
+        syncSource();
+        setRecipe(r);
+    });
 }
 
 void Document::resetTone()
 {
-    Recipe r = m_edits.recipe;
-    const Recipe d;
-    r.autoDensity = d.autoDensity;
-    r.autoGrade = d.autoGrade;
-    r.brightness = d.brightness;
-    r.density = d.density;
-    r.grade = defaultGrade();
-    r.shadowGrade = d.shadowGrade;
-    r.highlightGrade = d.highlightGrade;
-    r.shadows = d.shadows;
-    r.highlights = d.highlights;
-    r.toe = d.toe;
-    r.shoulder = d.shoulder;
-    r.toeWidth = d.toeWidth;
-    r.shoulderWidth = d.shoulderWidth;
-    r.snap = d.snap;
-    r.gradeTrim = {};
-    r.toeTrim = {};
-    r.shoulderTrim = {};
-    r.snapTrim = {};
-    r.shadowCMY = {};
-    r.highlightCMY = {};
-    setRecipe(r);
+    m_history->named("Reset Tone", [&] {
+        Recipe r = m_edits.recipe;
+        const Recipe d;
+        r.autoDensity = d.autoDensity;
+        r.autoGrade = d.autoGrade;
+        r.brightness = d.brightness;
+        r.density = d.density;
+        r.grade = defaultGrade();
+        r.shadowGrade = d.shadowGrade;
+        r.highlightGrade = d.highlightGrade;
+        r.shadows = d.shadows;
+        r.highlights = d.highlights;
+        r.toe = d.toe;
+        r.shoulder = d.shoulder;
+        r.toeWidth = d.toeWidth;
+        r.shoulderWidth = d.shoulderWidth;
+        r.snap = d.snap;
+        r.gradeTrim = {};
+        r.toeTrim = {};
+        r.shoulderTrim = {};
+        r.snapTrim = {};
+        r.shadowCMY = {};
+        r.highlightCMY = {};
+        r.curves.reset();
+        setRecipe(r);
+    });
 }
 
 // Everything on the Colour page: filtration, regional casts, pre-flash.
 void Document::resetColour()
 {
-    Recipe r = m_edits.recipe;
-    const Recipe d;
-    r.filterShiftY = d.filterShiftY;
-    r.filterShiftM = d.filterShiftM;
-    r.shadowCMY = {};
-    r.highlightCMY = {};
-    r.preflashExposure = d.preflashExposure;
-    r.preflashY = d.preflashY;
-    r.preflashM = d.preflashM;
-    setRecipe(r);
+    m_history->named("Reset Colour", [&] {
+        Recipe r = m_edits.recipe;
+        const Recipe d;
+        r.filterShiftY = d.filterShiftY;
+        r.filterShiftM = d.filterShiftM;
+        r.shadowCMY = {};
+        r.highlightCMY = {};
+        r.preflashExposure = d.preflashExposure;
+        r.preflashY = d.preflashY;
+        r.preflashM = d.preflashM;
+        setRecipe(r);
+    });
 }
 
 // Couplers, halation, grain, glare, camera sharpness and development gamma,
 // back to the stock's own measured defaults.
 void Document::resetFilmCharacter()
 {
-    Recipe r = m_edits.recipe;
-    const Recipe d;
-    r.couplersEnabled = d.couplersEnabled;
-    r.couplersAmount = d.couplersAmount;
-    r.couplersDiffusion = d.couplersDiffusion;
-    r.halationEnabled = d.halationEnabled;
-    r.halationAmount = d.halationAmount;
-    r.halationScale = d.halationScale;
-    r.scatterAmount = d.scatterAmount;
-    r.scatterScale = d.scatterScale;
-    r.cameraSharpness = d.cameraSharpness;
-    r.grainEnabled = d.grainEnabled;
-    r.grainAmount = d.grainAmount;
-    r.grainScale = d.grainScale;
-    r.glareEnabled = d.glareEnabled;
-    r.glareAmount = d.glareAmount;
-    r.densityCurveGamma = d.densityCurveGamma;
-    setRecipe(r);
+    m_history->named("Reset Film Character", [&] {
+        Recipe r = m_edits.recipe;
+        const Recipe d;
+        r.couplersEnabled = d.couplersEnabled;
+        r.couplersAmount = d.couplersAmount;
+        r.couplersDiffusion = d.couplersDiffusion;
+        r.halationEnabled = d.halationEnabled;
+        r.halationAmount = d.halationAmount;
+        r.halationScale = d.halationScale;
+        r.scatterAmount = d.scatterAmount;
+        r.scatterScale = d.scatterScale;
+        r.cameraSharpness = d.cameraSharpness;
+        r.grainEnabled = d.grainEnabled;
+        r.grainAmount = d.grainAmount;
+        r.grainScale = d.grainScale;
+        r.glareEnabled = d.glareEnabled;
+        r.glareAmount = d.glareAmount;
+        r.densityCurveGamma = d.densityCurveGamma;
+        setRecipe(r);
+    });
 }
+
+// MARK: - The loupe
+
+void Document::setLoupeOn(bool on)
+{
+    if (on == m_loupeOn || (on && !m_loaded))
+        return;
+    m_loupeOn = on;
+    if (on)
+        syncLoupe();
+    else
+        closeLoupe();
+    emit loupeChanged();
+    emit changed();
+}
+
+void Document::moveLoupe(QPointF centre)
+{
+    m_loupeCentre = QPointF(std::clamp(centre.x(), 0.0, 1.0), std::clamp(centre.y(), 0.0, 1.0));
+    emit loupeChanged();
+    requestLoupe();
+}
+
+void Document::setLoupeSize(QSize pixels)
+{
+    if (pixels == m_loupeSize)
+        return;
+    m_loupeSize = pixels;
+    requestLoupe();
+}
+
+void Document::syncLoupe()
+{
+    if (!m_loupeOn || !m_loaded)
+        return;
+    DecodeKey wanted = m_loaded->key;
+    wanted.maxDimension = 0;
+    if (m_fullFrameKey && *m_fullFrameKey == wanted) {
+        requestLoupe();
+        return;
+    }
+    m_fullFrameKey = wanted;
+    m_loupeLoading = true;
+    m_loupeImage = {};
+    const int generation = ++m_loupeGeneration;
+    emit loupeChanged();
+    onEngine([this, wanted, generation] {
+        QString error;
+        try {
+            DecodedPicture full = m_engine->decode(wanted);
+            m_engine->holdFullFrame(std::move(full), wanted.path);
+        } catch (const std::bad_alloc &) {
+            error = QStringLiteral("There is not enough memory to hold the picture at full size for the loupe.");
+        } catch (const std::exception &e) {
+            error = QStringLiteral("Could not read the picture at full size: %1").arg(QString::fromUtf8(e.what()));
+        }
+        QMetaObject::invokeMethod(this, [this, generation, error] {
+            if (generation != m_loupeGeneration)
+                return;
+            m_loupeLoading = false;
+            if (!error.isEmpty()) {
+                m_error = error;
+                m_loupeOn = false;
+                closeLoupe();
+            } else {
+                requestLoupe();
+            }
+            emit loupeChanged();
+            emit changed();
+        }, Qt::QueuedConnection);
+    });
+}
+
+void Document::closeLoupe()
+{
+    ++m_loupeGeneration;
+    m_fullFrameKey.reset();
+    m_loupeImage = {};
+    m_loupeLoading = false;
+    m_loupeAgain = false;
+    onEngine([this] { m_engine->releaseFullFrame(); });
+}
+
+// One at a time: while one is printed, further requests collapse into one
+// follow-up with whatever is wanted by then, so a drag shows where the loupe
+// is, not every place it has been.
+void Document::requestLoupe()
+{
+    if (!m_loupeOn || m_loupeLoading || m_isCropping || !m_fullFrameKey || m_loupeSize.isEmpty() || !m_loaded)
+        return;
+    if (m_loupeInFlight) {
+        m_loupeAgain = true;
+        return;
+    }
+    m_loupeInFlight = true;
+    const Recipe recipe = m_edits.recipe;
+    const QPointF centre = m_loupeCentre;
+    const QSize size = m_loupeSize;
+    const int generation = m_loupeGeneration;
+    onEngine([this, recipe, centre, size, generation] {
+        QImage image;
+        QString error;
+        try {
+            image = m_engine->renderLoupe(recipe, centre, size.width(), size.height());
+        } catch (const std::exception &e) {
+            error = QString::fromUtf8(e.what());
+        }
+        QMetaObject::invokeMethod(this, [this, image = std::move(image), error, generation]() mutable {
+            m_loupeInFlight = false;
+            if (generation == m_loupeGeneration && m_loupeOn) {
+                if (!image.isNull())
+                    m_loupeImage = std::move(image);
+                if (!error.isEmpty())
+                    m_error = error;
+                emit loupeChanged();
+            }
+            if (m_loupeAgain) {
+                m_loupeAgain = false;
+                requestLoupe();
+            }
+        }, Qt::QueuedConnection);
+    });
+}
+

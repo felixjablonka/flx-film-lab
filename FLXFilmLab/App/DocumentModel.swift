@@ -19,11 +19,12 @@ import CoreGraphics
 /// - An image opened for the first time keeps the look — film, paper, film
 ///   character, output, which autos are on — while everything dialled for one
 ///   frame (exposure, white balance, tone, colour, masks) starts fresh.
+/// - Each image keeps its own undo history for the session too (`history`).
 @MainActor
 final class DocumentModel: ObservableObject {
 
     /// Everything that belongs to one image.
-    struct ImageEdits {
+    struct ImageEdits: Equatable {
         var recipe: Recipe
         var whiteBalance: RawLoader.WhiteBalance
         var customTemperature: Double
@@ -32,6 +33,7 @@ final class DocumentModel: ObservableObject {
 
     @Published var recipe = Recipe() {
         didSet {
+            edited { $0.recipe = oldValue }
             guard !applyingEdits else { return }
             // The film's reference illuminant sets the decode white balance, so
             // changing stock in that mode means re-decoding.
@@ -41,11 +43,18 @@ final class DocumentModel: ObservableObject {
             scheduleRender()
         }
     }
-    @Published private(set) var displayImage: CGImage?
+    /// What each frame brings (`PrintPreview`), kept apart from the edits: a
+    /// finished frame redraws only the views that show it, not every control
+    /// of the inspector, which once took the main thread's every moment
+    /// while a slider was dragged.
+    let preview = PrintPreview()
+    var displayImage: CGImage? { preview.image }
+    /// The print's histogram as it is on screen, and before its curves.
+    var histogram: PrintHistogram? { preview.histogram }
     /// Where the image on screen comes from in the frame: the print as cut,
     /// or, while cropping, the whole frame turned and levelled.
-    @Published private(set) var displayMap: GeometryMap?
-    @Published private(set) var isRendering = false
+    var displayMap: GeometryMap? { preview.map }
+    var isRendering: Bool { preview.isRendering }
     @Published private(set) var status: String = "Open a RAW file to begin"
     @Published private(set) var errorMessage: String?
     /// The image on screen, the one being edited. It changes only once a newly
@@ -54,30 +63,40 @@ final class DocumentModel: ObservableObject {
     /// A file that has been opened but not yet decoded.
     @Published private(set) var pendingURL: URL?
     @Published var whiteBalance: RawLoader.WhiteBalance = .filmReference {
-        didSet { if !applyingEdits, oldValue != whiteBalance { syncSource() } }
+        didSet {
+            edited { $0.whiteBalance = oldValue }
+            if !applyingEdits, oldValue != whiteBalance { syncSource() }
+        }
     }
     @Published var customTemperature: Double = 5500 {
-        didSet { if !applyingEdits, whiteBalance == .custom { syncSource() } }
+        didSet {
+            edited { $0.customTemperature = oldValue }
+            if !applyingEdits, whiteBalance == .custom { syncSource() }
+        }
     }
     @Published var customTint: Double = 0 {
-        didSet { if !applyingEdits, whiteBalance == .custom { syncSource() } }
+        didSet {
+            edited { $0.customTint = oldValue }
+            if !applyingEdits, whiteBalance == .custom { syncSource() }
+        }
     }
     @Published var showOriginal = false
-    @Published private(set) var lastRenderMilliseconds: Double = 0
+    var lastRenderMilliseconds: Double { preview.milliseconds }
     /// What the meters read, for the controls whose auto is on. The sliders
     /// show these while their auto is on.
     @Published private(set) var meteredExposureEV: Double?
     @Published private(set) var meteredBrightness: Double?
     @Published private(set) var meteredGrade: Double?
-    /// The recipe as last rendered, with the meters' choices filled in — what
-    /// the curve plot draws, so it shows the print actually being made.
-    @Published private(set) var resolvedRecipe: Recipe?
+    /// The recipe as last rendered, with the meters' choices filled in: the
+    /// print actually being made. No view shows it, so it is not published.
+    private(set) var resolvedRecipe: Recipe?
     @Published private(set) var isDecoding = false
 
     /// Longest edge of the interactive proxy, one of `previewSizes`. At 2560,
     /// big enough to judge tone and colour, small enough that a print control
-    /// re-renders it in 23 ms and an exposure control in 40 ms on an M4 Pro;
-    /// at 4096, 57 and 98 ms. The choice is kept between launches.
+    /// re-renders it in about 29 ms and an exposure control in 50 ms on an M4
+    /// Pro; at 4096, 73 and 122 ms (README, Performance). The choice is kept
+    /// between launches.
     var proxyMaxDimension: Int {
         didSet {
             defaults.set(proxyMaxDimension, forKey: Self.previewSizeKey)
@@ -126,6 +145,9 @@ final class DocumentModel: ObservableObject {
     private var sourceGeneration = 0
     private var decodeTask: Task<Void, Never>?
     private var editsByImage: [URL: ImageEdits] = [:]
+    /// The undo history of each image that has been on screen, but the one
+    /// that is: that one's is `history`'s.
+    private var historyByImage: [URL: EditHistory<ImageEdits>.Stacks] = [:]
     /// Set while one image's edits are swapped in for another's, so the swap
     /// does not trigger re-decodes and renders of its own half-way through.
     private var applyingEdits = false
@@ -262,17 +284,23 @@ final class DocumentModel: ObservableObject {
             isDecoding = false
         }
         if key.url != fileURL {
-            // Switching images: put the outgoing one's edits away and bring
-            // the incoming one's out, all at once.
-            if let outgoing = fileURL { editsByImage[outgoing] = currentEdits }
+            // Switching images: put the outgoing one's edits and undo history
+            // away and bring the incoming one's out, all at once.
+            let steps = history.swap(for: historyByImage.removeValue(forKey: key.url) ?? .init())
+            if let outgoing = fileURL {
+                editsByImage[outgoing] = currentEdits
+                historyByImage[outgoing] = steps
+            }
             let incoming = edits(for: key.url)
-            applyingEdits = true
-            recipe = incoming.recipe
-            whiteBalance = incoming.whiteBalance
-            customTemperature = incoming.customTemperature
-            customTint = incoming.customTint
-            isCropping = false
-            applyingEdits = false
+            history.unrecorded {
+                applyingEdits = true
+                recipe = incoming.recipe
+                whiteBalance = incoming.whiteBalance
+                customTemperature = incoming.customTemperature
+                customTint = incoming.customTint
+                isCropping = false
+                applyingEdits = false
+            }
             fileURL = key.url
             if pendingURL == key.url { pendingURL = nil }
             // Readings from the previous image must not show on this one's
@@ -286,6 +314,7 @@ final class DocumentModel: ObservableObject {
         loaded = Loaded(key: key, sourceID: sourceID, width: decoded.width, height: decoded.height,
                         camera: camera)
         status = statusLine
+        syncLoupe()
         // The incoming edits may want a different decode (their own white
         // balance, or a stock with another reference illuminant).
         syncSource()
@@ -329,7 +358,7 @@ final class DocumentModel: ObservableObject {
     /// Paste the copied settings onto the image on screen.
     func pasteSettings() {
         guard canPasteSettings, let copied = copiedSettings?.edits else { return }
-        put(copied)
+        history.named("Paste Settings") { put(copied) }
     }
 
     /// Put copied or saved settings on the image on screen: film, paper,
@@ -337,18 +366,23 @@ final class DocumentModel: ObservableObject {
     /// balance. Masks, gradients and the crop belong to the frame they were
     /// made for, so this image keeps its own.
     private func put(_ edits: ImageEdits) {
-        var pasted = edits.recipe
-        pasted.masks = recipe.masks
-        pasted.gradients = recipe.gradients
-        pasted.geometry = recipe.geometry
+        var pasted = edits
+        pasted.recipe.masks = recipe.masks
+        pasted.recipe.gradients = recipe.gradients
+        pasted.recipe.geometry = recipe.geometry
+        restore(pasted)
+    }
+
+    /// Put a whole set of edits on the image on screen at once. White balance
+    /// is decoded in, and a film-reference balance follows the stock: decode
+    /// again if either moved.
+    private func restore(_ edits: ImageEdits) {
         applyingEdits = true
-        recipe = pasted
+        recipe = edits.recipe
         whiteBalance = edits.whiteBalance
         customTemperature = edits.customTemperature
         customTint = edits.customTint
         applyingEdits = false
-        // White balance is decoded in, and a film-reference balance follows
-        // the stock: decode again if either moved.
         syncSource()
         scheduleRender()
     }
@@ -385,8 +419,10 @@ final class DocumentModel: ObservableObject {
             errorMessage = "The preset \(preset.name) uses a film or paper this version does not have."
             return
         }
-        put(ImageEdits(recipe: preset.recipe, whiteBalance: preset.whiteBalance,
-                       customTemperature: preset.customTemperature, customTint: preset.customTint))
+        history.named("Apply Preset") {
+            put(ImageEdits(recipe: preset.recipe, whiteBalance: preset.whiteBalance,
+                           customTemperature: preset.customTemperature, customTint: preset.customTint))
+        }
     }
 
     func deletePreset(_ preset: Preset) {
@@ -448,7 +484,7 @@ final class DocumentModel: ObservableObject {
             return
         }
         renderInFlight = true
-        isRendering = true
+        preview.isRendering = true
         let recipe = self.recipe
         let sourceID = loaded.sourceID
         let wholeFrame = isCropping
@@ -465,19 +501,19 @@ final class DocumentModel: ObservableObject {
 
     private func finishRender(_ result: Result<RenderEngine.Output?, Error>, sourceID: Int) {
         renderInFlight = false
-        isRendering = false
+        preview.isRendering = false
         switch result {
         case .success(let output):
             // A frame for an image that has since been replaced is dropped;
             // the follow-up render below draws the new one.
             if let output, sourceID == loaded?.sourceID {
-                displayImage = output.image
-                displayMap = output.map
+                preview.show(output)
                 resolvedRecipe = output.resolved
-                meteredExposureEV = output.metered.exposureEV
-                meteredBrightness = output.metered.brightness
-                meteredGrade = output.metered.grade
-                lastRenderMilliseconds = output.milliseconds
+                // Published only when they move: the inspector redraws for them.
+                if meteredExposureEV != output.metered.exposureEV { meteredExposureEV = output.metered.exposureEV }
+                if meteredBrightness != output.metered.brightness { meteredBrightness = output.metered.brightness }
+                if meteredGrade != output.metered.grade { meteredGrade = output.metered.grade }
+                requestLoupe()
             }
         case .failure(let error):
             errorMessage = error.localizedDescription
@@ -520,12 +556,144 @@ final class DocumentModel: ObservableObject {
                 try Exporter.write(linear: linear, width: Int(renderer.outputSize.width),
                                    height: Int(renderer.outputSize.height),
                                    to: url, format: format, colorSpace: resolved.outputColorSpace,
-                                   metadata: RawLoader.metadata(of: source))
+                                   metadata: RawLoader.metadata(of: source),
+                                   provenance: Exporter.Provenance(recipe: resolved))
             }.value
             status = "Exported \(url.lastPathComponent)"
         } catch {
             errorMessage = error.localizedDescription
             status = statusLine
+        }
+    }
+
+    // MARK: - The loupe
+
+    /// The loupe (⌘L): the print at 100%, one pixel of the export to one of
+    /// the screen, under a square dragged over the print. While it is open
+    /// the picture is held at full size, decoded as the export decodes it,
+    /// and only the part under the loupe is printed from it, as the export
+    /// prints those pixels.
+    @Published var loupeOn = false {
+        didSet {
+            guard oldValue != loupeOn else { return }
+            if loupeOn { syncLoupe() } else { closeLoupe() }
+        }
+    }
+    /// The loupe's centre, in fractions of the print as it shows.
+    @Published private(set) var loupeCentre = CGPoint(x: 0.5, y: 0.5)
+    /// The print at 100% under it.
+    var loupeImage: CGImage? { preview.loupeImage }
+    /// The picture is being read at full size for it.
+    @Published private(set) var loupeLoading = false
+    /// The loupe's size in pixels of the screen, one to a pixel of the print.
+    private var loupeSize = (width: 0, height: 0)
+    private var loupeInFlight = false
+    private var loupeAgain = false
+    private var fullFrameTask: Task<Void, Never>?
+    /// What the picture held at full size, or on its way, was decoded with.
+    private var fullFrameKey: String?
+
+    /// What the picture on screen decodes at full size with: the file and its
+    /// white balance, as the proxy's (`DecodeKey`) without its size.
+    private var wantedFullFrameKey: String? {
+        guard let key = loaded?.key else { return nil }
+        return "\(key.url.path)|\(key.whiteBalance)|\(key.referenceIlluminant)|\(key.temperature)|\(key.tint)"
+    }
+
+    /// Reading the picture or printing the loupe's part: for the tests.
+    var loupeBusy: Bool { loupeLoading || loupeInFlight || loupeAgain }
+
+    func moveLoupe(to centre: CGPoint) {
+        loupeCentre = CGPoint(x: min(max(centre.x, 0), 1), y: min(max(centre.y, 0), 1))
+        requestLoupe()
+    }
+
+    func setLoupeSize(width: Int, height: Int) {
+        guard loupeSize != (width, height) else { return }
+        loupeSize = (width, height)
+        requestLoupe()
+    }
+
+    /// Hold the picture on screen at full size for the loupe, reading it
+    /// again when what is held was decoded for another picture or white
+    /// balance.
+    private func syncLoupe() {
+        guard loupeOn, let engine, let loaded, let key = wantedFullFrameKey else { return }
+        if fullFrameKey == key {
+            requestLoupe()
+            return
+        }
+        fullFrameTask?.cancel()
+        fullFrameKey = key
+        loupeLoading = true
+        preview.loupeImage = nil
+        var options = loaded.key.options
+        options.maxDimension = nil
+        let url = loaded.key.url, sourceID = loaded.sourceID
+        fullFrameTask = Task { [weak self] in
+            let result = await Task.detached(priority: .userInitiated) {
+                Result { try RawLoader.load(url: url, options: options) }
+            }.value
+            guard let self, !Task.isCancelled, self.fullFrameKey == key else { return }
+            switch result {
+            case .success(let decoded):
+                let held = (try? await engine.holdFullFrame(decoded, key: key, for: sourceID)) ?? false
+                guard !Task.isCancelled, self.fullFrameKey == key else { return }
+                self.loupeLoading = false
+                if held {
+                    // The preview prints again, keeping its print before
+                    // Bloom & Glow for the loupe's; the loupe follows it.
+                    self.scheduleRender()
+                } else if self.loaded?.sourceID != sourceID {
+                    // Another picture came in meanwhile: read that one.
+                    self.fullFrameKey = nil
+                    self.syncLoupe()
+                } else {
+                    self.fullFrameKey = nil
+                    self.loupeOn = false
+                    self.errorMessage = "There is not enough memory to hold the picture at full size for the loupe."
+                }
+            case .failure(let error):
+                self.loupeLoading = false
+                self.fullFrameKey = nil
+                self.loupeOn = false
+                self.errorMessage = "Could not read the picture at full size: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func closeLoupe() {
+        fullFrameTask?.cancel()
+        fullFrameTask = nil
+        fullFrameKey = nil
+        preview.loupeImage = nil
+        loupeLoading = false
+        loupeAgain = false
+        if let engine { Task { await engine.releaseFullFrame() } }
+    }
+
+    /// Ask for the loupe's picture. While one is being made, further requests
+    /// collapse into one follow-up with whatever is wanted by then, so a drag
+    /// shows where the loupe is, not every place it has been.
+    func requestLoupe() {
+        guard loupeOn, !loupeLoading, !isCropping, let engine, let loaded, let key = fullFrameKey,
+              loupeSize.width > 0 else { return }
+        if loupeInFlight {
+            loupeAgain = true
+            return
+        }
+        loupeInFlight = true
+        let recipe = self.recipe, centre = loupeCentre, size = loupeSize, sourceID = loaded.sourceID
+        Task { [weak self] in
+            let image = try? await engine.renderLoupe(recipe, centre: centre, width: size.width,
+                                                      height: size.height, key: key, for: sourceID)
+            guard let self else { return }
+            self.loupeInFlight = false
+            if let image, self.loupeOn { self.preview.loupeImage = image }
+            if self.loupeAgain {
+                self.loupeAgain = false
+                self.requestLoupe()
+            }
         }
     }
 
@@ -538,13 +706,17 @@ final class DocumentModel: ObservableObject {
         didSet {
             guard oldValue != isCropping else { return }
             shapeBeforeCropping = isCropping ? recipe.geometry : nil
+            historyBeforeCropping = isCropping ? history.mark() : nil
             if !isCropping { isLevelling = false }
             if !applyingEdits { scheduleRender() }
+            if !isCropping { requestLoupe() }
         }
     }
     /// The shape the print had when cropping began: what the meters read
     /// meanwhile, and what Cancel goes back to.
     private var shapeBeforeCropping: FrameGeometry?
+    /// Where the undo history stood when cropping began.
+    private var historyBeforeCropping: EditHistory<ImageEdits>.Mark?
 
     /// The level tool: the next line drawn on the frame levels it.
     @Published var isLevelling = false {
@@ -552,8 +724,24 @@ final class DocumentModel: ObservableObject {
     }
 
     /// Finish cropping, keeping the crop, or going back to the one before.
+    ///
+    /// A cancelled crop never happened: the steps it took come off the undo
+    /// history, so the next ⌘Z undoes what came before it. When something
+    /// other than the shape was changed meanwhile, going back is a step of
+    /// its own instead.
     func endCropping(keep: Bool) {
-        if !keep, let before = shapeBeforeCropping { recipe.geometry = before }
+        if !keep, let before = shapeBeforeCropping {
+            let onlyShape: (ImageEdits, ImageEdits) -> Bool = { a, b in
+                var a = a
+                a.recipe.frameGeometry = b.recipe.frameGeometry
+                return a == b
+            }
+            if let mark = historyBeforeCropping, history.rewind(to: mark, ifEach: onlyShape) {
+                history.unrecorded { recipe.geometry = before }
+            } else {
+                history.named("Cancel Crop") { recipe.geometry = before }
+            }
+        }
         isCropping = false
     }
 
@@ -602,7 +790,7 @@ final class DocumentModel: ObservableObject {
     }
 
     /// Back to the frame as shot.
-    func resetGeometry() { recipe.geometry = .identity }
+    func resetGeometry() { history.named("Reset Crop") { recipe.geometry = .identity } }
 
     /// Points given as fractions of the print on screen, in the frame's own
     /// normalised coordinates, as masks and gradients store them: so a new one
@@ -613,6 +801,37 @@ final class DocumentModel: ObservableObject {
             map.normalisedSource(fromOutput: CGPoint(x: $0.x * CGFloat(map.outputWidth),
                                                      y: $0.y * CGFloat(map.outputHeight)))
         }
+    }
+
+    // MARK: - Undo
+
+    /// Undo and redo for the image on screen (`EditHistory`): one step per
+    /// gesture, each image with its own history for the session.
+    lazy var history = EditHistory<ImageEdits>(
+        read: { [unowned self] in self.currentEdits },
+        write: { [unowned self] in self.restore($0) },
+        describe: { [unowned self] a, b in
+            var names = EditNames.recipe(a.recipe, b.recipe, vocabulary: self.vocabulary)
+            if a.whiteBalance != b.whiteBalance || a.customTemperature != b.customTemperature
+                || a.customTint != b.customTint {
+                names.append("White Balance")
+            }
+            return EditNames.title(names)
+        })
+
+    /// The edits have just changed; `undo` turns the edits as they are now
+    /// into what they were.
+    private func edited(_ undo: (inout ImageEdits) -> Void) {
+        history.note {
+            var before = currentEdits
+            undo(&before)
+            return before
+        }
+    }
+
+    /// The names the inspector's controls go by (Output > Control names).
+    private var vocabulary: Vocabulary {
+        defaults.string(forKey: "vocabulary").flatMap(Vocabulary.init(rawValue:)) ?? .photographic
     }
 
     // MARK: - Recipe sidecars
@@ -630,7 +849,9 @@ final class DocumentModel: ObservableObject {
     // MARK: - Resets
 
     /// Everything on the Colour page: filtration, regional casts, pre-flash.
-    func resetColour() {
+    func resetColour() { history.named("Reset Colour") { resettingColour() } }
+
+    private func resettingColour() {
         var r = recipe
         let defaults = Recipe()
         r.filterShiftY = defaults.filterShiftY
@@ -645,7 +866,9 @@ final class DocumentModel: ObservableObject {
 
     /// Couplers, halation, grain, glare, camera sharpness and development
     /// gamma — back to the stock's own measured defaults.
-    func resetFilmCharacter() {
+    func resetFilmCharacter() { history.named("Reset Film Character") { resettingFilmCharacter() } }
+
+    private func resettingFilmCharacter() {
         var r = recipe
         let defaults = Recipe()
         r.couplersEnabled = defaults.couplersEnabled
@@ -667,7 +890,9 @@ final class DocumentModel: ObservableObject {
     }
 
     /// The Negative Exposure section: exposure, its meter, and white balance.
-    func resetExposure() {
+    func resetExposure() { history.named("Reset Exposure") { resettingExposure() } }
+
+    private func resettingExposure() {
         var r = recipe
         let defaults = Recipe()
         r.exposureEV = defaults.exposureEV
@@ -678,7 +903,9 @@ final class DocumentModel: ObservableObject {
         customTint = 0
     }
 
-    func resetTone() {
+    func resetTone() { history.named("Reset Tone") { resettingTone() } }
+
+    private func resettingTone() {
         var r = recipe
         let defaults = Recipe()
         r.autoDensity = defaults.autoDensity
@@ -701,6 +928,28 @@ final class DocumentModel: ObservableObject {
         r.snapTrim = .zero
         r.shadowCMY = .zero
         r.highlightCMY = .zero
+        r.curves = nil
         recipe = r
+    }
+}
+
+/// What each frame of the image on screen brings: the print, where it comes
+/// from in the frame, its histogram, whether one is being made and how long
+/// the last took, and the loupe's part. The canvas, the status line, the
+/// histogram and the loupe watch it; the inspector's controls do not.
+@MainActor
+final class PrintPreview: ObservableObject {
+    @Published fileprivate(set) var image: CGImage?
+    @Published fileprivate(set) var map: GeometryMap?
+    @Published fileprivate(set) var histogram: PrintHistogram?
+    @Published fileprivate(set) var isRendering = false
+    @Published fileprivate(set) var milliseconds: Double = 0
+    @Published fileprivate(set) var loupeImage: CGImage?
+
+    fileprivate func show(_ output: RenderEngine.Output) {
+        image = output.image
+        map = output.map
+        histogram = output.histogram
+        milliseconds = output.milliseconds
     }
 }

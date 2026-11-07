@@ -131,7 +131,8 @@ void main()
     if (u.flags.y != 0) {
         vec2 o = vec2(gid) + 0.5;
         vec2 uv = o / vec2(size);
-        if (shape.shaped.x != 0)
+        // y: a part of a frame (the loupe's), which finds the map through where it lies
+        if (shape.shaped.x != 0 || shape.shaped.y != 0)
             uv = (shape.columns.xy * o.x + shape.columns.zw * o.y + shape.offsetSize.xy) / shape.offsetSize.zw;
         db = textureLod(dodgeBurn, uv, 0.0).rg;
     }

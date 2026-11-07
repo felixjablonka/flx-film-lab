@@ -1,5 +1,42 @@
 # Changelog
 
+## 1.4.0 (2026-11-07)
+
+Curves, a histogram, a loupe and undo, eight films from Ilford and Konica,
+and a window that keeps up with a dragged slider: 49 film stocks and 13 print
+stocks in all.
+
+### FLX Film Lab for Windows
+- **Everything new below,** with Ctrl in place of ⌘: the curves and the
+  histogram, the loupe (Ctrl+L), undo and redo (Ctrl+Z, Ctrl+Y), the new films
+  and the metadata.
+- **Graphics cards with less memory:** where the card is short of it, a
+  picture is decoded on the CPU, by the same arithmetic, and an export is
+  printed in tiles that come out as the whole print would; the loupe holds
+  only its part of the picture on the card.
+
+### New
+- **Curves and a histogram:** the finished print's RGB histogram, and point
+  curves laid on the print last, one for all three channels and one for each.
+- **A loupe** (⌘L): the print at 100%, as the export has it, under a square
+  dragged over the print.
+- **Undo and redo** (⌘Z, ⇧⌘Z), one step per gesture, with a history for each
+  picture and each clip.
+- **What made the print, in its metadata:** FLX Film Lab and its version, and
+  the film, its camera filter and the paper, in exported pictures and clips.
+- **Five Ilford films:** Delta 100, Delta 400, FP4 Plus, Pan F Plus and Ortho
+  Plus, each from HARMAN's own data.
+- **Three Konica films:** Centuria Super 100 and 1600, and Impresa 50, each
+  from Konica's own data.
+
+### Changed
+- **The Mac app's window keeps up with a dragged slider:** a slider tick
+  redraws only its own part of the inspector, and a new frame only the print
+  and what is measured of it. That is less than half the work 1.3.0 did for
+  each.
+- The Print shows the histogram and the curves in place of the paper's
+  characteristic curve.
+
 ## 1.3.0 (2026-11-02)
 
 FLX Film Lab for Windows, motion picture films and their print films, and

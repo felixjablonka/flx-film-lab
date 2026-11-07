@@ -94,6 +94,14 @@ struct GeometryUniforms {
         sourceSize = SIMD2(Float(map.sourceSize.width), Float(map.sourceSize.height))
         active = map.isIdentity ? 0 : 1
     }
+
+    /// The map from the pixels of a part of the print that starts at `part`
+    /// (in the print's pixels) to those of an image that starts at `held`
+    /// in the frame: the loupe's part and box (`Renderer.setWindow`).
+    init(_ map: GeometryMap, part: CGPoint, held: SIMD2<Float> = .zero) {
+        self.init(map)
+        offset += column0 * Float(part.x) + column1 * Float(part.y) - held
+    }
 }
 
 /// Everything the film stage reads. Equal keys mean the developed negative
@@ -197,6 +205,8 @@ final class Renderer {
     private let grainConvolveAdd: MTLComputePipelineState
     private let encodeDisplay: MTLComputePipelineState
     private let applyGeometry: MTLComputePipelineState
+    private let applyCurves: MTLComputePipelineState
+    private let histogramRGB: MTLComputePipelineState
 
     // Per-image textures
     private var sourceTexture: MTLTexture?
@@ -262,7 +272,39 @@ final class Renderer {
     private var tcLutStock: String?
     private var toneLutTexture: MTLTexture?
 
+    /// The curves' table on the GPU (`PrintCurves.table`), and the curves
+    /// it was sampled from.
+    private var curveBuffer: MTLBuffer?
+    private var curveBufferCurves: PrintCurves?
+
+    /// Measure the finished print's histogram in each render: the preview's
+    /// renderer does, an export has no use for it.
+    var measuresHistogram = false
+    /// The last render's histogram (`histogram_rgb`), 256 bins of red, then
+    /// green, then blue: `after` of the print as finished, `before` of it as
+    /// the curves were given it, when there are any.
+    private(set) var histogram: (after: [UInt32], before: [UInt32]?)?
+    private var histogramBuffers: [MTLBuffer] = []
+
+    /// The frame's size: the image's own, or, while a box of a frame is
+    /// held for the loupe (`setWindow`), the whole frame's, which sets the
+    /// pitch and every size in fractions of the frame.
     private(set) var imageSize: CGSize = .zero
+    /// Where the image held starts in its frame: (0, 0), or the loupe's box.
+    /// The frame's pixels, not the box's, seed the grain and place the
+    /// gradients and the masks.
+    private var windowOrigin = SIMD2<Int>(0, 0)
+    /// A frame held whole at full size, on the GPU, for the loupe to take
+    /// boxes of (`holdFrame`, `setWindow`).
+    private var heldFrame: MTLTexture?
+    /// What the last render made of the print, in the print's pixels: all of
+    /// it, or the loupe's part.
+    private(set) var madeRect: CGRect = .zero
+    /// Keep a copy of the print as it was before Bloom & Glow
+    /// (`printBeforeEffects`): the loupe's effects take the light from
+    /// beyond its part from the preview's.
+    var keepsPrintBeforeEffects = false
+    private(set) var printBeforeEffects: MTLTexture?
     private var effectsContext: CIContext?
     /// Allocated the first time an image is rendered with effects on.
     private var effectsOut: MTLTexture?
@@ -305,6 +347,8 @@ final class Renderer {
         grainConvolveAdd = try pipeline("grain_convolve_add")
         encodeDisplay = try pipeline("encode_display")
         applyGeometry = try pipeline("apply_geometry")
+        applyCurves = try pipeline("apply_curves")
+        histogramRGB = try pipeline("histogram_rgb")
 
         dummyDodgeBurn = makeTexture(width: 1, height: 1, format: .rg32Float, write: false)
     }
@@ -313,6 +357,7 @@ final class Renderer {
 
     func setImage(_ pixels: [Float], width: Int, height: Int) {
         imageSize = CGSize(width: width, height: height)
+        windowOrigin = SIMD2(0, 0)
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .rgba32Float, width: width, height: height, mipmapped: false)
         descriptor.usage = [.shaderRead, .shaderWrite]
@@ -349,9 +394,17 @@ final class Renderer {
         // precision — plenty for linear light and density, and the difference
         // is far below the grain. The proxy and the parity harness stay in
         // float32.
-        let format: MTLPixelFormat = (width * height > 12_000_000) ? .rgba16Float : .rgba32Float
-        intermediateFormat = format
+        intermediateFormat = (width * height > 12_000_000) ? .rgba16Float : .rgba32Float
+        allocateIntermediates(width: width, height: height)
+        // The masks were drawn for the image before; a box of the frame
+        // (`setWindow`) keeps the frame's.
+        dodgeBurnTexture = nil
+    }
 
+    /// The film stage's image-sized textures, at `width` x `height`, in
+    /// `intermediateFormat`; the print's are made on first use.
+    private func allocateIntermediates(width: Int, height: Int) {
+        let format = intermediateFormat
         rawLinear = makeTexture(width: width, height: height, format: format)
         rawLinearB = makeTexture(width: width, height: height, format: format)
         scratchA = makeTexture(width: width, height: height, format: format)
@@ -365,7 +418,6 @@ final class Renderer {
         // is made in textures of its own size instead.
         linearOut = nil
         displayOut = nil
-        dodgeBurnTexture = nil
         effectsOut = nil
         filmStageKey = nil
         developedCmy = nil
@@ -396,7 +448,7 @@ final class Renderer {
     /// `wholeFrame` keeps the whole frame, turned and levelled, for drawing
     /// the crop on.
     @discardableResult
-    func render(setup: RenderSetup, recipe: Recipe, wholeFrame: Bool = false) throws -> MTLTexture? {
+    func render(setup: RenderSetup, recipe: Recipe, wholeFrame: Bool = false, part: Part? = nil) throws -> MTLTexture? {
         guard let source = sourceTexture,
               let raw = rawLinear,
               let rawB = rawLinearB,
@@ -421,10 +473,22 @@ final class Renderer {
         guard let cb = queue.makeCommandBuffer() else { return nil }
 
         // Turned, levelled or cropped, the print is made at its own size from
-        // the negative given its shape (step 2d).
-        let map = GeometryMap(recipe.geometry, sourceWidth: width, sourceHeight: height,
+        // the negative given its shape (step 2d). The shape is the frame's;
+        // for the loupe, the image held is a box of it (`setWindow`).
+        let frameWidth = Int(imageSize.width), frameHeight = Int(imageSize.height)
+        let map = GeometryMap(recipe.geometry, sourceWidth: frameWidth, sourceHeight: frameHeight,
                               wholeFrame: wholeFrame)
         let shaped = !map.isIdentity
+        let origin = SIMD2<Float>(Float(windowOrigin.x), Float(windowOrigin.y))
+        // What is made of the print: all of it, or the loupe's part, which,
+        // unshaped, is the box held.
+        let made: CGRect
+        if let part {
+            made = shaped ? part.rect
+                : CGRect(x: windowOrigin.x, y: windowOrigin.y, width: width, height: height)
+        } else {
+            made = CGRect(x: 0, y: 0, width: map.outputWidth, height: map.outputHeight)
+        }
 
         // The film stage — exposure, halation, development, couplers, grain —
         // depends on none of the print controls. When only those moved, the
@@ -441,8 +505,8 @@ final class Renderer {
             // on the exposure itself, before halation spreads it in the film.
             var gradients = setup.exposureGradients.map { g in
                 ExposureGradientUniform(
-                    a: SIMD2(Float(g.points[0].x) * Float(width), Float(g.points[0].y) * Float(height)),
-                    b: SIMD2(Float(g.points[1].x) * Float(width), Float(g.points[1].y) * Float(height)),
+                    a: SIMD2(Float(g.points[0].x) * Float(frameWidth), Float(g.points[0].y) * Float(frameHeight)) - origin,
+                    b: SIMD2(Float(g.points[1].x) * Float(frameWidth), Float(g.points[1].y) * Float(frameHeight)) - origin,
                     ev: Float(g.exposureEV))
             }
             var filmUniforms = FilmUniforms(rgbToXYZ: setup.film.rgbToXYZMatrix,
@@ -525,7 +589,8 @@ final class Renderer {
             if !shaped, recipe.grainEnabled, recipe.grainAmount > 0, let grain = setup.film.defaults.grain {
                 let target = (cmy === cmyAlt) ? cmyFilm! : cmyAlt
                 drawGrain(cb, grain, on: cmy, into: target, scratch: scratch1, scratch2,
-                          setup: setup, recipe: recipe)
+                          setup: setup, recipe: recipe,
+                          origin: SIMD2(UInt32(windowOrigin.x), UInt32(windowOrigin.y)))
                 grainFree = cmy
                 cmy = target
             }
@@ -548,20 +613,21 @@ final class Renderer {
         let printed: MTLTexture, screen: MTLTexture
         var printScratch = scratch1, printScratchB = scratch2, grainyBlur = rawB
         if shaped {
-            let w = map.outputWidth, h = map.outputHeight
+            let w = Int(made.width), h = Int(made.height)
             if geometryLinear?.width != w || geometryLinear?.height != h {
                 shapedNegative = makeTexture(width: w, height: h, format: intermediateFormat)
                 shapedGrainy = makeTexture(width: w, height: h, format: intermediateFormat)
                 shapedScratchA = makeTexture(width: w, height: h, format: intermediateFormat)
                 shapedScratchB = makeTexture(width: w, height: h, format: intermediateFormat)
                 geometryLinear = makeTexture(width: w, height: h, format: .rgba32Float)
-                geometryDisplay = makeTexture(width: w, height: h, format: .rgba8Unorm)
+                geometryDisplay = makeTexture(width: w, height: h, format: .bgra8Unorm)
             }
             guard let shapedNeg = shapedNegative, let grainy = shapedGrainy, let a = shapedScratchA,
                   let b = shapedScratchB, let shapedPrint = geometryLinear, let shapedScreen = geometryDisplay else {
                 throw RendererError.textureAllocation
             }
-            var uniforms = GeometryUniforms(map)
+            // From the part's pixels to the image held: the frame, or the box.
+            var uniforms = part == nil ? GeometryUniforms(map) : GeometryUniforms(map, part: made.origin, held: origin)
             encode(cb, applyGeometry, width: w, height: h) { e in
                 e.setTexture(cmy, index: 0)
                 e.setTexture(shapedNeg, index: 1)
@@ -570,7 +636,8 @@ final class Renderer {
             negative = shapedNeg
             grainFree = nil
             if recipe.grainEnabled, recipe.grainAmount > 0, let grain = setup.film.defaults.grain {
-                drawGrain(cb, grain, on: shapedNeg, into: grainy, scratch: a, b, setup: setup, recipe: recipe)
+                drawGrain(cb, grain, on: shapedNeg, into: grainy, scratch: a, b, setup: setup, recipe: recipe,
+                          origin: SIMD2(UInt32(made.minX), UInt32(made.minY)))
                 negative = grainy
                 grainFree = shapedNeg
             }
@@ -583,7 +650,7 @@ final class Renderer {
         } else {
             if linearOut == nil {
                 linearOut = makeTexture(width: width, height: height, format: .rgba32Float)
-                displayOut = makeTexture(width: width, height: height, format: .rgba8Unorm)
+                displayOut = makeTexture(width: width, height: height, format: .bgra8Unorm)
             }
             guard let frame = linearOut, let frameScreen = displayOut else { throw RendererError.textureAllocation }
             printed = frame
@@ -593,6 +660,12 @@ final class Renderer {
         // 3 — printing.expose + printing.develop + scanning.scan, fused
         var printUniforms = setup.printUniforms
         var shape = GeometryUniforms(map)
+        if part != nil {
+            // The loupe's part finds the masks, drawn on the frame, through
+            // where it lies in the frame.
+            shape = GeometryUniforms(map, part: made.origin)
+            shape.active = 1
+        }
         let db = dodgeBurnTexture ?? dummyDodgeBurn
         func printNegative(_ negative: MTLTexture, into destination: MTLTexture) {
             encode(cb, printAndScan, width: destination.width, height: destination.height) { e in
@@ -663,13 +736,36 @@ final class Renderer {
         //      full-size export does, and a crop enlarges them as it enlarges
         //      the grain. Core Image encodes into this same command buffer.
         if let effects = recipe.effects, effects.isActive {
-            applyEffects(effects, to: printed, longEdge: max(width, height), commandBuffer: cb)
+            if keepsPrintBeforeEffects { keep(printed, cb) }
+            let whole = CGSize(width: map.outputWidth, height: map.outputHeight)
+            applyEffects(effects, to: printed, longEdge: max(frameWidth, frameHeight),
+                         part: part.map { (made, whole, $0.beyond) }, commandBuffer: cb)
+        }
+
+        // 3d — the curves (`PrintCurves`), last of all, on the print as its
+        //      file encodes it. The histogram is taken of the finished print,
+        //      and, for the curves' graph, of the print they were given.
+        var encoding: Int32 = recipe.outputColorSpace == "ProPhoto RGB" ? 2 : 1
+        var coverage: Int32 = wholeFrame && shaped ? 1 : 0
+        let curves = recipe.curves.flatMap { $0.isIdentity ? nil : $0 }
+        let bins = measuresHistogram ? histogramBins(curves == nil ? 1 : 2) : []
+        if bins.count > 1 {
+            measureHistogram(cb, of: printed, into: bins[1], encoding: encoding, coverage: coverage, shape: shape)
+        }
+        if let curves, let table = curveTable(curves) {
+            var encodingSize = SIMD2<Int32>(encoding, Int32(PrintCurves.tableSize))
+            encode(cb, applyCurves, width: printed.width, height: printed.height) { e in
+                e.setTexture(printed, index: 0)
+                e.setBuffer(table, offset: 0, index: 0)
+                e.setBytes(&encodingSize, length: MemoryLayout<SIMD2<Int32>>.stride, index: 1)
+            }
+        }
+        if let after = bins.first {
+            measureHistogram(cb, of: printed, into: after, encoding: encoding, coverage: coverage, shape: shape)
         }
 
         // 4 — output encoding for the screen. While the crop is drawn, the
         //     corners levelling leaves empty are transparent.
-        var encoding: Int32 = recipe.outputColorSpace == "ProPhoto RGB" ? 2 : 1
-        var coverage: Int32 = wholeFrame && shaped ? 1 : 0
         encode(cb, encodeDisplay, width: printed.width, height: printed.height) { e in
             e.setTexture(printed, index: 0)
             e.setTexture(screen, index: 1)
@@ -680,8 +776,15 @@ final class Renderer {
 
         cb.commit()
         cb.waitUntilCompleted()
+        if let after = bins.first {
+            func read(_ buffer: MTLBuffer) -> [UInt32] {
+                Array(UnsafeBufferPointer(start: buffer.contents().assumingMemoryBound(to: UInt32.self), count: 768))
+            }
+            histogram = (read(after), bins.count > 1 ? read(bins[1]) : nil)
+        }
         finishedLinear = printed
         finishedDisplay = screen
+        madeRect = made
         displayHasAlpha = coverage == 1
         outputSize = CGSize(width: printed.width, height: printed.height)
         return screen
@@ -698,7 +801,7 @@ final class Renderer {
     /// Selwyn coefficient, which grows with a cloud's area.
     private func drawGrain(_ cb: MTLCommandBuffer, _ grain: GrainDefaults, on clean: MTLTexture,
                            into target: MTLTexture, scratch scratch1: MTLTexture, _ scratch2: MTLTexture,
-                           setup: RenderSetup, recipe: Recipe) {
+                           setup: RenderSetup, recipe: Recipe, origin: SIMD2<UInt32> = .zero) {
         let width = clean.width, height = clean.height
         let pitch = Self.pixelSizeUm(width: Int(imageSize.width), height: Int(imageSize.height),
                                      format: recipe.filmFormat)
@@ -711,7 +814,8 @@ final class Renderer {
                                               amount: Float(recipe.grainAmount),
                                               seed: Self.fnv1a(setup.film.stock) ^ (grainSeed &* 0x9E37_79B9),
                                               monochrome: setup.film.isMonochrome ? 1 : 0,
-                                              layer: UInt32(layer), samples: UInt32(grain.tableSamples))
+                                              layer: UInt32(layer), samples: UInt32(grain.tableSamples),
+                                              origin: origin)
             encode(cb, filmGrainLayer, width: width, height: height) { e in
                 e.setTexture(clean, index: 0)
                 e.setTexture(scratch1, index: 1)
@@ -747,6 +851,264 @@ final class Renderer {
         }
     }
 
+    // MARK: - Part of a frame, for the loupe
+
+    /// The part of the print to make, for the loupe: `rect`, in the print's
+    /// own pixels at the frame's size, and the whole print at any size (the
+    /// preview's) before its effects, for their blurs to gather light from
+    /// beyond the part, as they do in the whole.
+    struct Part {
+        var rect: CGRect
+        var beyond: CIImage?
+    }
+
+    /// Keep the frame at full size on the GPU, for the loupe's boxes. It is
+    /// sent up a band at a time, so the copy on its way takes little more
+    /// memory than the band: about 16 bytes a pixel stay, 720 MB at 45 MP.
+    func holdFrame(_ pixels: [Float], width: Int, height: Int) {
+        heldFrame = nil
+        let d = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .rgba32Float, width: width, height: height, mipmapped: false)
+        d.usage = [.shaderRead]
+        d.storageMode = .private
+        let rows = min(512, height)
+        let s = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .rgba32Float, width: width, height: rows, mipmapped: false)
+        s.usage = [.shaderRead]
+        s.storageMode = .shared
+        guard pixels.count >= width * height * 4, let frame = device.makeTexture(descriptor: d),
+              let staging = device.makeTexture(descriptor: s) else { return }
+        pixels.withUnsafeBytes { raw in
+            var y0 = 0
+            while y0 < height {
+                let n = min(rows, height - y0)
+                staging.replace(region: MTLRegionMake2D(0, 0, width, n), mipmapLevel: 0,
+                                withBytes: raw.baseAddress!.advanced(by: y0 * width * 16), bytesPerRow: width * 16)
+                guard let cb = queue.makeCommandBuffer(), let blit = cb.makeBlitCommandEncoder() else { return }
+                blit.copy(from: staging, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+                          sourceSize: MTLSize(width: width, height: n, depth: 1),
+                          to: frame, destinationSlice: 0, destinationLevel: 0,
+                          destinationOrigin: MTLOrigin(x: 0, y: y0, z: 0))
+                blit.endEncoding()
+                cb.commit()
+                cb.waitUntilCompleted()
+                y0 += n
+            }
+        }
+        heldFrame = frame
+    }
+
+    /// Lets the frame held for the loupe go, and the box taken from it.
+    func releaseFrame() {
+        heldFrame = nil
+        sourceTexture = nil
+        rawLinear = nil; rawLinearB = nil; scratchA = nil; scratchB = nil
+        logEFilm = nil; cmyFilm = nil; cmyFilmB = nil; correction = nil; correctionBlurred = nil
+        linearOut = nil; displayOut = nil; effectsOut = nil
+        shapedNegative = nil; shapedGrainy = nil; shapedScratchA = nil; shapedScratchB = nil
+        geometryLinear = nil; geometryDisplay = nil; finishedLinear = nil; finishedDisplay = nil
+        displayStaging = nil; developedCmy = nil; developedGrainFree = nil; filmStageKey = nil
+    }
+
+    var holdsFrame: Bool { heldFrame != nil }
+
+    /// Take the box `x, y, width, height` of the frame held (`holdFrame`) as
+    /// the image to render: `render(…, part:)` then makes part of the print
+    /// exactly as the whole would be there, given a box that holds that
+    /// part and every stage's reach around it (`reach`). The textures stay
+    /// while the box keeps its size; the negative is developed again only
+    /// when the box moves.
+    @discardableResult
+    func setWindow(x: Int, y: Int, width: Int, height: Int) -> Bool {
+        guard let frame = heldFrame, width > 0, height > 0,
+              x >= 0, y >= 0, x + width <= frame.width, y + height <= frame.height else { return false }
+        if sourceTexture?.width != width || sourceTexture?.height != height || rawLinear == nil {
+            sourceTexture = makeTexture(width: width, height: height, format: .rgba32Float)
+            // Half or full precision as the whole frame's export would be.
+            intermediateFormat = (frame.width * frame.height > 12_000_000) ? .rgba16Float : .rgba32Float
+            allocateIntermediates(width: width, height: height)
+        }
+        if windowOrigin != SIMD2(x, y) { filmStageKey = nil }
+        imageSize = CGSize(width: frame.width, height: frame.height)
+        windowOrigin = SIMD2(x, y)
+        guard let box = sourceTexture, let cb = queue.makeCommandBuffer(),
+              let blit = cb.makeBlitCommandEncoder() else { return false }
+        blit.copy(from: frame, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(x: x, y: y, z: 0),
+                  sourceSize: MTLSize(width: width, height: height, depth: 1),
+                  to: box, destinationSlice: 0, destinationLevel: 0, destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
+        blit.endEncoding()
+        cb.commit()
+        cb.waitUntilCompleted()
+        return true
+    }
+
+    /// How far each stage of the print reaches past a pixel, in pixels of a
+    /// frame at full size: what a part of the print must be made with around
+    /// it to come out as the whole print does there (the loupe).
+    struct Reach: Equatable {
+        /// On the frame, before the print is shaped: scatter, halation, the
+        /// couplers' diffusion; and, unshaped, the grain and its mean too.
+        var film: Int
+        /// On a shaped print's own pixels: its grain, and the 3 px its mean
+        /// is restored over.
+        var print: Int
+        /// What the box's corner in the frame must be a multiple of. Metal's
+        /// Gaussian blur makes a wide blur on a coarser grid that starts at
+        /// the texture's corner, so a box whose corner is off that grid
+        /// blurs a little differently (1e-3 in the file's values near a
+        /// highlight, for halation 4x as wide). On the grid, the part comes
+        /// out as the whole does to the float.
+        var align: Int
+    }
+
+    /// The reach of `recipe` on a frame `frameWidth` x `frameHeight`: four
+    /// sigmas of a blur, all the taps of a filter. Bloom & Glow reach further
+    /// than a part can hold; they take the light beyond it from the preview
+    /// (`Part.beyond`).
+    static func reach(setup: RenderSetup, recipe: Recipe, frameWidth: Int, frameHeight: Int,
+                      shaped: Bool) -> Reach {
+        let pitch = pixelSizeUm(width: frameWidth, height: frameHeight, format: recipe.filmFormat)
+        func mean(_ v: [Float]) -> Float { v.isEmpty ? 0 : v.reduce(0, +) / Float(v.count) }
+        var film: Float = 0, widest: Float = 0
+        if recipe.halationEnabled, let h = setup.film.defaults.halation, h.active {
+            let scatter = recipe.keepsCameraSharpness ? 0 : Float(recipe.scatterAmount)
+            let core = mean(h.scatterCoreUm) * Float(recipe.scatterScale) / pitch
+            let tail = mean(h.scatterTailUm) * Float(recipe.scatterScale) / pitch
+            if scatter > 0 && (core > 0.05 || tail > 0.05) {
+                let sigma = max(core, tail * 1.5236, 0.05)
+                film += 4 * sigma
+                widest = max(widest, sigma)
+            }
+            let strength = h.halationStrength.max() ?? 0
+            let sigma = mean(h.halationFirstSigmaUm) * Float(recipe.halationScale) / pitch
+            if strength * Float(recipe.halationAmount) > 0, sigma > 0.05 {
+                let last = sigma * Float(max(h.halationNBounces, 1)).squareRoot()
+                film += 4 * last
+                widest = max(widest, last)
+            }
+        }
+        if recipe.couplersEnabled, recipe.couplersAmount > 0, let dc = setup.film.defaults.dirCouplers,
+           !recipe.keepsCameraSharpness, dc.diffusionSizeUm > 0 {
+            let sigma = dc.diffusionSizeUm * Float(recipe.couplersDiffusion) / pitch
+            if sigma > 0.4 {
+                film += 4 * sigma
+                widest = max(widest, sigma)
+            }
+        }
+        var grain: Float = 0
+        if recipe.grainEnabled, recipe.grainAmount > 0, let g = setup.film.defaults.grain {
+            let size = Float(recipe.grainScale)
+            let taps = g.cloudUm.map { cloudFilter(sigma: Double($0 * size / pitch)).count / 2 }.max() ?? 0
+            grain = Float(taps) + 12
+        }
+        // Blurs this narrow are made on the texture's own grid; wider ones
+        // were found to need the corner on a grid of 8 at a sigma of 19 px
+        // and of 32 at 50 px: twice the sigma, to the next power of two.
+        var align = 1
+        if widest >= 3 { while Float(align) < 2 * widest && align < 256 { align *= 2 } }
+        // The shaping reads two pixels each way; one more for the rounding.
+        return shaped ? Reach(film: Int((film + 3).rounded(.up)), print: Int((grain + 2).rounded(.up)), align: align)
+                      : Reach(film: Int((film + grain + 2).rounded(.up)), print: 0, align: align)
+    }
+
+    /// What the loupe makes for a window of the print (in the print's pixels
+    /// at full size): the part of the print, the window with the reach on the
+    /// print around it, and the box of the frame the part is made from, the
+    /// part's image there with the reach on the frame around it and its
+    /// corner on the blurs' grid. Both are kept inside the print and the
+    /// frame by moving them, not by cutting them, so their sizes, and the
+    /// textures made for them, hold as the window moves (except against the
+    /// frame's far edges). Unshaped, the part is the box.
+    static func loupeRegions(window: CGRect, map: GeometryMap, reach: Reach) -> (part: CGRect, box: CGRect) {
+        let print = CGRect(x: 0, y: 0, width: map.outputWidth, height: map.outputHeight)
+        let fw = Int(map.sourceSize.width), fh = Int(map.sourceSize.height)
+        /// `lo..<hi` of `0..<limit`, from a multiple of `align`, in a size
+        /// that depends on the length alone.
+        func span(_ lo: CGFloat, _ hi: CGFloat, limit: Int, align: Int) -> (start: Int, size: Int) {
+            let from = lo.rounded(.down)
+            let wanted = Int((hi - from - 1e-6).rounded(.up))
+            var size = ((wanted + align - 1) / align) * align + (align > 1 ? align : 0)
+            guard size < limit else { return (0, limit) }
+            var start = Int((from / CGFloat(align)).rounded(.down)) * align
+            start = max(start, 0)
+            if start + size > limit {
+                start = max(((limit - size) / align) * align, 0)
+                size = limit - start
+            }
+            return (start, size)
+        }
+        func box(around r: CGRect, by margin: Int) -> CGRect {
+            let x = span(r.minX - CGFloat(margin), r.maxX + CGFloat(margin), limit: fw, align: reach.align)
+            let y = span(r.minY - CGFloat(margin), r.maxY + CGFloat(margin), limit: fh, align: reach.align)
+            return CGRect(x: x.start, y: y.start, width: x.size, height: y.size)
+        }
+        let window = window.integral
+        guard !map.isIdentity else {
+            let b = box(around: window, by: reach.film)
+            return (b, b)
+        }
+        let m = CGFloat(reach.print)
+        let px = span(window.minX - m, window.maxX + m, limit: map.outputWidth, align: 1)
+        let py = span(window.minY - m, window.maxY + m, limit: map.outputHeight, align: 1)
+        let part = CGRect(x: px.start, y: py.start, width: px.size, height: py.size).intersection(print)
+        let corners = [CGPoint(x: part.minX, y: part.minY), CGPoint(x: part.maxX, y: part.minY),
+                       CGPoint(x: part.minX, y: part.maxY), CGPoint(x: part.maxX, y: part.maxY)]
+            .map { $0.applying(map.outputToSource) }
+        let x0 = corners.map(\.x).min()!, x1 = corners.map(\.x).max()!
+        let y0 = corners.map(\.y).min()!, y1 = corners.map(\.y).max()!
+        return (part, box(around: CGRect(x: x0, y: y0, width: x1 - x0, height: y1 - y0), by: reach.film + 1))
+    }
+
+    /// A copy of the print before its effects, for the loupe's.
+    private func keep(_ printed: MTLTexture, _ cb: MTLCommandBuffer) {
+        if printBeforeEffects?.width != printed.width || printBeforeEffects?.height != printed.height {
+            printBeforeEffects = makeTexture(width: printed.width, height: printed.height, format: .rgba32Float)
+        }
+        guard let copy = printBeforeEffects, let blit = cb.makeBlitCommandEncoder() else { return }
+        blit.copy(from: printed, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+                  sourceSize: MTLSize(width: printed.width, height: printed.height, depth: 1),
+                  to: copy, destinationSlice: 0, destinationLevel: 0, destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
+        blit.endEncoding()
+    }
+
+    // MARK: - Curves and histogram
+
+    /// The curves' table, sampled again only when the curves change.
+    private func curveTable(_ curves: PrintCurves) -> MTLBuffer? {
+        if curveBufferCurves != curves || curveBuffer == nil {
+            let table = curves.table()
+            curveBuffer = table.withUnsafeBytes {
+                device.makeBuffer(bytes: $0.baseAddress!, length: $0.count, options: .storageModeShared)
+            }
+            curveBufferCurves = curves
+        }
+        return curveBuffer
+    }
+
+    /// `count` histograms' bins, emptied, kept from one render to the next.
+    private func histogramBins(_ count: Int) -> [MTLBuffer] {
+        while histogramBuffers.count < count {
+            guard let buffer = device.makeBuffer(length: 768 * MemoryLayout<UInt32>.stride,
+                                                 options: .storageModeShared) else { return [] }
+            histogramBuffers.append(buffer)
+        }
+        let buffers = Array(histogramBuffers.prefix(count))
+        for buffer in buffers { memset(buffer.contents(), 0, buffer.length) }
+        return buffers
+    }
+
+    private func measureHistogram(_ cb: MTLCommandBuffer, of print: MTLTexture, into bins: MTLBuffer,
+                                  encoding: Int32, coverage: Int32, shape: GeometryUniforms) {
+        var encoding = encoding, coverage = coverage, shape = shape
+        encode(cb, histogramRGB, width: print.width, height: print.height) { e in
+            e.setTexture(print, index: 0)
+            e.setBuffer(bins, offset: 0, index: 0)
+            e.setBytes(&encoding, length: MemoryLayout<Int32>.stride, index: 1)
+            e.setBytes(&coverage, length: MemoryLayout<Int32>.stride, index: 2)
+            e.setBytes(&shape, length: MemoryLayout<GeometryUniforms>.stride, index: 3)
+        }
+    }
+
     // MARK: - Effects
 
     /// Core Image's working space for the effects. The print is in the output
@@ -759,6 +1121,7 @@ final class Renderer {
     /// throughout, so a 16-bit TIFF keeps its precision. `longEdge` is the
     /// frame's, which sets the effects' sizes.
     private func applyEffects(_ look: GlowLook, to linear: MTLTexture, longEdge: Int,
+                              part: (rect: CGRect, whole: CGSize, beyond: CIImage?)? = nil,
                               commandBuffer cb: MTLCommandBuffer) {
         if effectsContext == nil {
             effectsContext = CIContext(mtlCommandQueue: queue, options: [
@@ -773,8 +1136,25 @@ final class Renderer {
         }
         guard let context = effectsContext, let out = effectsOut,
               let image = CIImage(mtlTexture: linear, options: [.colorSpace: Self.effectsSpace]) else { return }
-        let result = GlowPipeline.apply(look, to: image, longEdge: CGFloat(longEdge))
-        context.render(result, to: out, commandBuffer: cb, bounds: image.extent, colorSpace: Self.effectsSpace)
+        var input = image, bounds = image.extent
+        if let part {
+            // The loupe's part, laid where it is in the whole print, over the
+            // whole print as the preview made it: the effects' blurs reach
+            // far past the part (5% of the frame's long edge, the veil 8%),
+            // and gather the light from all of it, as in the export. Without
+            // the preview's, the part's edges are carried out.
+            let whole = CGRect(origin: .zero, size: part.whole)
+            let placed = image.transformed(by: CGAffineTransform(translationX: part.rect.minX, y: part.rect.minY))
+            var beyond = placed.clampedToExtent()
+            if let far = part.beyond, far.extent.width > 0, far.extent.height > 0 {
+                beyond = far.transformed(by: CGAffineTransform(scaleX: whole.width / far.extent.width,
+                                                               y: whole.height / far.extent.height))
+            }
+            input = placed.composited(over: beyond).cropped(to: whole)
+            bounds = placed.extent
+        }
+        let result = GlowPipeline.apply(look, to: input, longEdge: CGFloat(longEdge))
+        context.render(result, to: out, commandBuffer: cb, bounds: bounds, colorSpace: Self.effectsSpace)
         guard let blit = cb.makeBlitCommandEncoder() else { return }
         blit.copy(from: out, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
                   sourceSize: MTLSize(width: linear.width, height: linear.height, depth: 1),
@@ -805,6 +1185,10 @@ final class Renderer {
         var monochrome: UInt32
         var layer: UInt32
         var samples: UInt32
+        /// Where the texture's first pixel is in the frame (or the print):
+        /// the grain is seeded by the frame's pixels, so the loupe's part
+        /// draws the grains the whole does.
+        var origin = SIMD2<UInt32>.zero
     }
 
     /// agx `model/diffusion.apply_halation_um`: scatter first (energy-preserving
@@ -823,7 +1207,7 @@ final class Renderer {
                                 halation: HalationDefaults,
                                 recipe: Recipe,
                                 width: Int, height: Int) -> MTLTexture {
-        let pixelSizeUm = Self.pixelSizeUm(width: width, height: height,
+        let pixelSizeUm = Self.pixelSizeUm(width: Int(imageSize.width), height: Int(imageSize.height),
                                            format: recipe.filmFormat)
         var current = source
 
@@ -1120,10 +1504,13 @@ final class Renderer {
         }
         let cs = Self.cgColorSpace(named: colorSpaceName)
         guard let provider = CGDataProvider(data: Data(bytes) as CFData) else { return nil }
-        let alpha: CGImageAlphaInfo = displayHasAlpha ? .premultipliedLast : .noneSkipLast
+        // Blue, green, red, alpha in memory: the order Core Animation draws
+        // from. Given red first, it redrew every frame into its own order on
+        // the main thread, a sixth of that thread's time while a slider moved.
+        let alpha: CGImageAlphaInfo = displayHasAlpha ? .premultipliedFirst : .noneSkipFirst
         return CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 32,
                        bytesPerRow: w * 4, space: cs,
-                       bitmapInfo: CGBitmapInfo(rawValue: alpha.rawValue),
+                       bitmapInfo: CGBitmapInfo(rawValue: alpha.rawValue | CGBitmapInfo.byteOrder32Little.rawValue),
                        provider: provider, decode: nil, shouldInterpolate: false,
                        intent: .defaultIntent)
     }

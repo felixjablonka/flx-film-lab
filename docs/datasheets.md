@@ -38,6 +38,7 @@ scripts look for these names.
 | Kodak Alaris | KODAK PROFESSIONAL TRI-X 320 and 400 Films | F-4017 | `Kodak Tri-X 320 and 400 F-4017.pdf` | `build_bw_profiles.py`, `bw_mtf.py` |
 | Eastman Kodak | KODACHROME 25, 64 and 200 Professional Film | E-55 | `Kodachrome Spec Sheet.pdf` | `build_profiles.py`, `slide_mtf.py` |
 | Kodak Alaris | KODAK PROFESSIONAL T-MAX 100 Film | F-4016 | `f4016_tmax_100-2018.pdf` | `build_bw_profiles.py`, `bw_mtf.py` |
+| Kodak Alaris | KODAK PROFESSIONAL T-MAX 400 Film | F-4043 | `f4043_tmax_400.pdf` | none: its RMS granularity, 10, is Delta 400's (`bake_packs.py`) |
 | Eastman Kodak | KODAK ROYAL GOLD 100 Film | E-41 | `e41-1998_02_Kodak Royal Gold 100.pdf` | `build_profiles.py`, `sheet_readers.py` |
 | Eastman Kodak | KODAK VERICOLOR III Professional Film | E-26 | `e26-Vericolor_III.pdf` | `build_profiles.py`, `sheet_readers.py`, `slide_mtf.py` |
 | Kodak | KODAK WRATTEN 2 Optical Filter No. 8, 22, 25, 47 and 58 | filter data | `Kodak Wratten 2 Filter 8.pdf (and 22, 25, 47, 58)` | `lens_filters.py` |
@@ -51,7 +52,15 @@ scripts look for these names.
 | Eastman Kodak | EASTMAN EXR 200T Color Negative Film 5293/7293 | H-1-5293 (3-99) | `Kodak EXR 200T 5293-1999.pdf` | `build_profiles.py`, `sheet_readers.py`, `slide_mtf.py`, `exr_granularity.py` |
 | Tiffen | Filter Specifications: 812 Warming (p. 16) | catalogue | `Tiffen Filter Specifications.pdf` | `lens_filters.py` |
 | Agfa | Technical Data: Agfa range of films, Professional | range sheet | `agfa_films_data.pdf` | `build_bw_profiles.py`, `build_profiles.py`, `bw_mtf.py`, `sheet_readers.py` |
+| Konica | Konica Color CENTURIA SUPER 100 | technical data sheet, 2002 | `konica_csuper100.pdf` | `build_profiles.py`, `sheet_readers.py`, `slide_mtf.py` |
+| Konica | Konica Color CENTURIA SUPER 1600 | technical data sheet, 2002 | `konica_csuper1600.pdf` | `build_profiles.py`, `sheet_readers.py`, `slide_mtf.py` |
+| Konica | Konica Color IMPRESA 50 Professional Film | TDSN-501 (1998) | `konica_IMP50.pdf` | `build_profiles.py`, `sheet_readers.py`, `slide_mtf.py` |
 | HARMAN technology (Ilford) | ILFORD HP5 Plus | technical information | `Ilford HP5 Plus.pdf` | `build_bw_profiles.py` |
+| HARMAN technology (Ilford) | ILFORD DELTA 100 PROFESSIONAL | technical information, Nov 2018 | `Delta-100_201811.pdf` | `build_bw_profiles.py` |
+| HARMAN technology (Ilford) | ILFORD DELTA 400 PROFESSIONAL | technical information, Nov 2018 | `Delta-400_201811.pdf` | `build_bw_profiles.py` |
+| HARMAN technology (Ilford) | ILFORD FP4 PLUS | technical information, Nov 2018 | `FP4-Plus_201811.pdf` | `build_bw_profiles.py` |
+| HARMAN technology (Ilford) | ILFORD PAN F PLUS | technical information, Dec 2018 | `Pan-F-Plus_201812.pdf` | `build_bw_profiles.py` |
+| HARMAN technology (Ilford) | ILFORD ORTHO PLUS | technical information, Oct 2019 | `Ortho-Plus_201910.pdf` | `build_bw_profiles.py` |
 | HARMAN technology (Ilford) | ILFORD MULTIGRADE RC Deluxe | technical information, 2020 | `Ilford Multigrade RC Deluxe.pdf` | `build_bw_profiles.py` |
 | HARMAN technology | HARMAN Phoenix 200 | technical information, Sep 2024 | `HARMAN Phoenix Technical Data sheet 0924.pdf` | `build_profiles.py`, `sheet_readers.py` |
 | Kodak | KODAK VISION3 50D Color Negative Film 5203/7203 | K-1165, 2025 | `KODAK-VISION3-50D-5203-7203-brochure.pdf` | `vision3_granularity.py` |

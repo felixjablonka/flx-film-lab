@@ -1,0 +1,58 @@
+#version 440
+// The print's histogram: how many pixels hold each of the 256 values an 8-bit
+// file would, per channel, red's 256 bins, then green's, then blue's. Counted
+// in each workgroup first, then added up, so the buffer's atomics are few.
+// With coverage 1, the parts of a levelled frame outside it are not counted.
+// flx.metal histogram_rgb.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2D src;
+layout(std430, binding = 1) buffer Bins { uint bins[]; };
+layout(std140, binding = 2) uniform Encode {
+    ivec4 modes;           // x: encoding (1 the sRGB curve, 2 ProPhoto's), y: coverage
+    vec4 columns;          // the print's shape, as print_and_scan's
+    vec4 offsetSize;
+    ivec4 shaped;
+} u;
+
+shared uint counts[768];
+
+vec3 encodeOutput(vec3 c, int encoding)
+{
+    if (encoding == 2) return pow(c, vec3(1.0 / 1.80078125));
+    return mix(1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, c * 12.92, lessThanEqual(c, vec3(0.0031308)));
+}
+
+void main()
+{
+    uint lid = gl_LocalInvocationIndex;
+    for (uint i = lid; i < 768u; i += 256u)
+        counts[i] = 0u;
+    barrier();
+
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = textureSize(src, 0);
+    if (gid.x < size.x && gid.y < size.y) {
+        bool counted = true;
+        if (u.modes.y == 1) {
+            vec2 o = vec2(gid) + 0.5;
+            vec2 s = u.columns.xy * o.x + u.columns.zw * o.y + u.offsetSize.xy;
+            float inside = min(min(s.x, s.y), min(u.offsetSize.z - s.x, u.offsetSize.w - s.y));
+            counted = inside + 0.5 >= 0.5;
+        }
+        if (counted) {
+            vec3 e = clamp(encodeOutput(max(texelFetch(src, gid, 0).rgb, 0.0), u.modes.x), 0.0, 1.0);
+            uvec3 b = uvec3(e * 255.0 + 0.5);
+            atomicAdd(counts[b.x], 1u);
+            atomicAdd(counts[256u + b.y], 1u);
+            atomicAdd(counts[512u + b.z], 1u);
+        }
+    }
+    barrier();
+    for (uint i = lid; i < 768u; i += 256u) {
+        uint v = counts[i];
+        if (v != 0u)
+            atomicAdd(bins[i], v);
+    }
+}

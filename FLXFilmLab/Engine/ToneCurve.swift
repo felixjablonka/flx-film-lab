@@ -476,27 +476,6 @@ enum ToneCurve {
         return (data, g, (start, step))
     }
 
-    /// Samples for the inspector's characteristic-curve plot: the same LUT the
-    /// GPU reads plus the same neutral shift, so the plot cannot disagree with
-    /// the render.
-    static func plotSamples(paper: ProfilePack, recipe: Recipe, count: Int = 192)
-        -> [(logExposure: Float, density: SIMD3<Float>)] {
-        let g = geometry(paper: paper)
-        let shift = neutralShift(geometry: g, recipe: recipe)
-        let logE0 = paper.logExposureStart
-        let logE1 = paper.logExposure[paper.logExposure.count - 1]
-        return (0..<count).map { i in
-            let x = logE0 + (logE1 - logE0) * Float(i) / Float(count - 1)
-            var d = SIMD3<Float>(repeating: 0)
-            for c in 0..<3 {
-                d[c] = density(paper: paper, recipe: recipe, geometry: g,
-                               channel: c, logExposure: x, localGrade: 0)
-            }
-            if let shift { d += shift.sample((d.x + d.y + d.z) / 3) }
-            return (x, d)
-        }
-    }
-
     // MARK: - Neutral shift
 
     /// Brightness, Shadows and Highlights, as a density change applied to all

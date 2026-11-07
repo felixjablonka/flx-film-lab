@@ -9,6 +9,7 @@ import AppKit
 /// proxy it holds at full size.
 struct CropOverlay: View {
     @ObservedObject var model: DocumentModel
+    @ObservedObject var preview: PrintPreview
     /// The image's size on the canvas; the overlay covers exactly it.
     let size: CGSize
     var onLightBackground: Bool = false
@@ -35,7 +36,7 @@ struct CropOverlay: View {
     /// The frame on screen is the one the crop is drawn on: after a turn,
     /// until the turned frame has rendered, the crop is not drawn at all.
     private var frameShowing: Bool {
-        guard let map = model.displayMap else { return false }
+        guard let map = preview.map else { return false }
         return abs(map.frame.width - frame.width) < 1 && abs(map.frame.height - frame.height) < 1
     }
 

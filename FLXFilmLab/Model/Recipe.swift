@@ -234,6 +234,12 @@ struct Recipe: Codable, Equatable {
     /// the finished print. `nil` until first touched, which is all off.
     var effects: GlowLook?
 
+    // MARK: Curves
+    /// Point curves on the finished print, as its file encodes it
+    /// (`PrintCurves`). `nil`, as in every recipe saved before there were
+    /// curves, leaves the print as it is.
+    var curves: PrintCurves?
+
     // MARK: Output
     /// Skip the print stage and read the developed film directly, the way a
     /// slide is viewed on a light table. `nil` means follow the stock: a

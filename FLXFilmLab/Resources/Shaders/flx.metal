@@ -403,6 +403,7 @@ struct GrainLayerUniforms {
     uint  monochrome;       // one silver record: every channel draws the same grain
     uint  layer;            // 0 fast, 1 medium, 2 slow
     uint  samples;          // table samples per record
+    uint2 origin;           // the texture's first pixel in the frame (or the print): the loupe's part draws the whole's grains
 };
 
 // One emulsion layer's grain, as a deviation from the clean density.
@@ -415,7 +416,7 @@ kernel void film_grain_layer(texture2d<float, access::read>  clean  [[texture(0)
     if (gid.x >= dst.get_width() || gid.y >= dst.get_height()) return;
     float3 density = clean.read(gid).rgb;
     float3 out;
-    uint pixel = hashCombine(gid.x, gid.y);
+    uint pixel = hashCombine(gid.x + u.origin.x, gid.y + u.origin.y);
     float shared = 0.0f;
     for (int c = 0; c < 3; ++c) {
         float x = clamp(max(density[c], 0.0f) / max(u.tableTop[c], 1e-4f), 0.0f, 1.0f) * float(u.samples - 1);
@@ -858,4 +859,88 @@ kernel void encode_display(texture2d<float, access::read>  src   [[texture(0)]],
         a = clamp(inside + 0.5f, 0.0f, 1.0f);
     }
     dst.write(float4(clamp(c, 0.0f, 1.0f) * a, a), gid);
+}
+
+// ---------------------------------------------------------------------------
+// Curves and histogram — on the print as its file encodes it
+// ---------------------------------------------------------------------------
+
+// The output space's transfer curve, as `encode_display` and
+// `Exporter.transferFunction` apply it: 1 the sRGB piecewise curve (sRGB,
+// Display P3, Rec.2020), 2 ProPhoto's power.
+static float3 encodeOutput(float3 c, int encoding)
+{
+    if (encoding == 2) return pow(c, 1.0f / 1.80078125f);
+    return select(1.055f * pow(c, 1.0f / 2.4f) - 0.055f, c * 12.92f, c <= 0.0031308f);
+}
+
+static float3 decodeOutput(float3 e, int encoding)
+{
+    if (encoding == 2) return pow(e, 1.80078125f);
+    return select(pow((e + 0.055f) / 1.055f, 2.4f), e / 12.92f, e <= 0.04045f);
+}
+
+// The curves (`PrintCurves.table`), on the finished linear print: each
+// channel encoded as the file will be, looked up in its table between the two
+// nearest samples, and decoded back to linear light, so the export and the
+// screen both carry them.
+kernel void apply_curves(texture2d<float, access::read_write> print [[texture(0)]],
+                         device const float *table                 [[buffer(0)]],   // [channel][size]
+                         constant int2 &encodingSize               [[buffer(1)]],   // encoding, size
+                         uint2 gid                                 [[thread_position_in_grid]])
+{
+    if (gid.x >= print.get_width() || gid.y >= print.get_height()) return;
+    float4 p = print.read(gid);
+    float3 e = clamp(encodeOutput(max(p.rgb, 0.0f), encodingSize.x), 0.0f, 1.0f);
+    int n = encodingSize.y;
+    float3 o;
+    for (int c = 0; c < 3; c++) {
+        float x = e[c] * float(n - 1);
+        int i = min(int(x), n - 2);
+        float t = x - float(i);
+        o[c] = mix(table[c * n + i], table[c * n + i + 1], t);
+    }
+    p.rgb = decodeOutput(o, encodingSize.x);
+    print.write(p, gid);
+}
+
+// The print's histogram: how many pixels hold each of the 256 values an 8-bit
+// file would, per channel, red's 256 bins, then green's, then blue's. Counted
+// per threadgroup first, then added up, so the device-wide atomics are few.
+// With `coverage` 1, the parts of a levelled frame outside it are not counted.
+kernel void histogram_rgb(texture2d<float, access::read> src  [[texture(0)]],
+                          device atomic_uint *bins            [[buffer(0)]],
+                          constant int &encoding              [[buffer(1)]],
+                          constant int &coverage              [[buffer(2)]],
+                          constant GeometryUniforms &shape    [[buffer(3)]],
+                          uint2 gid                           [[thread_position_in_grid]],
+                          uint lid                            [[thread_index_in_threadgroup]],
+                          uint2 groupSize                     [[threads_per_threadgroup]])
+{
+    threadgroup atomic_uint local[768];
+    uint threads = groupSize.x * groupSize.y;
+    for (uint i = lid; i < 768; i += threads) atomic_store_explicit(&local[i], 0u, memory_order_relaxed);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    if (gid.x < src.get_width() && gid.y < src.get_height()) {
+        bool counted = true;
+        if (coverage == 1) {
+            float2 o = float2(gid) + 0.5f;
+            float2 s = shape.column0 * o.x + shape.column1 * o.y + shape.offset;
+            float inside = min(min(s.x, s.y), min(shape.sourceSize.x - s.x, shape.sourceSize.y - s.y));
+            counted = inside + 0.5f >= 0.5f;
+        }
+        if (counted) {
+            float3 e = clamp(encodeOutput(max(src.read(gid).rgb, 0.0f), encoding), 0.0f, 1.0f);
+            uint3 b = uint3(e * 255.0f + 0.5f);
+            atomic_fetch_add_explicit(&local[b.x], 1u, memory_order_relaxed);
+            atomic_fetch_add_explicit(&local[256 + b.y], 1u, memory_order_relaxed);
+            atomic_fetch_add_explicit(&local[512 + b.z], 1u, memory_order_relaxed);
+        }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint i = lid; i < 768; i += threads) {
+        uint v = atomic_load_explicit(&local[i], memory_order_relaxed);
+        if (v != 0) atomic_fetch_add_explicit(&bins[i], v, memory_order_relaxed);
+    }
 }

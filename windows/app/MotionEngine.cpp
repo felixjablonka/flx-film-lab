@@ -1,5 +1,8 @@
 #include "MotionEngine.h"
 
+#include "Provenance.h"
+#include "version.h"
+
 #include "RenderEngine.h"
 
 #include <QColorSpace>
@@ -131,6 +134,9 @@ std::string runClipExport(const QString &packsDir, const QString &source, const 
         ClipExportOptions options;
         options.codec = look.exportSettings.codec;
         options.display = look.exportSettings.display;
+        const Provenance made = provenance(look.recipe, packs, FLX_VERSION_TEXT);
+        options.software = made.software;
+        options.description = made.description;
         encoder = exportClip(rhi.get(), source.toStdString(), destination.toStdString(), lut, look.effects, look.input,
                              format, options, progress);
     }

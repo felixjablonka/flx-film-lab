@@ -120,6 +120,22 @@ struct RenderSetup {
     EncodeBlock encode;
     int outputWidth = 0, outputHeight = 0;  // the print's size when shaped
     EffectsParams effects;
+    // The curves' table (PrintCurves::table: red's 4096 samples, then
+    // green's, then blue's), laid on the print last; empty without curves.
+    std::vector<float> printCurves;
+
+    // A part of a frame, the loupe's (Renderer.render(part:) on the Mac): the
+    // picture set is a box of the frame, and the print made is a part of the
+    // whole print. Everything that depends on where a pixel is, is worked
+    // out in the frame: the film's scale, the grain, the gradients, the
+    // masks. Without it the picture is the whole frame.
+    struct Part {
+        int frameWidth = 0, frameHeight = 0;
+        int boxX = 0, boxY = 0;             // the box, in the frame
+        int printX = 0, printY = 0;         // the part made, in the whole print
+        ShapeBlock held;                    // a shaped part's pixel to the box's, for apply_geometry
+    };
+    std::optional<Part> part;
 
     Dump input;                     // RGBA float32, linear working RGB
     Dump spectral, curves, toneShift, toneLut, tcLut;

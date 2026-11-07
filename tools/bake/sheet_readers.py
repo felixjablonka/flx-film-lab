@@ -11,7 +11,8 @@ its curves and dyes as bitmap stencils, one per curve; those are traced
 log H in lux-seconds against density, or wavelength against log sensitivity
 or diffuse spectral density. Bitmaps of Velvia 50 and vector plots of
 Kodachrome 25 and 200 and Provia 400X's curves are read by `build_profiles`
-itself.
+itself. Konica's IMPRESA 50 sheet ships bitmaps whose dashed curves cross;
+each is walked along its own stroke (`trace_raster_plot.follow`).
 """
 
 from __future__ import annotations
@@ -449,6 +450,127 @@ def phoenix_200():
     return {"curves": curves, "sensitivity": sensitivity}
 
 
+# --- Konica CENTURIA SUPER 100 and 1600 (2002 technical data sheets) ----------
+# Vector, every curve black and told apart by its dash pattern, B solid, G
+# dashed, R dash-dot, in both the characteristic curves and the spectral
+# sensitivities; log H lettered with a bar over each minus, so the rules are
+# named here. The spectral plot's only scale is the decade between its two
+# rules. Its neutral and D-min share one path, split where the pen lifts.
+CS100, CS1600 = "konica_csuper100.pdf", "konica_csuper1600.pdf"
+KONICA_DASHES = {"B": (), "G": (1.667, 0.667), "R": (2.667, 0.667, 0.667, 0.667)}
+CS100_CURVES = _plot(CS100, 1, (403.6, 570.2, 559.5, 691.4),
+                     ((421.0, -3.0), (455.5, -2.0), (490.2, -1.0), (524.8, 0.0), (559.5, 1.0)),
+                     zip((691.4, 674.2, 656.8, 639.5, 622.2, 604.9, 587.5), np.arange(0.0, 3.01, 0.5)))
+CS100_SENSITIVITY = _plot(CS100, 1, (219.4, 570.1, 374.9, 711.7),
+                          ((233.3, 400), (280.5, 500), (327.8, 600), (374.9, 700)), ((664.5, 0.0), (617.1, 1.0)))
+CS100_NEUTRAL = _plot(CS100, 2, (226.2, 214.7, 382.3, 402.9),
+                      ((226.2, 400), (273.2, 500), (320.4, 600), (367.7, 700)),
+                      zip((402.9, 365.5, 327.9, 290.2, 252.6, 214.7), np.arange(0.0, 2.51, 0.5)))
+CS1600_CURVES = _plot(CS1600, 2, (404.4, 638.9, 560.3, 760.1),
+                      ((421.8, -4.0), (456.4, -3.0), (490.9, -2.0), (525.7, -1.0), (560.3, 0.0)),
+                      zip((760.1, 742.8, 725.5, 708.2, 690.9, 673.5, 656.2), np.arange(0.0, 3.01, 0.5)))
+CS1600_SENSITIVITY = _plot(CS1600, 2, (219.9, 638.4, 375.3, 780.0),
+                           ((233.7, 400), (281.0, 500), (328.2, 600), (375.3, 700)), ((732.8, 0.0), (685.4, 1.0)))
+CS1600_NEUTRAL = _plot(CS1600, 1, (226.1, 215.8, 382.3, 404.0),
+                       ((226.1, 400), (273.1, 500), (320.4, 600), (367.6, 700)),
+                       zip((404.0, 366.7, 329.0, 291.4, 253.7, 215.8), np.arange(0.0, 2.51, 0.5)))
+
+
+def _konica(curves: VectorPlot, sensitivity: VectorPlot):
+    return {"curves": vector_plots.by_dashes(curves, KONICA_DASHES),
+            "sensitivity": vector_plots.by_dashes(sensitivity, KONICA_DASHES)}
+
+
+def centuria_super_100():
+    return _konica(CS100_CURVES, CS100_SENSITIVITY)
+
+
+def centuria_super_1600():
+    return _konica(CS1600_CURVES, CS1600_SENSITIVITY)
+
+
+# --- Konica IMPRESA 50 Professional (1998 technical data sheet, TDSN-501) ----
+# Bitmaps, two plots to a picture, each picture stored upside down for the
+# page to turn back. The curves are drawn as Konica's later sheets draw them,
+# all black, B solid, G dashed and R dash-dot, and in the spectral plot they
+# cross: each is walked from a point on it along its own stroke
+# (`trace_raster_plot.follow`). Each plot's rules are found in its part of the
+# picture and named by value, left to right and top to bottom, `None` for a
+# border off the scale: log H lettered with a bar over each minus, the
+# spectral plot's only scale the decade between its two rules, the MTF's both
+# axes logarithmic. Every lettered label inside a plot is blanked first, in
+# picture pixels. Seeds are in data units.
+IMP50 = "konica_IMP50.pdf"
+IMP50_SENSITIVITY = (1, (90, 975), (None, 400, 500, 600, 700), (None, 1.0, 0.0, None),
+                     ((300, 128, 338, 166), (552, 162, 594, 201), (742, 172, 782, 211),     # "B", "G", "R"
+                      (650, 28, 952, 130)),                                                 # process note
+                     {"B": (446.0, 1.39), "G": (547.0, 1.26), "R": (621.0, 1.22)})
+IMP50_CURVES = (1, (1105, 1995), (*np.arange(-3.0, 1.01, 0.5), None), (None, *np.arange(3.0, -0.01, -0.5)),
+                ((1886, 148, 1930, 192), (1886, 236, 1930, 282), (1886, 358, 1930, 402),    # "B", "G", "R"
+                 (1140, 30, 1480, 132)),                                                    # exposure note
+                {"B": (0.0, 2.10), "G": (0.0, 1.66), "R": (0.0, 1.12)})
+IMP50_NEUTRAL = (2, (85, 965), (400, 500, 600, 700, None), (2.0, 1.5, 1.0, 0.5, 0.0),
+                 ((395, 450, 590, 484), (390, 740, 590, 774),                               # curve names
+                  (385, 234, 805, 290), (750, 58, 955, 94)),                                # notes
+                 {"mid": (450.0, 1.57), "min": (450.0, 0.69)})
+IMP50_MTF = (2, (1100, 1985), (1, 5, 10, 50, 100, None), (None, 100, 50, 10, 5, None),
+             ((1580, 60, 1950, 150),),                                                      # exposure note
+             {"mtf": (7.0, 121.0)})
+
+
+def _impresa(spec, log: bool = False) -> dict[str, np.ndarray]:
+    """{name: (x, y)} in data units, each curve sorted along x, of one plot."""
+    page, (x0, x1), x_values, y_values, labels, seeds = spec
+    document = pymupdf.open(str(SHEETS / IMP50))
+    info = next(i for i in document[page].get_image_info(xrefs=True) if i["xref"])
+    pixmap = pymupdf.Pixmap(document, info["xref"])
+    if pixmap.n > 3:
+        pixmap = pymupdf.Pixmap(pymupdf.csRGB, pixmap)
+    grey = np.frombuffer(pixmap.samples, dtype=np.uint8).reshape(pixmap.height, pixmap.width, pixmap.n)[..., :3]
+    dark = grey.mean(axis=2) < 128
+    if info["transform"][3] < 0:                       # stored upside down
+        dark = dark[::-1]
+    part = dark[:, x0:x1]
+    cols = [c + x0 for c in raster._bands(np.flatnonzero(part.sum(axis=0) > 0.40 * part.shape[0]))]
+    rows = raster._bands(np.flatnonzero(part.sum(axis=1) > 0.40 * part.shape[1]))
+    if len(cols) != len(x_values) or len(rows) != len(y_values):
+        raise ValueError(f"{IMP50} page {page + 1}: {len(cols)} x {len(rows)} rules, "
+                         f"expected {len(x_values)} x {len(y_values)}")
+    erased = np.zeros_like(dark)
+    for c in cols:
+        erased[:, int(round(c)) - 3:int(round(c)) + 4] = True
+    for r in rows:
+        erased[int(round(r)) - 3:int(round(r)) + 4, :] = True
+    ink = np.zeros_like(dark)
+    inside = np.s_[int(rows[0]) + 5:int(rows[-1]) - 4, int(cols[0]) + 5:int(cols[-1]) - 4]
+    ink[inside] = dark[inside] & ~erased[inside]
+    for a, b, c, d in labels:
+        ink[b:d, a:c] = False
+
+    def scale(positions, values):
+        known = [(p, np.log10(v) if log else v) for p, v in zip(positions, values) if v is not None]
+        return np.polyfit([p for p, _ in known], [v for _, v in known], 1)
+
+    (kx, cx), (ky, cy) = scale(cols, x_values), scale(rows, y_values)
+    to_px = lambda v, k, c: ((np.log10(v) if log else v) - c) / k       # noqa: E731
+    to_data = lambda p, k, c: 10 ** (k * p + c) if log else k * p + c   # noqa: E731
+    out = {}
+    for name, (sx, sy) in seeds.items():
+        path = raster.follow(ink, (to_px(sx, kx, cx), to_px(sy, ky, cy)), erased=erased)
+        data = np.stack([to_data(path[:, 0], kx, cx), to_data(path[:, 1], ky, cy)], axis=-1)
+        out[name] = data[np.argsort(data[:, 0], kind="stable")]
+    return out
+
+
+def impresa_50():
+    return {"curves": _impresa(IMP50_CURVES), "sensitivity": _impresa(IMP50_SENSITIVITY)}
+
+
+def impresa_50_mtf() -> np.ndarray:
+    """(cycles/mm, percent), through the visual filter."""
+    return _impresa(IMP50_MTF, log=True)["mtf"]
+
+
 # The spectral density of a neutral at medium density and at D-min, which
 # these negative sheets plot in place of single-dye spectra: what the donor's
 # dyes are chosen against (`build_profiles.donor_fit`). Agfa's plots are
@@ -465,6 +587,9 @@ NEUTRAL_SPECTRA = {
     # EXR 50D's from the 2003 plot, drawn with its dyes; EXR 200T's on its own.
     "kodak_exr_50d": lambda: {k: v for k, v in exr_50d_dyes().items() if k in ("mid", "min")},
     "kodak_exr_200t": EXR_200T_NEUTRAL,
+    "konica_centuria_super_100": CS100_NEUTRAL,
+    "konica_centuria_super_1600": CS1600_NEUTRAL,
+    "konica_impresa_50": lambda: _impresa(IMP50_NEUTRAL),
 }
 
 
@@ -502,6 +627,9 @@ SOURCES = {
     "kodak_exr_50d": exr_50d,
     "kodak_exr_200t": exr_200t,
     "kodak_5251_50t": lambda: __import__("kodak_1962_sheets").negative(),
+    "konica_centuria_super_100": centuria_super_100,
+    "konica_centuria_super_1600": centuria_super_1600,
+    "konica_impresa_50": impresa_50,
 }
 
 # How the curves of a sheet read here were told apart, for the profile's
@@ -524,4 +652,7 @@ CURVES_READ = {
     "kodak_exr_200t": "read from the vector plot, each layer by its order at the dense end",
     "kodak_5251_50t": ("traced off the paper's scan, levelled, each solid curve from a point on it with 5250's "
                        "dashes taken out (kodak_1962_sheets.py)"),
+    "konica_centuria_super_100": "read from the vector plot, each layer by its dash pattern",
+    "konica_centuria_super_1600": "read from the vector plot, each layer by its dash pattern",
+    "konica_impresa_50": "traced off the sheet's bitmap, each layer walked along its own dashed stroke",
 }

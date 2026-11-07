@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 # the Mac release this port matches
-project(flx_film_lab_win VERSION 1.3.0 LANGUAGES CXX)
+project(flx_film_lab_win VERSION 1.4.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -19,6 +19,7 @@ set(ENGINE_SOURCES
     engine/FilmRenderer.cpp
     engine/Packs.cpp
     engine/Recipe.cpp
+    engine/PrintCurves.cpp
     engine/FilmMath.cpp
     engine/ToneCurve.cpp
     engine/SetupBuilder.cpp
@@ -53,6 +54,8 @@ set(ENGINE_KERNELS
     engine/shaders/grain_even_mean.comp
     engine/shaders/grain_restore_mean.comp
     engine/shaders/encode_display.comp
+    engine/shaders/apply_curves.comp
+    engine/shaders/histogram_rgb.comp
     engine/shaders/apply_geometry.comp
     engine/shaders/effects_blur.comp
     engine/shaders/effects_bloom_select.comp
@@ -216,11 +219,12 @@ set(APP_SOURCES
     app/Theme.cpp
     app/Vocabulary.cpp
     app/Widgets.cpp
-    app/CurvePlot.cpp
+    app/CurvesView.cpp
     app/Inspector.cpp
     app/Canvas.cpp
     app/MainWindow.cpp
     app/Document.cpp
+    app/EditNames.cpp
     app/Presets.cpp
     app/RenderEngine.cpp
     app/Exporter.cpp
@@ -243,6 +247,8 @@ target_include_directories(FLXFilmLab PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 # the icon and the version Explorer shows
 if(WIN32)
     target_sources(FLXFilmLab PRIVATE app/FLXFilmLab.rc)
+    # the GPU's memory budget (RenderEngine's gpuMemoryFree)
+    target_link_libraries(FLXFilmLab PRIVATE dxgi)
 endif()
 target_include_directories(FLXFilmLab PRIVATE engine app)
 target_link_libraries(FLXFilmLab PRIVATE Qt6::Widgets Qt6::Gui Qt6::GuiPrivate Qt6::Network Qt6::Multimedia

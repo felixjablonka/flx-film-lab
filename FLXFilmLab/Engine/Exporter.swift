@@ -43,12 +43,46 @@ enum Exporter {
         }
     }
 
+    /// What made a file, for its metadata: FLX Film Lab and its version as
+    /// the software, and in words the film, its camera filter and the paper
+    /// it was printed on, or the light table it was viewed on.
+    struct Provenance: Equatable {
+        var software: String
+        var description: String
+
+        /// "FLX Film Lab 1.4.0": the app's version, from its bundle. A tool
+        /// built without one names the app alone.
+        static var software: String {
+            let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+            return version.map { "FLX Film Lab \($0)" } ?? "FLX Film Lab"
+        }
+
+        /// "Film: Kodak Tri-X 400; camera filter: Red, Wratten 25; paper:
+        /// Ilford Multigrade IV RC Deluxe", in the names the pickers show.
+        /// Plain ASCII, which every reader of the tags takes.
+        init(recipe: Recipe, software: String = Provenance.software) {
+            let film = try? PackLibrary.shared.pack(recipe.filmStock)
+            var parts = ["Film: \(film?.name ?? recipe.filmStock)"]
+            if let filter = film?.lensFilter(recipe.lensFilter) {
+                parts.append("camera filter: \(filter.designation)")
+            }
+            if recipe.scanFilm ?? (film?.isPositive ?? false) {
+                parts.append("viewed on a light table")
+            } else {
+                parts.append("paper: \((try? PackLibrary.shared.pack(recipe.printStock))?.name ?? recipe.printStock)")
+            }
+            self.software = software
+            description = parts.joined(separator: "; ")
+        }
+    }
+
     /// `linear` is RGBA float in the output colour space, straight off the GPU.
     /// `metadata` is the source file's (`RawLoader.metadata(of:)`); what in it
-    /// describes the photograph is written into the file too.
+    /// describes the photograph is written into the file too, and with
+    /// `provenance`, what made the print.
     static func write(linear: [Float], width: Int, height: Int, to url: URL,
                       format: Format, colorSpace: String,
-                      metadata: [CFString: Any]? = nil) throws {
+                      metadata: [CFString: Any]? = nil, provenance: Provenance? = nil) throws {
         let cs = Renderer.cgColorSpace(named: colorSpace)
         let encode = transferFunction(for: colorSpace)
 
@@ -80,7 +114,7 @@ enum Exporter {
             throw ExportError.destinationFailed
         }
         var properties = exportProperties(source: metadata, width: width, height: height,
-                                          colorSpace: colorSpace)
+                                          colorSpace: colorSpace, provenance: provenance)
         if format == .jpeg { properties[kCGImageDestinationLossyCompressionQuality] = 0.95 }
         CGImageDestinationAddImage(destination, image, properties as CFDictionary)
         guard CGImageDestinationFinalize(destination) else { throw ExportError.destinationFailed }
@@ -96,8 +130,13 @@ enum Exporter {
     /// maker's private notes — does not describe the print and stays behind.
     /// The pixels were turned upright on decode, so the orientation is reset;
     /// the size and colour space are the export's own.
+    ///
+    /// The software is FLX Film Lab, with its version. `provenance` adds the
+    /// film, its filter and the paper: to the EXIF user comment, after a
+    /// comment the camera wrote, and as the image description when the camera
+    /// left that blank, which is where Photos and Lightroom find a caption.
     static func exportProperties(source: [CFString: Any]?, width: Int, height: Int,
-                                 colorSpace: String) -> [CFString: Any] {
+                                 colorSpace: String, provenance: Provenance? = nil) -> [CFString: Any] {
         var exif = source?[kCGImagePropertyExifDictionary] as? [CFString: Any] ?? [:]
         for key in [kCGImagePropertyExifMakerNote, kCGImagePropertyExifCFAPattern,
                     kCGImagePropertyExifComponentsConfiguration,
@@ -120,12 +159,28 @@ enum Exporter {
         }
 
         var tiff: [CFString: Any] = [kCGImagePropertyTIFFOrientation: 1,
-                                     kCGImagePropertyTIFFSoftware: "FLX Film Lab"]
+                                     kCGImagePropertyTIFFSoftware: provenance?.software ?? Provenance.software]
         let sourceTIFF = source?[kCGImagePropertyTIFFDictionary] as? [CFString: Any] ?? [:]
         for key in [kCGImagePropertyTIFFMake, kCGImagePropertyTIFFModel, kCGImagePropertyTIFFDateTime,
                     kCGImagePropertyTIFFArtist, kCGImagePropertyTIFFCopyright,
                     kCGImagePropertyTIFFImageDescription] {
             if let value = sourceTIFF[key] { tiff[key] = value }
+        }
+        if let provenance {
+            // Cameras fill both with spaces, or NULs (a Nikon's comment is 36),
+            // when there is nothing to say.
+            func said(_ value: Any?) -> String? {
+                let blank = CharacterSet.whitespacesAndNewlines.union(.controlCharacters)
+                let text = (value as? String)?.trimmingCharacters(in: blank) ?? ""
+                return text.isEmpty ? nil : text
+            }
+            // ImageIO reads a JPEG's or a TIFF's description as its IPTC caption.
+            let caption = (source?[kCGImagePropertyIPTCDictionary] as? [CFString: Any])?[kCGImagePropertyIPTCCaptionAbstract]
+            if said(tiff[kCGImagePropertyTIFFImageDescription]) == nil, said(caption) == nil {
+                tiff[kCGImagePropertyTIFFImageDescription] = provenance.description
+            }
+            exif[kCGImagePropertyExifUserComment] = said(exif[kCGImagePropertyExifUserComment])
+                .map { $0 + "\n" + provenance.description } ?? provenance.description
         }
 
         var properties: [CFString: Any] = [kCGImagePropertyOrientation: 1,

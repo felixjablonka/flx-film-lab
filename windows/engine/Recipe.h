@@ -1,6 +1,7 @@
 #pragma once
 
 #include "FrameGeometry.h"
+#include "PrintCurves.h"
 
 #include <QJsonObject>
 
@@ -143,6 +144,9 @@ struct Recipe {
     std::vector<LocalMask> masks;
     // Glow's effects; none until first touched, which is all off
     std::optional<GlowLook> effects;
+    // Point curves on the finished print; none, as in every recipe saved
+    // before them, leaves the print as it is.
+    std::optional<PrintCurves> curves;
     std::optional<bool> scanFilm;
     bool normalizeToBase = true;
     std::string outputColorSpace = "sRGB";

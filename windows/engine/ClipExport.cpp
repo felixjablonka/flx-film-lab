@@ -311,6 +311,10 @@ std::string exportClip(QRhi *rhi, const std::string &source, const std::string &
         if (audioMap[i] < 0)
             in->streams[i]->discard = AVDISCARD_ALL;
     copyMetadata(&out->metadata, in->metadata);
+    if (!options.software.empty())
+        av_dict_set(&out->metadata, "com.apple.quicktime.software", options.software.c_str(), 0);
+    if (!options.description.empty())
+        av_dict_set(&out->metadata, "com.apple.quicktime.description", options.description.c_str(), 0);
 
     if (int e = avio_open(&out->pb, partialName.c_str(), AVIO_FLAG_WRITE); e < 0)
         cannotWrite(error(e));

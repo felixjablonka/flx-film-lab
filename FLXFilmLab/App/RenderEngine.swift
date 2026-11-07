@@ -1,5 +1,6 @@
 import Foundation
 import CoreGraphics
+import CoreImage
 
 /// The preview's render loop, off the main thread.
 ///
@@ -19,6 +20,8 @@ actor RenderEngine {
         /// Where the image's pixels come from in the frame.
         var map: GeometryMap
         var milliseconds: Double
+        /// The finished print's histogram, and the one the curves were given.
+        var histogram: PrintHistogram?
     }
 
     /// What the meters read, for the controls whose auto is on.
@@ -41,6 +44,18 @@ actor RenderEngine {
     private var meteredArea: (geometry: FrameGeometry, pixels: [Float], width: Int, height: Int)?
     private var coverages: [UUID: (geometry: MaskRasterizer.Geometry, coverage: [Float])] = [:]
     private var lastMasks: [LocalMask]?
+    private var grainSeed: UInt32 = 0
+
+    /// The loupe's renderer, which holds the frame at full size while the
+    /// loupe is open, and what that frame was decoded with.
+    private var loupe: Renderer?
+    private var loupeFrame: (key: String, width: Int, height: Int)?
+    /// The masks the loupe's map was drawn for.
+    private var loupeMasks: [LocalMask]?
+    /// The recipe whose print, before its effects, the preview's renderer
+    /// keeps (`Renderer.printBeforeEffects`): the loupe's effects gather the
+    /// light from beyond the part from it.
+    private var keptBeforeEffects: Recipe?
 
     /// Everything the print meters' reading depends on. It is retaken only
     /// when one of these moves, not on every tone or colour slider tick.
@@ -70,6 +85,7 @@ actor RenderEngine {
 
     init() throws {
         renderer = try Renderer()
+        renderer.measuresHistogram = true
     }
 
     /// Hand the engine a newly decoded image, with its grain seed
@@ -78,6 +94,8 @@ actor RenderEngine {
     func setSource(_ decoded: RawLoader.Decoded, grainSeed: UInt32) -> Int {
         renderer.setImage(decoded.pixels, width: decoded.width, height: decoded.height)
         renderer.grainSeed = grainSeed
+        self.grainSeed = grainSeed
+        keptBeforeEffects = nil
         source = decoded
         sourceID += 1
         exposureReading = nil
@@ -148,11 +166,91 @@ actor RenderEngine {
         let setup = try RenderSetupBuilder.build(recipe: resolved, exposureEV: Float(resolved.exposureEV))
         updateMasks(resolved.masks, width: source.width, height: source.height)
         _ = try renderer.render(setup: setup, recipe: resolved, wholeFrame: wholeFrame)
+        keptBeforeEffects = renderer.keepsPrintBeforeEffects && !wholeFrame && (resolved.effects?.isActive ?? false)
+            ? resolved : nil
         let image = renderer.makeDisplayImage(colorSpaceName: resolved.outputColorSpace)
         let map = GeometryMap(resolved.geometry, sourceWidth: source.width, sourceHeight: source.height,
                               wholeFrame: wholeFrame)
+        let histogram = renderer.histogram.map { PrintHistogram(after: $0.after, before: $0.before) }
         return Output(image: image, resolved: resolved, metered: metered, map: map,
-                      milliseconds: (CFAbsoluteTimeGetCurrent() - start) * 1000)
+                      milliseconds: (CFAbsoluteTimeGetCurrent() - start) * 1000, histogram: histogram)
+    }
+
+    // MARK: - The loupe
+
+    /// What the frame held at full size for the loupe was decoded with, if
+    /// one is held.
+    var loupeKey: String? { loupeFrame?.key }
+
+    /// Hold `decoded`, the image on screen decoded at full size, for the
+    /// loupe. False if another image has come in meanwhile.
+    func holdFullFrame(_ decoded: RawLoader.Decoded, key: String, for expected: Int) throws -> Bool {
+        guard expected == sourceID else { return false }
+        if loupe == nil { loupe = try Renderer() }
+        guard let loupe else { return false }
+        loupe.releaseFrame()
+        loupe.grainSeed = grainSeed
+        loupe.holdFrame(decoded.pixels, width: decoded.width, height: decoded.height)
+        guard loupe.holdsFrame else {
+            loupeFrame = nil
+            return false
+        }
+        loupeFrame = (key, decoded.width, decoded.height)
+        loupeMasks = nil
+        renderer.keepsPrintBeforeEffects = true
+        return true
+    }
+
+    /// Let the frame held for the loupe go (about 16 bytes a pixel: 720 MB
+    /// for 45 MP), with everything made for it.
+    func releaseFullFrame() {
+        loupe = nil
+        loupeFrame = nil
+        loupeMasks = nil
+        keptBeforeEffects = nil
+        renderer.keepsPrintBeforeEffects = false
+    }
+
+    /// The print at 100% under the loupe: the window of `width` x `height`
+    /// pixels of the print at full size centred on `centre` (fractions of the
+    /// print), made from the frame held at full size with the values the
+    /// preview resolved, exactly as the export makes those pixels. Only that
+    /// part of the print is made, with what each stage needs around it.
+    func renderLoupe(_ recipe: Recipe, centre: CGPoint, width: Int, height: Int,
+                     key: String, for expected: Int) throws -> CGImage? {
+        guard expected == sourceID, let loupe, let frame = loupeFrame, frame.key == key,
+              width > 0, height > 0 else { return nil }
+        let (resolved, _) = try resolve(recipe)
+        let setup = try RenderSetupBuilder.build(recipe: resolved, exposureEV: Float(resolved.exposureEV))
+        let map = GeometryMap(resolved.geometry, sourceWidth: frame.width, sourceHeight: frame.height)
+        let ow = map.outputWidth, oh = map.outputHeight
+        let w = min(width, ow), h = min(height, oh)
+        let x = min(max(Int((centre.x * CGFloat(ow) - CGFloat(w) / 2).rounded()), 0), ow - w)
+        let y = min(max(Int((centre.y * CGFloat(oh) - CGFloat(h) / 2).rounded()), 0), oh - h)
+        let reach = Renderer.reach(setup: setup, recipe: resolved, frameWidth: frame.width,
+                                   frameHeight: frame.height, shaped: !map.isIdentity)
+        let (part, box) = Renderer.loupeRegions(window: CGRect(x: x, y: y, width: w, height: h),
+                                                map: map, reach: reach)
+        guard loupe.setWindow(x: Int(box.minX), y: Int(box.minY), width: Int(box.width),
+                              height: Int(box.height)) else { return nil }
+        // The masks drawn on the frame at full size, as the export draws them.
+        let masks = resolved.masks.filter(\.enabled)
+        if masks != loupeMasks {
+            loupeMasks = masks
+            if masks.isEmpty {
+                loupe.clearDodgeBurn()
+            } else {
+                loupe.setDodgeBurnMap(MaskRasterizer.rasterize(masks: masks, width: frame.width, height: frame.height))
+            }
+        }
+        var beyond: CIImage?
+        if keptBeforeEffects == resolved, let print = renderer.printBeforeEffects {
+            beyond = CIImage(mtlTexture: print, options: [.colorSpace: CGColorSpace(name: CGColorSpace.extendedLinearSRGB)!])
+        }
+        _ = try loupe.render(setup: setup, recipe: resolved, part: Renderer.Part(rect: part, beyond: beyond))
+        let made = loupe.madeRect
+        return loupe.makeDisplayImage(colorSpaceName: resolved.outputColorSpace)?
+            .cropping(to: CGRect(x: x - Int(made.minX), y: y - Int(made.minY), width: w, height: h))
     }
 
     /// Rebuild the dodge-and-burn map only when the masks change, and redraw

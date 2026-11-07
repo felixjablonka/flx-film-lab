@@ -199,6 +199,8 @@ Recipe recipeFromJson(const QJsonObject &o)
     }
     if (o.value("effects").isObject())
         r.effects = glowLookFromJson(o.value("effects").toObject());
+    if (o.value("curves").isObject())
+        r.curves = printCurvesFromJson(o.value("curves").toObject());
     if (o.value("scanFilm").isBool())
         r.scanFilm = o.value("scanFilm").toBool();
     read(o, "normalizeToBase", r.normalizeToBase);
@@ -330,5 +332,7 @@ QJsonObject recipeToJson(const Recipe &r)
         o.insert("frameGeometry", frameGeometryToJson(r.geometry));
     if (r.effects)
         o.insert("effects", glowLookToJson(*r.effects));
+    if (r.curves)
+        o.insert("curves", printCurvesToJson(*r.curves));
     return o;
 }

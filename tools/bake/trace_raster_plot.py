@@ -303,3 +303,116 @@ def trace_curves(mask: np.ndarray, frame: PlotFrame, seeds: dict[str, tuple[floa
         order = np.argsort(data[:, 0], kind="stable")
         out[name] = data[order]
     return out
+
+
+def follow(ink: np.ndarray, seed: tuple[float, float], heading: tuple[float, float] = (1.0, 0.0), *,
+           erased: np.ndarray | None = None, step: float = 1.0, reach: float = 2.5, max_gap: float = 14.0,
+           max_erased: float = 40.0, apart: float = 6.0, back: int = 10) -> np.ndarray:
+    """(x, y) pixel points along one stroke through `seed`, walked both ways.
+
+    For plots that draw their curves dashed or dash-dotted in one ink and let
+    them cross, where neither a column scan (`trace`) nor a skeleton walk
+    (`trace_curves`) can keep a curve apart from its neighbours. Each step
+    looks across the stroke's own direction for ink where it should be next,
+    and takes only ink within `reach` of that: a dashed line's next dash, not a
+    neighbour. Ink that touches the walk but lies off that line is the stroke
+    turning (a sharp peak), and is followed; a new dash sets the direction
+    afresh, since it may turn at once. Across a gap the walk carries on in the
+    same direction, for at most `max_gap` pixels of a dash's break (or
+    `max_erased` through `erased`, where a rule was blanked), so a curve's real
+    end stays an end. Where another stroke crosses, the ink across is wider
+    than the stroke's own: the walk goes straight on until it narrows, and
+    `apart` pixels further, where the two have parted."""
+    h, w = ink.shape
+    ys, xs = np.nonzero(ink)
+    j = int(np.argmin(np.hypot(xs - seed[0], ys - seed[1])))
+    start = np.array([xs[j], ys[j]], float)
+
+    def local_direction(p, u, radius=7.0):
+        sel = np.hypot(xs - p[0], ys - p[1]) <= radius
+        pts = np.stack([xs[sel], ys[sel]], axis=-1).astype(float)
+        if len(pts) < 6:
+            return None
+        v = np.linalg.svd(pts - pts.mean(axis=0))[2][0]
+        return v if v @ u >= 0 else -v
+
+    u0 = local_direction(start, np.asarray(heading, float), 8.0)
+    u0 = np.asarray(heading, float) if u0 is None else u0
+    u0 = u0 / np.hypot(*u0)
+    ring = [(dx, dy) for dx in range(-3, 4) for dy in range(-3, 4) if 1.5 <= np.hypot(dx, dy) <= 3.2]
+
+    def inked(x, y):
+        x, y = int(round(x)), int(round(y))
+        return 0 <= x < w and 0 <= y < h and bool(ink[y, x])
+
+    def across(q, n, limit):
+        """(centre, width) of the run of ink across the walk at q nearest it."""
+        t = np.arange(-limit, limit + 0.01, 0.5)
+        on = np.array([inked(*(q + n * s)) for s in t])
+        if not on.any():
+            return None
+        idx = np.flatnonzero(on)
+        cut = np.flatnonzero(np.diff(idx) > 1)
+        a, b = min(zip(np.r_[idx[0], idx[cut + 1]], np.r_[idx[cut], idx[-1]]), key=lambda r: abs(t[r[0]] + t[r[1]]))
+        lo, hi = t[a], t[b]
+        while lo > -30 and inked(*(q + n * (lo - 0.5))):
+            lo -= 0.5
+        while hi < 30 and inked(*(q + n * (hi + 0.5))):
+            hi += 0.5
+        return (lo + hi) / 2, hi - lo
+
+    def walk(u):
+        found, widths = [start.copy()], []
+        p, gap, rubbed, crossing, coast = start.copy(), 0.0, 0.0, False, 0.0
+        while True:
+            q = p + u * step
+            if not (0 <= q[0] < w and 0 <= q[1] < h):
+                break
+            n = np.array([-u[1], u[0]])
+            got = across(q, n, reach + 0.15 * gap + 0.25 * rubbed)
+            own = float(np.median(widths[-20:])) if len(widths) >= 5 else 7.0
+            if got is not None and got[1] > own + 3.0 and gap == 0 and rubbed == 0:
+                crossing, coast = True, apart
+            if got is not None and not crossing and coast <= 0:
+                p = q + n * got[0]
+                if gap > 0 or rubbed > 0:
+                    v = local_direction(p, u)
+                    if v is not None:
+                        u = v
+                else:
+                    widths.append(got[1])
+                gap = rubbed = 0.0
+            else:
+                if got is not None and crossing and got[1] <= own + 3.0:
+                    crossing = False
+                if got is None and not crossing and coast <= 0 and gap == 0 and rubbed == 0:
+                    turn = [(dx, dy) for dx, dy in ring if inked(p[0] + dx, p[1] + dy)
+                            and (dx * u[0] + dy * u[1]) > 0.2 * np.hypot(dx, dy)]
+                    if turn:
+                        dx, dy = max(turn, key=lambda d: (d[0] * u[0] + d[1] * u[1]) / np.hypot(*d))
+                        p = p + np.array([dx, dy], float)
+                        u = 0.5 * u + 0.5 * np.array([dx, dy], float) / np.hypot(dx, dy)
+                        u /= np.hypot(*u)
+                        found.append(p.copy())
+                        continue
+                p = q
+                if crossing or coast > 0:
+                    coast -= 0.0 if crossing else step
+                elif erased is not None and erased[int(q[1]), int(q[0])]:
+                    rubbed += step
+                    if rubbed > max_erased:
+                        break
+                else:
+                    gap += step
+                    if gap > max_gap:
+                        break
+                continue
+            found.append(p.copy())
+            if len(found) > back:
+                d = found[-1] - found[-1 - back]
+                if np.hypot(*d) > 0:
+                    u = 0.5 * u + 0.5 * d / np.hypot(*d)
+                    u /= np.hypot(*u)
+        return found
+
+    return np.array(walk(-u0)[::-1][:-1] + walk(u0))

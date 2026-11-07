@@ -24,6 +24,7 @@ struct Look {
     Recipe recipe;
     WhiteBalance whiteBalance = WhiteBalance::FilmReference;
     double customTemperature = 5500, customTint = 0;
+    bool operator==(const Look &) const = default;
 };
 
 struct Preset {

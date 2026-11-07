@@ -5,9 +5,11 @@ import AppKit
 struct FLXFilmLabApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     // Both halves' documents live as long as the app, so switching modes
-    // keeps the open image and the open clip.
-    @StateObject private var stills = DocumentModel()
-    @StateObject private var motion = ClipModel()
+    // keeps the open image and the open clip. They are not state of the app's
+    // own: as that, every change of theirs, a frame or a slider tick, made
+    // the app rebuild its window, toolbar and menus.
+    private var stills: DocumentModel { Documents.stills }
+    private var motion: ClipModel { Documents.motion }
     @AppStorage("mode") private var modeRaw = AppMode.stills.rawValue
 
     init() { Self.takeOverSettings() }
@@ -43,6 +45,7 @@ struct FLXFilmLabApp: App {
         .windowToolbarStyle(.unified(showsTitle: true))
         .commands {
             CommandGroup(replacing: .newItem) {}
+            UndoCommands(stills: stills.history, motion: motion.history, mode: mode.wrappedValue)
             CommandGroup(after: .toolbar) {
                 Button("Stills") { mode.wrappedValue = .stills }
                     .keyboardShortcut("1", modifiers: .command)
@@ -58,11 +61,60 @@ struct FLXFilmLabApp: App {
     }
 }
 
+/// Undo and Redo in the Edit menu (⌘Z and ⇧⌘Z), for the half on screen: each
+/// names what it would take back or do again. A text field being typed in
+/// keeps its own, as everywhere on the Mac, while it has typing to undo, and
+/// so does a sheet.
+struct UndoCommands: Commands {
+    @ObservedObject var stills: EditHistory<DocumentModel.ImageEdits>
+    @ObservedObject var motion: EditHistory<MotionLook>
+    let mode: AppMode
+
+    var body: some Commands {
+        CommandGroup(replacing: .undoRedo) {
+            let undoName = mode == .stills ? stills.undoName : motion.undoName
+            let redoName = mode == .stills ? stills.redoName : motion.redoName
+            Button(undoName.map { "Undo \($0)" } ?? "Undo") {
+                if Self.textTakes(\.canUndo) {
+                    NSApp.sendAction(Selector(("undo:")), to: nil, from: nil)
+                } else if mode == .stills { stills.undo() } else { motion.undo() }
+            }
+            .keyboardShortcut("z", modifiers: .command)
+            .disabled(undoName == nil)
+            Button(redoName.map { "Redo \($0)" } ?? "Redo") {
+                if Self.textTakes(\.canRedo) {
+                    NSApp.sendAction(Selector(("redo:")), to: nil, from: nil)
+                } else if mode == .stills { stills.redo() } else { motion.redo() }
+            }
+            .keyboardShortcut("z", modifiers: [.command, .shift])
+            .disabled(redoName == nil)
+        }
+    }
+
+    /// The key window's own undo has it: a sheet's, or a text field's while
+    /// it has typing to undo (or redo).
+    @MainActor
+    private static func textTakes(_ can: KeyPath<UndoManager, Bool>) -> Bool {
+        guard let window = NSApp.keyWindow else { return false }
+        if window.sheetParent != nil { return true }
+        guard let text = window.firstResponder as? NSText else { return false }
+        return text.undoManager?[keyPath: can] ?? false
+    }
+}
+
+/// The two halves' documents, made once, on first use.
+@MainActor
+private enum Documents {
+    static let stills = DocumentModel()
+    static let motion = ClipModel()
+}
+
 /// The window: one half at a time, with the switch between them in the
 /// toolbar's centre. Each half brings its own toolbar items.
 struct RootView: View {
-    @ObservedObject var stills: DocumentModel
-    @ObservedObject var motion: ClipModel
+    // Each half watches its own document; the window around them need not.
+    let stills: DocumentModel
+    let motion: ClipModel
     @Binding var mode: AppMode
 
     var body: some View {

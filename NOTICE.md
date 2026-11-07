@@ -124,13 +124,14 @@ FLX Film Lab is *not* a faithful reproduction:
    The split-contrast and regional-colour zones use the same lightness scale.
    Auto Contrast fits the frame's textured shadow-to-highlight range onto the
    paper rather than NegPy's textural-range formula.
-10. **22 colour profiles are built here rather than upstream** — every
+10. **25 colour profiles are built here rather than upstream** — every
    slide film (Provia 100F, Provia 400X, Astia 100F, Velvia 50, Velvia 100,
    Ektachrome E100, Kodachrome 25, 64 and 200), Superia 1600 and Superia Reala
    100, Agfa Optima II 100 and Portrait XPS 160, Fujifilm's Eterna Vivid
    160T, Eterna 500T and Reala 500D motion picture negatives, Kodak Royal Gold
    100 and Vericolor III 160, Kodak's EXR 50D, EXR 200T and 5251 50T motion
-   picture negatives, and HARMAN Phoenix 200, in `profiles/`;
+   picture negatives, Konica's Centuria Super 100 and 1600 and Impresa 50, and
+   HARMAN Phoenix 200, in `profiles/`;
    for the four agx also has (Provia 100F, Velvia 100, Ektachrome E100 and
    Kodachrome 64), they replace its profiles. Their characteristic curves,
    spectral sensitivities and, where a sheet plots them, dye spectra are
@@ -171,7 +172,18 @@ FLX Film Lab is *not* a faithful reproduction:
    best fits what the sheet's midscale neutral adds over D-min (Ektar 100;
    Fujifilm C200), each moved and stretched about its peak until the three add
    up to that neutral. They run without agx's per-stock spectral adaptation
-   window, which is fitted to agx's own stocks' sensitivities. HARMAN Phoenix
+   window, which is fitted to agx's own stocks' sensitivities. Konica's
+   Centuria Super 100 and 1600 (2002) and Impresa 50 Professional (TDSN-501,
+   1998) are built the same way, all three on Fujifilm X-TRA 400's dyes, whose
+   refined sums fit all three sheets' neutrals closely with small moves, as one
+   family;
+   their spectral sensitivities continue past the plotted range at their own
+   final gradients rather than on a donor's tails. The Centurias' D-min
+   spectra read 0.05 to 0.10 denser through Status M than their own curves'
+   D-min, a conflict within each sheet: the profiles keep the curves'
+   densities over the spectral D-min. Impresa 50's sheet gives no granularity;
+   it takes Konica's own step between the two Centurias (RMS 4 and 6), carried
+   down one stop: 3.6. HARMAN Phoenix
    200 (technical information, Sep 2024) goes further:
    - Its sheet plots relative log exposure, and its ISO 200 was measured by the
      ISO method, so the curves' ISO 5800 speed point is put at sqrt(2) / 200
@@ -216,8 +228,8 @@ FLX Film Lab is *not* a faithful reproduction:
    200T's per-layer curves; it prints on Kodak 5385 (item 15).
 11. **Black-and-white stocks are built here, from datasheets alone** — Kodak
    Tri-X 400 (Kodak F-4017), Kodak T-Max 100 (Kodak Alaris F-4016), Ilford HP5
-   Plus and Ilford Multigrade RC Deluxe
-   (HARMAN technology technical information), Fujifilm Neopan 1600
+   Plus, Delta 100, Delta 400, FP4 Plus, Pan F Plus, Ortho Plus and Ilford
+   Multigrade RC Deluxe (HARMAN technology technical information), Fujifilm Neopan 1600
    (Fujifilm AF3-608E) and Agfa APX 25 (Agfa's Professional range sheet), in
    `profiles/` by
    `tools/bake/build_bw_profiles.py`. agx's own black-and-white work (Double-X,
@@ -229,14 +241,19 @@ FLX Film Lab is *not* a faithful reproduction:
    1.007 decades over the ISO speed point; film curves continue at their final
    gradient for 0.8 decades past the plotted range; Ilford's wedge spectrograms
    are read as relative log sensitivity rather than as tungsten-weighted, which
-   would give HP5 Plus a red-filter factor of 12-16x; HP5 Plus, for which Ilford
-   publishes no RMS granularity, takes Tri-X's 17; Multigrade is modelled as one
+   would give HP5 Plus a red-filter factor of 12-16x (Ortho Plus's own daylight
+   and tungsten ratings, ISO 80 and 40, bear the reading out); Ilford publishes
+   no RMS granularity, so each of its films takes the Kodak film of its class:
+   HP5 Plus Tri-X's 17, Delta 100 and 400 T-Max 100's and T-Max 400's 8 and 10
+   (Kodak F-4016, F-4043), and FP4 Plus, Pan F Plus and Ortho Plus HP5 Plus's
+   17 stepped to their speeds as Agfa's APX 25, 100 and 400 step (7, 9, 14);
+   Ortho Plus takes only the filters its sheet lists, blue, green and yellow; Multigrade is modelled as one
    emulsion at grade 1, so its contrast comes from the Contrast control rather
    than from enlarger filtration; halation, which agx tunes per dye layer,
    takes the bottom layer's strength on all three; and the scatter, with
    development's adjacency effect run as the layer's own DIR-style inhibition,
    is fitted to Kodak's published MTF for Tri-X in D-76 (F-4017) rather than
-   taken from agx's colour defaults — HP5 Plus and Neopan 1600, with no
+   taken from agx's colour defaults — Ilford's films and Neopan 1600, with no
    published MTF, take the same, and APX 25 is fitted to Agfa's own curve (to
    50 cycles/mm) with Agfa's RMS 7. Neopan 1600, whose EI 1600 rating sits a push
    above its curve's own ISO speed point (721), has its mid-grey where a meter
@@ -286,12 +303,17 @@ FLX Film Lab is *not* a faithful reproduction:
    x1.25. Vericolor III 160 ("moderate color saturation", Portra 160NC its
    successor) at Portra 160's chroma, x0.46, and Royal Gold 100, whose sheet
    puts it in the Gold family and says nothing of saturation, at Gold 200's on
-   Ektacolor Edge, x0.59. The overrides are in `tools/bake/stock_overrides.py` and are applied
+   Ektacolor Edge, x0.59. Konica's Centuria Super 100 ("brilliantly colored",
+   "for outdoor snapshots", as Kodak's "bright, colorful prints") at Gold 200's
+   on the same paper, x0.43, Super 1600, whose sheet has no colour words, at
+   Super 100's, x0.41, and Impresa 50 ("subtle color tones ... with this much
+   fidelity") at Portra 160's on its own paper, Ektacolor Edge (1.15x),
+   x0.47. The overrides are in `tools/bake/stock_overrides.py` and are applied
    to the parity references too, so parity still compares the engine with agx at
    equal parameters.
 13. **Slide films' sharpness is fitted to their datasheets' MTF**, and so is
-   that of the colour negatives whose sheets plot one, Vericolor III, EXR 50D
-   and EXR 200T
+   that of the colour negatives whose sheets plot one, Vericolor III, EXR 50D,
+   EXR 200T and Konica's three
    (`tools/bake/slide_mtf.py`), rather than taken from agx's defaults, with two
    engine changes agx does not have. agx's DIR couplers sharpen fine detail by
    1/(1 - b), b the share of a layer's contrast its inhibition takes, which

@@ -433,7 +433,46 @@ func run() async throws {
     check(tiff[kCGImagePropertyTIFFSoftware] as? String == "FLX Film Lab"
           && exif[kCGImagePropertyExifPixelXDimension] as? Int == 200
           && exif[kCGImagePropertyExifPixelYDimension] as? Int == 300,
-          "FLX Film Lab as the software, and the export's own size")
+          "FLX Film Lab as the software (its version in the app), and the export's own size")
+    let filmName = (try? PackLibrary.shared.pack(m.recipe.filmStock))?.name ?? "?"
+    let paperName = (try? PackLibrary.shared.pack(m.recipe.printStock))?.name ?? "?"
+    let said = "Film: \(filmName); paper: \(paperName)"
+    check(exif[kCGImagePropertyExifUserComment] as? String == said
+          && tiff[kCGImagePropertyTIFFImageDescription] as? String == said,
+          "the film and the paper, in the user comment and the description: \(exif[kCGImagePropertyExifUserComment] ?? "-")")
+
+    // A camera's own comment and description stay, the film after the comment.
+    let commented = dir.appendingPathComponent("commented.jpg")
+    try writePhoto(commented, width: 300, height: 200, properties: [
+        kCGImagePropertyTIFFDictionary: [kCGImagePropertyTIFFImageDescription: "Harbour, early"],
+        kCGImagePropertyExifDictionary: [kCGImagePropertyExifUserComment: "Roll 12"],
+    ])
+    m.open(url: commented)
+    _ = await settle(m)
+    var bw = m.recipe
+    bw = bw.loadingFilm("kodak_tri_x_400")
+    bw.lensFilter = "red"
+    m.recipe = bw
+    _ = await settle(m)
+    for format in [Exporter.Format.jpeg, .tiff16, .png] {
+        let out = dir.appendingPathComponent("commented print.\(format.utType.preferredFilenameExtension ?? "img")")
+        await m.export(to: out, format: format)
+        let meta = RawLoader.metadata(of: out) ?? [:]
+        let exif = meta[kCGImagePropertyExifDictionary] as? [CFString: Any] ?? [:]
+        let tiff = meta[kCGImagePropertyTIFFDictionary] as? [CFString: Any] ?? [:]
+        let comment = exif[kCGImagePropertyExifUserComment] as? String ?? "-"
+        let iptc = meta[kCGImagePropertyIPTCDictionary] as? [CFString: Any] ?? [:]
+        let description = tiff[kCGImagePropertyTIFFImageDescription] ?? iptc[kCGImagePropertyIPTCCaptionAbstract]
+        let filter = (try? PackLibrary.shared.pack("kodak_tri_x_400"))?.lensFilter("red")?.designation ?? "?"
+        check(comment.hasPrefix("Roll 12\nFilm: Kodak Tri-X 400; camera filter: \(filter); paper: ")
+              && description as? String == "Harbour, early"
+              && tiff[kCGImagePropertyTIFFSoftware] as? String == "FLX Film Lab",
+              "\(format.utType.preferredFilenameExtension ?? "?"): the camera's comment and description stay, the film, its filter and the paper follow: \(comment.replacingOccurrences(of: "\n", with: " / "))")
+    }
+    var slide = m.recipe.loadingFilm("fujifilm_provia_100f")
+    slide.scanFilm = nil
+    check(Exporter.Provenance(recipe: slide).description == "Film: Fujifilm Provia 100F; viewed on a light table",
+          "a slide viewed as one names the light table, not a paper: \(Exporter.Provenance(recipe: slide).description)")
 
     // A manual lens Nikon names only in its maker notes, and the GPS block a
     // Leica M writes without a fix.
@@ -635,6 +674,336 @@ func run() async throws {
           "and a size the app does not offer goes back to 2560")
 }
 
+/// The 8-bit pixels of `image` in `window` (in its pixels, top row first),
+/// drawn into an sRGB context.
+func pixels(_ image: CGImage, window: CGRect) -> [UInt8] {
+    let w = Int(window.width), h = Int(window.height)
+    var buffer = [UInt8](repeating: 0, count: w * h * 4)
+    let ctx = CGContext(data: &buffer, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                        space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                        bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+    ctx.interpolationQuality = .none
+    ctx.draw(image, in: CGRect(x: -window.minX, y: -(CGFloat(image.height) - window.maxY),
+                               width: CGFloat(image.width), height: CGFloat(image.height)))
+    return buffer
+}
+
+@MainActor
+func loupe() async throws {
+    print("the loupe shows the print at 100%, as the export has it")
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("flx-apptest-loupe-\(getpid())")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    // Larger than the preview, with fine texture and points of light, so the
+    // loupe's part has grain, halation and couplers reaching across it.
+    let w = 4600, h = 3000
+    var px = [Float](repeating: 1, count: w * h * 4)
+    var state: UInt32 = 99
+    for y in 0..<h { for x in 0..<w {
+        state = state &* 1664525 &+ 1013904223
+        let n = Float(state >> 8) / 16777216
+        let v = 0.03 + 0.4 * Float(x) / Float(w) + ((x / 37 + y / 53) % 2 == 0 ? 0.1 : 0) + 0.05 * n
+        let o = (y * w + x) * 4
+        px[o] = v * 1.1; px[o + 1] = v; px[o + 2] = v * 0.9
+        if (x - 1400) * (x - 1400) + (y - 1800) * (y - 1800) < 64 { px[o] = 1; px[o + 1] = 1; px[o + 2] = 1 }
+    }}
+    let big = dir.appendingPathComponent("big.tif")
+    try Exporter.write(linear: px, width: w, height: h, to: big, format: .tiff16, colorSpace: "sRGB")
+
+    let m = DocumentModel(presetStore: PresetStore(directory: dir.appendingPathComponent("presets")),
+                          defaults: UserDefaults(suiteName: "flx-apptest-loupe-\(getpid())")!)
+    m.open(url: big)
+    let settled = await settle(m)
+    check(settled && size(m.displayImage).hasPrefix("2560x"),
+          "a picture larger than the preview (\(size(m.displayImage)) on screen)")
+    m.setLoupeSize(width: 400, height: 300)
+    m.loupeOn = true
+    check(await waitUntil(timeout: 60) { !m.loupeBusy && m.loupeImage != nil } && size(m.loupeImage) == "400x300",
+          "the loupe reads it at full size and shows a part of it (\(size(m.loupeImage)))")
+
+    func compare(_ name: String, centre: CGPoint) async throws {
+        m.moveLoupe(to: centre)
+        _ = await settle(m)
+        _ = await waitUntil(timeout: 30) { !m.loupeBusy }
+        let out = dir.appendingPathComponent("export \(name).tif")
+        await m.export(to: out, format: .tiff16)
+        guard let shown = m.loupeImage,
+              let file = CGImageSourceCreateWithURL(out as CFURL, nil).flatMap({ CGImageSourceCreateImageAtIndex($0, 0, nil) })
+        else { check(false, "\(name): the loupe and the export both made a picture"); return }
+        let ow = file.width, oh = file.height
+        let x = min(max(Int((centre.x * CGFloat(ow) - 200).rounded()), 0), ow - 400)
+        let y = min(max(Int((centre.y * CGFloat(oh) - 150).rounded()), 0), oh - 300)
+        let a = pixels(shown, window: CGRect(x: 0, y: 0, width: 400, height: 300))
+        let b = pixels(file, window: CGRect(x: x, y: y, width: 400, height: 300))
+        var worst = 0, mean = 0.0
+        for i in 0..<a.count where i % 4 != 3 {
+            let d = abs(Int(a[i]) - Int(b[i]))
+            worst = max(worst, d)
+            mean += Double(d)
+        }
+        check(worst <= 1, String(format: "%@: the loupe's pixels are the export's there, to %d of 255 (mean %.3f)",
+                                 name, worst, mean / Double(a.count * 3 / 4)))
+    }
+    try await compare("as it comes", centre: CGPoint(x: 0.31, y: 0.6))
+    try await compare("at a corner", centre: CGPoint(x: 0.99, y: 0.02))
+    var shaped = m.recipe
+    var g = FrameGeometry()
+    g.turn(clockwise: false)
+    g.setStraighten(-1.8)
+    shaped.geometry = g
+    var curves = PrintCurves()
+    curves.rgb = [CurvePoint(x: 0, y: 0.03), CurvePoint(x: 0.4, y: 0.33), CurvePoint(x: 0.75, y: 0.82), CurvePoint(x: 1, y: 1)]
+    shaped.curves = curves
+    m.recipe = shaped
+    try await compare("turned, levelled and curved", centre: CGPoint(x: 0.45, y: 0.4))
+    m.loupeOn = false
+    check(m.loupeImage == nil && !m.loupeBusy, "put away, the loupe lets the picture at full size go")
+}
+
+/// ⌘Z and ⇧⌘Z, through the model as the Edit menu drives it: one step per
+/// gesture, a double-click reset joined to its clicks, named resets and
+/// pastes, a history for each image, and a cancelled crop leaving none.
+@MainActor
+func undoRedo() async throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("flx-undotest-\(getpid())")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let suite = "flx-undotest-\(getpid())"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer {
+        try? FileManager.default.removeItem(at: dir)
+        defaults.removePersistentDomain(forName: suite)
+    }
+    let a = dir.appendingPathComponent("A.tif"), b = dir.appendingPathComponent("B.tif")
+    try writeImage(a, width: 600, height: 400, colour: (1.2, 1.0, 0.8))
+    try writeImage(b, width: 300, height: 450, colour: (0.8, 1.0, 1.2))
+    let m = DocumentModel(presetStore: PresetStore(directory: dir.appendingPathComponent("Presets")),
+                          defaults: defaults)
+    var mouseDown = false
+    m.history.mouseIsDown = { mouseDown }
+    m.history.joinInterval = 0.3
+    /// After an action, as long as the app's run loop takes to close its step.
+    func pause(_ ms: Int = 150) async { try? await Task.sleep(for: .milliseconds(ms)) }
+    /// A slider dragged through `values`, from press to release, as the
+    /// inspector's binding sets it.
+    func drag(_ values: [Double], _ set: (inout Recipe, Double) -> Void) async {
+        mouseDown = true
+        for v in values {
+            var r = m.recipe
+            set(&r, v)
+            m.recipe = r
+            await pause(40)
+        }
+        mouseDown = false
+        await pause()
+    }
+    let names = { m.history.stacks.undo.map(\.name) }
+
+    print("undo and redo")
+    m.open(url: a)
+    check(await settle(m) && m.history.undoName == nil && m.history.redoName == nil,
+          "an image opens with nothing to undo or redo")
+
+    mouseDown = true
+    for ev in [0.3, 0.6, 0.9] {
+        var r = m.recipe
+        r.exposureEV = ev
+        r.autoExposure = false
+        m.recipe = r
+        await pause(40)
+    }
+    check(m.history.undoName == nil, "while the slider is held, the step stays open")
+    mouseDown = false
+    await pause()
+    check(names() == ["Exposure"], "a slider dragged from press to release is one step: \(names())")
+    m.history.undo()
+    check(m.recipe.exposureEV == 0 && m.recipe.autoExposure && m.history.undoName == nil
+              && m.history.redoName == "Exposure",
+          "⌘Z puts it back where it was before the drag, its auto on again")
+    check(await settle(m) && m.resolvedRecipe?.autoExposure == true, "and the print follows")
+    m.history.redo()
+    check(m.recipe.exposureEV == 0.9 && !m.recipe.autoExposure && m.history.undoName == "Exposure"
+              && m.history.redoName == nil, "⇧⌘Z does it again")
+
+    m.recipe.grainEnabled = false
+    await pause()
+    m.recipe.halationEnabled = false
+    await pause()
+    check(names() == ["Exposure", "Grain", "Halation"], "each click is a step of its own: \(names())")
+
+    // A double-click on a slider: the slider takes both clicks as moves, and
+    // the reset follows the second.
+    await drag([0.2]) { $0.brightness = $1 }
+    await drag([0.25]) { $0.brightness = $1 }
+    m.recipe.brightness = 0
+    await pause()
+    check(names() == ["Exposure", "Grain", "Halation"],
+          "a double-click that resets a slider already at its default leaves nothing to undo")
+    await drag([0.3, 0.4]) { $0.brightness = $1 }
+    try? await Task.sleep(for: .milliseconds(400))
+    await drag([0.2]) { $0.brightness = $1 }
+    await drag([0.25]) { $0.brightness = $1 }
+    m.recipe.brightness = 0
+    await pause()
+    check(names() == ["Exposure", "Grain", "Halation", "Brightness", "Brightness"]
+              && m.history.stacks.undo.last?.before.recipe.brightness == 0.4,
+          "a double-click reset is one step with its clicks: \(names())")
+    m.history.undo()
+    check(m.recipe.brightness == 0.4, "so ⌘Z takes the slider back to where it was before both clicks")
+    m.history.redo()
+
+    m.turn(clockwise: true)
+    m.history.finish()
+    m.turn(clockwise: true)
+    await pause()
+    check(names().suffix(2) == ["Turn", "Turn"], "two quick turns by key are two steps: \(names().suffix(2))")
+    m.history.undo()
+    check(m.recipe.geometry.quarterTurns == 1, "so ⌘Z undoes one of them")
+    m.history.undo()
+    m.resetTone()
+    check(m.history.undoName == "Brightness", "a reset that changes nothing leaves nothing to undo")
+    m.recipe.highlights = -0.2
+    await pause()
+    m.resetTone()
+    check(m.history.undoName == "Reset Tone" && m.recipe.highlights == 0 && !m.recipe.grainEnabled,
+          "a reset is a step of its own, called by its name")
+    m.resetExposure()
+    check(names().suffix(2) == ["Reset Tone", "Reset Exposure"] && m.recipe.autoExposure,
+          "Reset Exposure is one step though it sets four things")
+    m.history.undo()
+    check(m.recipe.exposureEV == 0.9 && !m.recipe.autoExposure, "and one ⌘Z undoes all four")
+
+    m.whiteBalance = .custom
+    await pause(400)
+    mouseDown = true
+    m.customTemperature = 4500
+    await pause(40)
+    m.customTemperature = 4000
+    mouseDown = false
+    await pause()
+    check(names().suffix(2) == ["White Balance", "White Balance"],
+          "choosing a white balance and dragging its temperature are two steps")
+    _ = await settle(m)
+    m.history.undo()
+    m.history.undo()
+    check(m.whiteBalance == .filmReference && m.customTemperature == 5500,
+          "undone, the white balance is the film's again")
+    check(await settle(m) && m.whiteBalanceSummary.hasPrefix("D55") && m.displayImage != nil,
+          "and the picture is decoded for it again: \(m.whiteBalanceSummary)")
+    check(m.history.redoName == "White Balance", "with both to redo")
+    m.recipe.snap = 0.1
+    await pause()
+    check(m.history.redoName == nil && m.history.undoName == "Midtone Contrast",
+          "a new change after undoing leaves nothing to redo: \(m.history.undoName ?? "-")")
+
+    var mask = LocalMask()
+    mask.shape = .oval
+    mask.points = [CGPoint(x: 0.5, y: 0.5), CGPoint(x: 0.7, y: 0.5), CGPoint(x: 0.5, y: 0.7)]
+    m.recipe.masks.append(mask)
+    await pause()
+    mouseDown = true
+    for dx in [0.01, 0.02, 0.05] {
+        m.recipe.masks[0].points[1].x = 0.7 + dx
+        await pause(40)
+    }
+    mouseDown = false
+    await pause()
+    m.recipe.masks.removeAll()
+    await pause()
+    check(names().suffix(3) == ["Add Mask", "Mask", "Delete Mask"], "masks: \(names().suffix(3))")
+    m.history.undo()
+    check(m.recipe.masks.first?.points[1].x == 0.7 + 0.05, "undoing the delete brings the mask back as it was")
+    m.history.undo()
+    check(m.recipe.masks.first?.points[1].x == 0.7, "undoing the drag puts its point back")
+    m.history.undo()
+    check(m.recipe.masks.isEmpty, "and undoing the add takes it away")
+    m.history.redo()
+    m.history.redo()
+    m.history.redo()
+
+    mouseDown = true
+    m.recipe.toe = 0.2
+    m.history.undo()
+    mouseDown = false
+    check(m.recipe.toe == 0 && m.history.redoName == "Blacks", "⌘Z during a drag undoes the drag so far")
+    m.history.redo()
+
+    defaults.set(Vocabulary.darkroom.rawValue, forKey: "vocabulary")
+    m.recipe.density = 0.1
+    await pause()
+    check(m.history.undoName == "Density", "the Edit menu uses the darkroom names when the controls do")
+    defaults.set(Vocabulary.photographic.rawValue, forKey: "vocabulary")
+    m.recipe.density = 0.2
+    await pause(400)
+    m.recipe.density = 0.3
+    await pause()
+    check(m.history.undoName == "Print Exposure", "and the photographic ones otherwise")
+
+    print("undo with several images")
+    let aSteps = names()
+    m.open(url: b)
+    check(await settle(m) && m.fileURL == b && m.history.undoName == nil, "B starts with nothing to undo")
+    m.recipe.shadows = 0.3
+    await pause()
+    m.open(url: a)
+    check(await settle(m) && names() == aSteps, "A keeps its own history: \(names().count) steps")
+    m.history.undo()
+    check(m.recipe.density == 0.2, "and ⌘Z on A undoes A's last change")
+    m.history.redo()
+    m.copySettings()
+    m.open(url: b)
+    check(await settle(m) && names() == ["Shadows"], "B keeps its own: \(names())")
+    m.pasteSettings()
+    check(await settle(m) && m.history.undoName == "Paste Settings" && m.recipe.density == 0.3,
+          "a paste is one step, Paste Settings")
+    m.history.undo()
+    check(await settle(m) && m.recipe.density == 0 && m.recipe.shadows == 0.3 && m.recipe.autoExposure
+              && m.whiteBalance == .filmReference,
+          "and undoing it gives B its own settings back")
+
+    print("undo while cropping")
+    m.open(url: a)
+    _ = await settle(m)
+    m.recipe.glareEnabled = false
+    await pause()
+    m.history.undo()
+    let last = m.history.undoName, redo = m.history.redoName
+    m.isCropping = true
+    m.setStraighten(2)
+    await pause()
+    m.editGeometry { g, f in g.setCrop(CGRect(x: 100, y: 50, width: 300, height: 200), frame: f) }
+    await pause()
+    check(names().suffix(2) == ["Straighten", "Crop"], "each change to the crop is a step: \(names().suffix(2))")
+    m.history.undo()
+    check(m.recipe.geometry.straighten == 2 && m.recipe.geometry.crop == nil && m.isCropping,
+          "⌘Z while cropping undoes the last change to the crop")
+    m.history.redo()
+    m.endCropping(keep: false)
+    check(m.recipe.geometry == .identity && m.history.undoName == last && m.history.redoName == redo,
+          "a cancelled crop leaves no steps behind: \(last ?? "-") to undo and \(redo ?? "-") to redo, as before")
+    m.isCropping = true
+    m.setStraighten(1.5)
+    await pause()
+    m.recipe.shadows = 0.2
+    await pause()
+    m.endCropping(keep: false)
+    check(m.recipe.geometry == .identity && m.recipe.shadows == 0.2 && m.history.undoName == "Cancel Crop",
+          "with another change made meanwhile, going back is a step of its own")
+    m.history.undo()
+    check(m.recipe.geometry.straighten == 1.5, "which ⌘Z undoes")
+    m.history.undo()
+    m.history.undo()
+    m.isCropping = true
+    m.setStraighten(-1)
+    await pause()
+    m.endCropping(keep: true)
+    check(m.history.undoName == "Straighten", "Done keeps the crop's steps")
+    m.history.undo()
+    check(await settle(m) && m.recipe.geometry == .identity && size(m.displayImage) == "600x400",
+          "and ⌘Z afterwards undoes them: \(size(m.displayImage))")
+}
+
+try await undoRedo()
+try await loupe()
 try await run()
 print(failures == 0 ? "\nall app checks passed" : "\n\(failures) app check(s) failed")
 exit(failures == 0 ? 0 : 1)

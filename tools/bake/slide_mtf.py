@@ -1,5 +1,6 @@
 """Each slide film's sharpness, and that of the colour negatives whose sheets
-plot an MTF (Vericolor III, EXR 50D and 200T), from its own datasheet's MTF.
+plot an MTF (Vericolor III, EXR 50D and 200T, Konica's CENTURIA SUPER 100 and
+1600 and IMPRESA 50), from its own datasheet's MTF.
 
 Sharpness in the engine comes from two of agx's stages (`bw_mtf.py` works
 through both): light scattering in the emulsion blurs, and the DIR couplers'
@@ -128,6 +129,17 @@ EXR_200T = _log_plot("Kodak EXR 200T 5293-1999.pdf", 2, (362.6, 271.1, 554.8, 41
                       (352.94, 10), (362.67, 7), (372.4, 5), (385.85, 3), (397.87, 2), (416.5, 1)))
 
 
+# Konica's CENTURIA SUPER 100 and 1600 (2002): one curve each, through a
+# visual filter, a single Bezier on log rules read off their gridlines.
+# IMPRESA 50's (1998) is a bitmap, read by `sheet_readers.impresa_50_mtf`.
+CENTURIA_SUPER_100 = _log_plot("konica_csuper100.pdf", 2, (410.4, 214.4, 566.1, 390.3),
+                               ((410.4, 1), (460.4, 5), (481.4, 10), (530.7, 50), (552.0, 100)),
+                               ((248.6, 100), (269.6, 50), (319.4, 10), (340.2, 5), (390.3, 1)))
+CENTURIA_SUPER_1600 = _log_plot("konica_csuper1600.pdf", 1, (410.4, 216.3, 566.2, 392.4),
+                                ((410.4, 1), (460.4, 5), (481.4, 10), (530.8, 50), (552.1, 100)),
+                                ((250.5, 100), (271.5, 50), (321.3, 10), (342.1, 5), (392.4, 1)))
+
+
 def _green_of_three(plot: VectorPlot, polylines: bool) -> np.ndarray:
     return _as_curve(by_order(plot, ("B", "G", "R"), at_x=_L(50), polylines=polylines)["G"])
 
@@ -198,6 +210,9 @@ SHEET_MTF = {
     "kodak_ektachrome_100": ektachrome_100_green,
     **{stock: (lambda plot=plot: _single(plot)) for stock, plot in KODACHROME.items()},
     "kodak_vericolor_iii_160": vericolor_iii,
+    "konica_centuria_super_100": lambda: _single(CENTURIA_SUPER_100),
+    "konica_centuria_super_1600": lambda: _single(CENTURIA_SUPER_1600),
+    "konica_impresa_50": lambda: _as_curve(np.log10(__import__("sheet_readers").impresa_50_mtf())),
     "kodak_exr_50d": lambda: _green_of_three(EXR_50D, polylines=True),
     "kodak_exr_200t": lambda: _green_of_three(EXR_200T, polylines=False),
     # the BBC's film-only measurement of 5251, one curve for the film

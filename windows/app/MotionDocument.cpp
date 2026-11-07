@@ -1,7 +1,9 @@
 #include "MotionDocument.h"
+#include "EditNames.h"
 
 #include "AppSettings.h"
 
+#include <QApplication>
 #include <QCoreApplication>
 #include <QFile>
 #include <QFileInfo>
@@ -85,6 +87,19 @@ MotionDocument::MotionDocument(const AppData &data, QObject *parent)
     m_ticker.setTimerType(Qt::PreciseTimer);
     connect(&m_ticker, &QTimer::timeout, this, &MotionDocument::tick);
     m_statusClock.start();
+    m_history = std::make_unique<EditHistory<MotionLook>>(
+        this, [this] { return grade(); },
+        [this](const MotionLook &g) {
+            MotionLook next = g;
+            next.exportSettings = m_look.exportSettings;
+            setLook(next);
+        },
+        [this](const MotionLook &a, const MotionLook &b) {
+            const ProfilePack *film = tryPack(*m_packs, b.recipe.filmStock);
+            return motionChangeName(a, b, film && film->isMonochrome());
+        },
+        [this] { emit changed(); });
+    m_history->joinSeconds = QApplication::doubleClickInterval() / 1000.0;
 }
 
 MotionDocument::~MotionDocument()
@@ -108,6 +123,7 @@ void MotionDocument::runOnEngine(std::function<void()> work)
 
 void MotionDocument::setLook(const MotionLook &look)
 {
+    m_history->note([this] { return grade(); });
     const MotionLook old = m_look;
     m_look = look;
     lookDidChange(old);
@@ -213,35 +229,43 @@ void MotionDocument::selectFilm(const std::string &stock)
 
 void MotionDocument::resetExposure()
 {
-    MotionLook next = m_look;
-    next.recipe.exposureEV = 0;
-    next.recipe.autoExposure = MotionLook::initial().recipe.autoExposure;
-    setLook(next);
+    m_history->named("Reset Exposure", [&] {
+        MotionLook next = m_look;
+        next.recipe.exposureEV = 0;
+        next.recipe.autoExposure = MotionLook::initial().recipe.autoExposure;
+        setLook(next);
+    });
 }
 
 void MotionDocument::resetTone()
 {
-    MotionLook next = m_look;
-    next.recipe.brightness = 0;
-    next.recipe.grade = defaultGrade();
-    next.recipe.shadows = 0;
-    next.recipe.highlights = 0;
-    setLook(next);
+    m_history->named("Reset Tone", [&] {
+        MotionLook next = m_look;
+        next.recipe.brightness = 0;
+        next.recipe.grade = defaultGrade();
+        next.recipe.shadows = 0;
+        next.recipe.highlights = 0;
+        setLook(next);
+    });
 }
 
 void MotionDocument::resetColour()
 {
-    MotionLook next = m_look;
-    next.recipe.filterShiftY = 0;
-    next.recipe.filterShiftM = 0;
-    setLook(next);
+    m_history->named("Reset Colour", [&] {
+        MotionLook next = m_look;
+        next.recipe.filterShiftY = 0;
+        next.recipe.filterShiftM = 0;
+        setLook(next);
+    });
 }
 
 void MotionDocument::resetEffects()
 {
-    MotionLook next = m_look;
-    next.effects = MotionLook::initial().effects;
-    setLook(next);
+    m_history->named("Reset Effects", [&] {
+        MotionLook next = m_look;
+        next.effects = MotionLook::initial().effects;
+        setLook(next);
+    });
 }
 
 void MotionDocument::setShowLog(bool on)
@@ -291,6 +315,17 @@ void MotionDocument::open(const QString &path)
 void MotionDocument::adopt(const ClipInfo &info, const QString &path, int id)
 {
     pause();
+    if (path != m_clipPath) {
+        // what was done before the first clip came is not any clip's
+        EditHistory<MotionLook>::Stacks steps;
+        if (const auto it = m_histories.find(path); it != m_histories.end()) {
+            steps = std::move(it->second);
+            m_histories.erase(it);
+        }
+        steps = m_history->swap(std::move(steps));
+        if (m_clip)
+            m_histories[m_clipPath] = std::move(steps);
+    }
     if (m_clip)
         m_edits[m_clipPath] = m_look;
     // the clip first: storing the look files it under the clip on screen,

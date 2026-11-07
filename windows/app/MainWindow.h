@@ -67,6 +67,7 @@ private:
     Inspector *m_inspector;
     MotionCanvas *m_motionCanvas;
     MotionInspector *m_motionInspector;
+    QAction *m_undo, *m_redo, *m_loupe;
     QAction *m_copy, *m_paste, *m_export, *m_exportMenu, *m_exportLUT, *m_crop, *m_turnLeft, *m_turnRight;
     QAction *m_logFootage, *m_stillsMode, *m_motionMode, *m_editMenu;
     QMenu *m_presets;

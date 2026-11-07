@@ -112,6 +112,26 @@ int main(int argc, char **argv)
         for (int i = 0; i < repeats; ++i)
             fastest = std::min(fastest, renderer.render(nullptr));
 
+        // The histogram the preview measures on the GPU (histogram_rgb) has
+        // to count the 8-bit values the screen's image holds.
+        renderer.setMeasuresHistogram(true);
+        renderer.load(setup);
+        std::vector<uint8_t> screen;
+        FilmRenderer::Histogram histogram;
+        renderer.render(&screen, nullptr, &histogram);
+        std::vector<uint32_t> counted(768, 0);
+        for (size_t i = 0; i + 3 < screen.size(); i += 4)
+            for (int c = 0; c < 3; ++c)
+                counted[size_t(c) * 256 + screen[i + size_t(c)]]++;
+        size_t differ = 0;
+        for (size_t i = 0; i < 768; ++i)
+            differ += histogram.after.size() == 768 && histogram.after[i] == counted[i] ? 0 : 1;
+        std::printf("histogram: %s%s\n",
+                    differ == 0 ? "the screen image's own counts" : "differs in bins: ",
+                    differ == 0 ? "" : std::to_string(differ).c_str());
+        if (setup.printCurves.empty() != histogram.before.empty())
+            throw std::runtime_error("the histogram before the curves is missing, or there without curves");
+
         const QDir out(QDir(setup.directory).filePath("port-" + backend + (blur == "measured" ? "-measured" : "")));
         if (!out.mkpath("."))
             throw std::runtime_error("cannot make " + out.path().toStdString());

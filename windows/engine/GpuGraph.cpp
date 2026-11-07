@@ -123,6 +123,7 @@ QRhiTexture *GpuGraph::texture(QRhiTexture::Format format, QSize size, bool load
     }
     auto t = std::unique_ptr<QRhiTexture>(
         m_rhi->newTexture(format, size, 1, loadStore ? QRhiTexture::UsedWithLoadStore : QRhiTexture::Flags()));
+    noteTexture("graph", size, format);
     if (!t->create())
         fail(QStringLiteral("cannot make a texture"));
     m_textureCache[i] = {std::move(t), true};
@@ -228,6 +229,7 @@ QRhiTexture *GpuGraph::applyEffects(QRhiTexture *print, const EffectsParams &e, 
         m_effectResources.clear();
         auto make = [&](QRhiTexture::Format format) {
             QRhiTexture *t = m_rhi->newTexture(format, size, 1, QRhiTexture::UsedWithLoadStore);
+            noteTexture("effects", size, format);
             m_effectResources.emplace_back(t);
             if (!t->create())
                 fail(QStringLiteral("cannot make a texture for the effects"));
@@ -290,7 +292,8 @@ QRhiTexture *GpuGraph::applyEffects(QRhiTexture *print, const EffectsParams &e, 
     return m_effectOut;
 }
 
-double GpuGraph::run(const std::vector<std::pair<QRhiTexture *, QRhiReadbackResult *>> &readbacks, size_t first)
+double GpuGraph::run(const std::vector<std::pair<QRhiTexture *, QRhiReadbackResult *>> &readbacks, size_t first,
+                     const std::vector<std::pair<QRhiBuffer *, QRhiReadbackResult *>> &buffers)
 {
     QElapsedTimer clock;
     clock.start();
@@ -320,10 +323,12 @@ double GpuGraph::run(const std::vector<std::pair<QRhiTexture *, QRhiReadbackResu
         cb->dispatch((n.width() + kGroup - 1) / kGroup, (n.height() + kGroup - 1) / kGroup, 1);
     }
     QRhiResourceUpdateBatch *readback = nullptr;
-    if (!readbacks.empty()) {
+    if (!readbacks.empty() || !buffers.empty()) {
         readback = m_rhi->nextResourceUpdateBatch();
         for (const auto &[texture, result] : readbacks)
             readback->readBackTexture(QRhiReadbackDescription(texture), result);
+        for (const auto &[buffer, result] : buffers)
+            readback->readBackBuffer(buffer, 0, buffer->size(), result);
     }
     cb->endComputePass(readback);
     m_rhi->endOffscreenFrame();

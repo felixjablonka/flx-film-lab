@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AudioPlayback.h"
+#include "EditHistory.h"
 #include "MotionEngine.h"
 #include "RenderEngine.h"
 #include "SetupBuilder.h"
@@ -104,6 +105,9 @@ public:
     void resetTone();
     void resetColour();
     void resetEffects();
+    // Undo and redo for the clip on screen (EditHistory): one step per
+    // gesture, each clip with its own history for the session.
+    EditHistory<MotionLook> &history() { return *m_history; }
 
     // MARK: playback (PlaybackController)
     bool isPlaying() const { return m_playing; }
@@ -173,6 +177,16 @@ private:
     bool m_isMetering = false;
     bool m_showLog = false;
     std::map<QString, MotionLook> m_edits;
+    std::unique_ptr<EditHistory<MotionLook>> m_history;
+    // every other clip's undo history; the one on screen's is m_history's
+    std::map<QString, EditHistory<MotionLook>::Stacks> m_histories;
+    // a look without how its files are written, which is a preference
+    MotionLook grade() const
+    {
+        MotionLook g = m_look;
+        g.exportSettings = {};
+        return g;
+    }
     // each clip's metered highlight, by how it was read: decoding frames for
     // it is the slow part, the exposure for a stock is arithmetic
     std::map<QString, std::pair<InputSettings, std::optional<double>>> m_highlights;

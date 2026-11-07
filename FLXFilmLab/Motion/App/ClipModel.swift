@@ -13,11 +13,15 @@ import CoreVideo
 /// screen stays until the new one has loaded, each clip's grade is remembered
 /// for the session, and a clip opened for the first time keeps the look
 /// (film, paper, film character, effects, how footage is read and written)
-/// while exposure, tone and colour start fresh.
+/// while exposure, tone and colour start fresh. Each clip keeps its own undo
+/// history for the session too (`history`).
 @MainActor
 final class ClipModel: ObservableObject {
     @Published var look: MotionLook {
-        didSet { lookDidChange(from: oldValue) }
+        didSet {
+            history.note { Self.grade(oldValue) }
+            lookDidChange(from: oldValue)
+        }
     }
     @Published private(set) var clip: ClipInfo?
     @Published private(set) var isOpening = false
@@ -53,6 +57,9 @@ final class ClipModel: ObservableObject {
     let preview: PreviewRenderer
     private let bakeEngine = LookBakeEngine()
     private var edits: [URL: MotionLook] = [:]
+    /// The undo history of each clip that has been on screen, but the one
+    /// that is: that one's is `history`'s.
+    private var histories: [URL: EditHistory<MotionLook>.Stacks] = [:]
     private var isBaking = false
     private var bakeAgain = false
     private var exporter: ClipExporter?
@@ -118,6 +125,32 @@ final class ClipModel: ObservableObject {
     var paperName: String { (try? PackLibrary.shared.pack(look.recipe.printStock))?.name ?? look.recipe.printStock }
     var isExporting: Bool { exportProgress != nil }
 
+    // MARK: Undo
+
+    /// Undo and redo for the clip on screen (`EditHistory`): one step per
+    /// gesture, each clip with its own history for the session. How files are
+    /// written is a preference, not part of a grade, so it is left out.
+    lazy var history = EditHistory<MotionLook>(
+        read: { [unowned self] in Self.grade(self.look) },
+        write: { [unowned self] grade in
+            var look = grade
+            look.export = self.look.export
+            self.look = look
+        },
+        describe: { a, b in
+            var names = EditNames.recipe(a.recipe, b.recipe, vocabulary: .photographic)
+            if a.effects != b.effects { names.append("Effects") }
+            if a.input != b.input { names.append("Log Input") }
+            return EditNames.title(names)
+        })
+
+    /// A look without how its files are written.
+    private static func grade(_ look: MotionLook) -> MotionLook {
+        var grade = look
+        grade.export = ExportSettings()
+        return grade
+    }
+
     // MARK: Look
 
     private func lookDidChange(from old: MotionLook) {
@@ -182,8 +215,10 @@ final class ClipModel: ObservableObject {
     }
 
     func resetExposure() {
-        look.recipe.exposureEV = 0
-        look.recipe.autoExposure = MotionLook.initial.recipe.autoExposure
+        history.named("Reset Exposure") {
+            look.recipe.exposureEV = 0
+            look.recipe.autoExposure = MotionLook.initial.recipe.autoExposure
+        }
     }
 
     // MARK: Metering
@@ -222,18 +257,22 @@ final class ClipModel: ObservableObject {
     }
 
     func resetTone() {
-        look.recipe.brightness = 0
-        look.recipe.grade = look.recipe.defaultGrade
-        look.recipe.shadows = 0
-        look.recipe.highlights = 0
+        history.named("Reset Tone") {
+            look.recipe.brightness = 0
+            look.recipe.grade = look.recipe.defaultGrade
+            look.recipe.shadows = 0
+            look.recipe.highlights = 0
+        }
     }
 
     func resetColour() {
-        look.recipe.filterShiftY = 0
-        look.recipe.filterShiftM = 0
+        history.named("Reset Colour") {
+            look.recipe.filterShiftY = 0
+            look.recipe.filterShiftM = 0
+        }
     }
 
-    func resetEffects() { look.effects = MotionLook.initial.effects }
+    func resetEffects() { history.named("Reset Effects") { look.effects = MotionLook.initial.effects } }
 
     // MARK: Clips
 
@@ -244,6 +283,11 @@ final class ClipModel: ObservableObject {
             defer { isOpening = false }
             do {
                 let info = try await ClipInfo.load(url)
+                if clip?.url != url {
+                    // What was done before the first clip came is not any clip's.
+                    let steps = history.swap(for: histories.removeValue(forKey: url) ?? .init())
+                    if let clip { histories[clip.url] = steps }
+                }
                 if let clip { edits[clip.url] = look }
                 // The clip first: assigning the look files it under the clip
                 // on screen, which has to be the new one by then.
@@ -251,7 +295,7 @@ final class ClipModel: ObservableObject {
                 var next = edits[url] ?? look.carryingLook()
                 // How files are written is a preference, not part of a grade.
                 next.export = look.export
-                look = next
+                history.unrecorded { look = next }
                 reading = nil
                 meteredExposure = nil
                 meter()
@@ -364,7 +408,7 @@ final class ClipModel: ObservableObject {
         let lutInput = format.exportInput(fullRange: fullRange)
         let title = "\(filmName) on \(paperName)"
         var comments = [
-            "Made with FLX Film Lab (Motion): \(filmName) printed on \(paperName)",
+            "Made with \(Exporter.Provenance.software) (Motion): \(filmName) printed on \(paperName)",
             String(format: "Exposure %+.2f EV, brightness %+.3f, grade R%.0f, shadows %+.2f, highlights %+.2f",
                    recipe.exposureEV, recipe.brightness, recipe.grade, recipe.shadows, recipe.highlights),
             String(format: "Filtration on top of neutral: %+.0fY %+.0fM", recipe.filterShiftY, recipe.filterShiftM),

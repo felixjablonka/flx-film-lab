@@ -62,6 +62,11 @@ private:
     PointD fromView(QPointF v) const;           // and back, kept near the frame
     std::vector<PointD> selectedHandles(std::vector<int> *kinds = nullptr) const;
     void paintMasks(QPainter &p);
+    // MARK: the loupe (LoupeView), over the part of the print it shows
+    static constexpr double kLoupe = 300;          // its side, in the screen's points
+    QRectF loupeRect() const;
+    void paintLoupe(QPainter &p);
+    std::optional<QPointF> m_loupeGrab;             // where in the loupe a drag took hold of it
     int m_handle = -1;                          // the handle being dragged, -1 none
     std::vector<PointD> m_handleOrigin;         // the selected item's points as the drag began
     QPointF m_handleStart;

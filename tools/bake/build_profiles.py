@@ -172,6 +172,13 @@ class Build:
     # With `relative_axis`: mid-grey at Kodak's normal exposure, 10/EI
     # lux-seconds, rather than where a reflected-light meter puts it.
     kodak_normal: bool = False
+    # Each spectral sensitivity continued past its plotted ends at its own
+    # final gradient (`continued_log_sensitivity`), rather than on the donor's
+    # tails, which carry another film's cross-sensitivities.
+    own_tails: bool = False
+    # With `fit_dyes`: why the donor's dyes were the ones refined, for the
+    # datasource, where they were not simply the best fit `--donors` ranks.
+    donor_reason: str | None = None
     created: str = "2026-10-18"
 
 
@@ -465,6 +472,73 @@ BUILDS = [
           sensitivity=VectorPlot(str(SHEETS / "superia_1600_datasheet.pdf"), 5, (340.07, 117.48, 534.64, 288.19),
                                  ((351.43, 400), (408.94, 500), (465.91, 600), (522.85, 700)),
                                  ((231.7, 0.0), (174.51, 1.0)))),
+    # Konica's CENTURIA SUPER 100 and 1600 (2002) and IMPRESA 50 Professional
+    # (1998), each built on its own sheet as far as it goes: curves and spectral
+    # sensitivities (vector for the CENTURIAs, bitmaps for IMPRESA), placement
+    # on the sheet's absolute axis at the rated speed, the spectral density of
+    # D-min as the base and of a midscale neutral, the RMS granularity
+    # (CENTURIA) and the MTF. None plots single dyes. Their dyes are Fujifilm
+    # X-TRA 400's, each moved and stretched until the three add up to the
+    # sheet's neutral. Compared as curves after that refinement, X-TRA 400's
+    # fit all three closely (RMS 0.014, 0.010 and 0.004 density) with small
+    # moves (at most 2.3 nm, 4.1 nm for IMPRESA's magenta; the CENTURIAs'
+    # yellow 15% wider), and the three refined sets come out one family, as one
+    # maker's films should. The sets that fit SUPER 100 closer once refined do
+    # so by larger moves: Kodak's VISION3 with its cyan moved 14-16 nm,
+    # Fujifilm C200 with its yellow 22% wider. Pro 400H moves less and fits
+    # less closely (0.017, 0.012, 0.004). Ranked before refinement, three
+    # different donors had come first (Pro 400H, Ektar 100, X-TRA 400).
+    # Each sheet draws an anti-halation layer: the halation of a modern colour
+    # negative. The sensitivities continue past the plotted ends on their own
+    # gradients, not a donor's: Ektar's green tail would have given 1600's green
+    # layer 7.6% of its daylight exposure beyond the plot, its own 1.5%. All
+    # are metered at their ratings, which their exposure tables keep to (bright
+    # sun f/11 at 1/250 s for 100, at 1/125 s for 50); the CENTURIAs' curves'
+    # own ISO 5800 speeds are 293 and 2650, Konica claiming "the highest level
+    # of actual speed in its class", IMPRESA's 51. Each sheet's midscale
+    # neutral, read through Status M, lands on its own three curves within 0.02
+    # (SUPER 100), 0.08 (1600) and 0.06 (IMPRESA) decades of one exposure. The
+    # CENTURIAs' D-min spectra read 0.05-0.10 denser in Status M than their
+    # curves' own D-min (IMPRESA's agree), a conflict within each sheet: the
+    # profiles keep the curves' densities over the spectra's D-min, and so sit
+    # that much denser than the curves as drawn, which the filtration and print
+    # exposure absorb. Of agx's papers, Kodak Ektacolor Edge prints the
+    # CENTURIAs' greys most neutral (within 2.9 and 1.7 a*b* from three stops
+    # under to two over; Portra Endura 3.8 and 3.4). IMPRESA's worst step is
+    # about the same on four papers (5.2-5.3 on Edge, Crystal Archive Type II
+    # and Supra Endura, 5.7 on Portra Endura); over the whole wedge Edge holds
+    # them closest (RMS 2.9, the others 3.1-3.5), and it is the CENTURIAs'. On
+    # Crystal Archive, the next closest, its shadows print green (a* -5.1 two
+    # stops under); on Edge its greys cross over instead, b* +2.7 a stop under
+    # and -5.3 a stop over, its blue layer drawn 1.31 times as steep as its
+    # green about mid-grey (Kodak's negatives 1.07-1.16).
+    Build("konica_centuria_super_100", "Konica Centuria Super 100", "fujifilm_xtra_400",
+          "konica_csuper100.pdf", 1, 100,
+          "Konica, Konica Color CENTURIA SUPER 100 technical data sheet (2002), CNK-4 (C-41), Status M; its "
+          "spectral sensitivities read at density 1.0 above D-min.",
+          unmix=True, source=True, metered_ei=100, paper="kodak_ektacolor_edge",
+          sheet_base=True, fit_dyes=True, own_tails=True, no_window=True, antihalation="strong",
+          donor_reason="whose dyes, refined, fit all three of Konica's sheets here (CENTURIA SUPER 100 and 1600, "
+                       "IMPRESA 50) closely with small moves, as one family",
+          created="2026-11-06"),
+    Build("konica_centuria_super_1600", "Konica Centuria Super 1600", "fujifilm_xtra_400",
+          "konica_csuper1600.pdf", 2, 1600,
+          "Konica, Konica Color CENTURIA SUPER 1600 technical data sheet (2002), CNK-4 (C-41), Status M; its "
+          "spectral sensitivities read at density 1.0 above D-min.",
+          unmix=True, source=True, metered_ei=1600, paper="kodak_ektacolor_edge",
+          sheet_base=True, fit_dyes=True, own_tails=True, no_window=True, antihalation="strong",
+          donor_reason="whose dyes, refined, fit all three of Konica's sheets here (CENTURIA SUPER 100 and 1600, "
+                       "IMPRESA 50) closely with small moves, as one family",
+          created="2026-11-06"),
+    Build("konica_impresa_50", "Konica Impresa 50", "fujifilm_xtra_400",
+          "konica_IMP50.pdf", 1, 50,
+          "Konica, Konica Color IMPRESA 50 Professional technical data sheet TDSN-501 (1998), CNK-4 (C-41), "
+          "Status M; its spectral sensitivities read at density 1.0 above D-min.",
+          unmix=True, source=True, metered_ei=50, paper="kodak_ektacolor_edge",
+          sheet_base=True, fit_dyes=True, own_tails=True, no_window=True, antihalation="strong",
+          donor_reason="whose dyes, refined, fit all three of Konica's sheets here (CENTURIA SUPER 100 and 1600, "
+                       "IMPRESA 50) closely with small moves, as one family",
+          created="2026-11-06"),
 ]
 
 def raster_curves(pdf: Path, page: int, spec: RasterPlot):
@@ -893,6 +967,27 @@ def own_log_sensitivity(donor_ls: np.ndarray, wl: np.ndarray, traced: dict[str, 
     return out
 
 
+def continued_log_sensitivity(wl: np.ndarray, traced: dict[str, np.ndarray], span: float = 15.0,
+                              floor: float = 3.0) -> np.ndarray:
+    """The sheet's spectral sensitivities, each continued past its plotted ends
+    at the gradient of its own last `span` nm, as far as `floor` decades under
+    its peak, and none (NaN) beyond: the sheet's own data, extrapolated, where
+    `own_log_sensitivity` takes the donor's. Each layer's level is arbitrary
+    here: `balance` sets it."""
+    out = np.full((wl.size, 3), np.nan)
+    for c, name in enumerate("RGB"):
+        curve = traced[name][np.argsort(traced[name][:, 0])]
+        lo, hi = curve[0, 0], curve[-1, 0]
+        inside = (wl >= lo) & (wl <= hi)
+        out[inside, c] = np.interp(wl[inside], curve[:, 0], curve[:, 1])
+        peak = float(curve[:, 1].max())
+        for edge, side, near in ((lo, wl < lo, curve[:, 0] <= lo + span), (hi, wl > hi, curve[:, 0] >= hi - span)):
+            gradient = float(np.polyfit(curve[near, 0], curve[near, 1], 1)[0])
+            tail = np.interp(edge, curve[:, 0], curve[:, 1]) + gradient * (wl[side] - edge)
+            out[side, c] = np.where(tail >= peak - floor, tail, np.nan)
+    return out
+
+
 def balance(profile, window: bool = True) -> np.ndarray:
     """Scale each layer's sensitivity so an 18.4% grey in the stock's own light
     exposes it to exactly 1, through the spectral LUT the app bakes, so
@@ -1290,6 +1385,7 @@ def build_unmixed(build: Build) -> Path:
                   if build.colours is not None else
                   vector_plots.by_position(build.sensitivity, ("B", "G", "R")))
         profile.update_data(log_sensitivity=linear_log_sensitivity(wl, traced) if build.sensitivity_linear
+                            else continued_log_sensitivity(wl, traced) if build.own_tails
                             else own_log_sensitivity(np.asarray(d.log_sensitivity, float), wl, traced))
         balance(profile)
         own.insert(0, "spectral sensitivities")
@@ -1310,6 +1406,9 @@ def build_unmixed(build: Build) -> Path:
                          " The sheet plots relative sensitivity on a linear scale, each layer falling to zero at both "
                          "ends: taken as plotted, with none beyond, and balanced so an 18% grey exposes every layer "
                          "equally." if build.sensitivity_linear else
+                         " Past its plotted ends each sensitivity continues at its own final gradient, to three "
+                         "decades under its peak, and they are balanced so an 18% grey exposes every layer "
+                         "equally." if build.own_tails else
                          " The sheet's sensitivity shapes continue on the donor's tails beyond the plotted range and "
                          "are balanced so an 18% grey exposes every layer equally.")
         base_note = (" The base density is the sheet's own D-min spectral density, base and fog, and the profile "
@@ -1327,8 +1426,9 @@ def build_unmixed(build: Build) -> Path:
                          f"x{q[8]:.3f}.")
         elif build.fit_dyes:
             q = measured["dye fit"]
+            reason = build.donor_reason or "of agx's colour negatives the best fit to the sheet's neutral over D-min"
             dyes_note = (f" The sheet plots no single-dye spectra: the dyes are those of the agx reference profile "
-                         f"'{build.donor}', of agx's colour negatives the best fit to the sheet's neutral over D-min, "
+                         f"'{build.donor}', {reason}, "
                          f"each moved and stretched about its peak until the three add up to it: cyan {q[3]:+.1f} nm "
                          f"x{q[6]:.3f}, magenta {q[4]:+.1f} nm x{q[7]:.3f}, yellow {q[5]:+.1f} nm x{q[8]:.3f}.")
         window_note = (" No spectral adaptation window: agx fits one to each of its own stocks' sensitivities."

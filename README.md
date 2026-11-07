@@ -5,7 +5,7 @@
 FLX Film Lab is a Mac and Windows app for shooting digital photos as if they
 were film.
 
-**Its films are physical models, not presets.** Each of its 41 stocks, whether
+**Its films are physical models, not presets.** Each of its 49 stocks, whether
 colour negative, slide, cinema or black and white, is modelled from its
 manufacturer's datasheet. That means the spectral sensitivity of each layer, its
 characteristic curves and the dyes it forms, with the development couplers that
@@ -33,8 +33,8 @@ it is the same engine in C++ and Qt, with a RAW decoder of its own (*Windows*).
 - **The physics** is a port of [agx-emulsion / spektrafilm][agx] — real spectral
   sensitivities, characteristic curves and dye absorption spectra read off
   manufacturer datasheets, plus DIR couplers, halation and a stochastic grain
-  model. FLX Film Lab ships with 41 film stocks and 13 print stocks, among them
-  five black-and-white films and a black-and-white paper. Its slide stocks are
+  model. FLX Film Lab ships with 49 film stocks and 13 print stocks, among them
+  ten black-and-white films and a black-and-white paper. Its slide stocks are
   read directly off a virtual light table rather than printed, since printing a
   positive onto RA-4 paper inverts it — and the scan is white-balanced on the
   film base, the way a projector or a scanner treats clear film, without which
@@ -70,7 +70,7 @@ a video mode. That is where most of the work in this repository went.
   colour to within 6e-4 (`tests/parity`). Its grain model, a count of the
   particles that develop in each emulsion layer, is where the app's grain starts
   (*Grain*).
-- **spektrafilm's data.** 14 of the 41 film stocks are spektrafilm's: Kodak
+- **spektrafilm's data.** 14 of the 49 film stocks are spektrafilm's: Kodak
   Portra 160, 400 and 800 (and Portra 800's two pushes), Ektar 100, Gold 200,
   Ultramax 400, the four Vision3 stocks, Verita 200D, and Fujifilm C200, Pro
   400H and X-TRA 400. They are used as they are, but for one change: Vision3
@@ -127,13 +127,22 @@ a video mode. That is where most of the work in this repository went.
   spektrafilm's print side offers print exposure, the yellow and magenta
   filters, pre-flash, auto-compensation, and gamma factors that reshape the
   paper's curve, overall, per channel and per sub-layer.
-- **29 more stocks, each from its own datasheet.**
-  - 23 film stocks spektrafilm does not have: Fujifilm Astia 100F, Provia
+- **Curves, a histogram and a loupe.**
+  - Point curves on the finished print, one for all three channels and one
+    for each, on its values as the file will hold them.
+  - The finished print's RGB histogram, and behind the curves the histogram
+    of what they are given.
+  - A loupe that shows the print at 100%, its pixels the export's.
+- **Undo and redo**, one step per gesture, with a history for each image.
+- **37 more stocks, each from its own datasheet.**
+  - 31 film stocks spektrafilm does not have: Fujifilm Astia 100F, Provia
     400X, Velvia 50, Superia 1600, Superia Reala 100, Eterna Vivid 160T,
     Eterna 500T, Reala 500D and Neopan 1600; Kodak Kodachrome 25 and 200,
     Royal Gold 100, Vericolor III 160, EXR 50D, EXR 200T, 5251 50T, Tri-X 400
     and T-Max 100; Agfa Optima II 100, Portrait XPS 160 and APX 25; Ilford HP5
-    Plus; and HARMAN Phoenix 200.
+    Plus, Delta 100, Delta 400, FP4 Plus, Pan F Plus and Ortho Plus; Konica
+    Centuria Super 100, Centuria Super 1600 and Impresa 50; and HARMAN Phoenix
+    200.
   - Tri-X pushed two stops, and Ilford Multigrade paper.
   - Four motion picture print films to print on, beside Kodak's 2383 and
     2393: Fujifilm's F-CP 3519, F-CP 3510 and Eterna-CP 3513DI, and Kodak's
@@ -153,7 +162,7 @@ a video mode. That is where most of the work in this repository went.
     engine changes, a share of the inhibitor that diffuses and a cap on its edge
     gain, and a grid sixteen times finer for inverting the couplers.
 - **Black and white.** spektrafilm's main line is colour only; its
-  black-and-white work sits on an unmerged branch. Here five black-and-white
+  black-and-white work sits on an unmerged branch. Here ten black-and-white
   films, Tri-X's two-stop push and a silver paper are built from datasheets
   alone, as noted above. They run neutral through the three-layer engine, with
   grain and sharpness from Kodak's and Agfa's published data.
@@ -239,7 +248,12 @@ front, and a file opened from Finder goes to the mode that reads it. In
 Stills, drop a RAW on the window, or use Open. Export writes a 16-bit TIFF, a JPEG
 or a PNG with the output profile embedded, and carries the photograph's
 metadata over from the source — when it was taken, the camera, the lens, the
-exposure, where — for NEF, DNG and any other file macOS can read.
+exposure, where — for NEF, DNG and any other file macOS can read. It adds what
+made the print: FLX Film Lab and its version as the software, and the film, its
+camera filter and the paper in the EXIF user comment, after any comment the
+camera wrote: *Film: Kodak Tri-X 400; camera filter: Red, Wratten 25; paper:
+Ilford Multigrade RC Deluxe*. The same line is the image description, where
+Photos and Lightroom find a caption, unless the camera or an editor left one.
 
 Other targets:
 
@@ -284,6 +298,18 @@ and checked. The Mac remains the main development platform: the Windows app
 receives limited testing, on a single configuration, Windows 11 with an
 NVIDIA RTX graphics card.
 
+It asks Windows how much of the graphics card's memory it may use, and fits
+in it: a 45 MP picture decodes on the GPU in about 7 GB, so where the card has
+less free, the CPU decodes it, by the same arithmetic, in a few seconds. An
+export whose whole print would not fit is printed in tiles, each as part of
+the whole print, with margins for every blur that reaches into it, so the
+tiles come out as the whole print's pixels; the loupe prints its part the same
+way, with only that part on the card. On a card with 8 GB a 45 MP export
+peaks near 6 GB. Bloom and glow at their widest reach thousands of pixels; on
+a small card a tile or the loupe holds less, and their farthest light is
+missing there. The preview's own share is its size's, about 1.6 GB at
+2560 px with a crop and the effects.
+
 ## The pipeline
 
 Scene light in, print out. Each stage names its origin in the shader source.
@@ -300,6 +326,7 @@ Scene light in, print out. Each stage names its origin in the shader source.
 | Dodge & burn | per-pixel print-exposure and local-grade map |
 | Paper | the paper's characteristic curve, reshaped by the tone controls |
 | Scan | 81-band integral under the viewing illuminant → XYZ → output RGB, with gamut compression |
+| Curves | last of all, after bloom and glow: the point curves, on the print as its file encodes it, RGB first, then each channel (*Curves and the histogram*) |
 
 The last four are one fused Metal kernel, which is why the tone controls are
 instant: a slider move re-runs only the per-pixel print stage, not the film.
@@ -361,9 +388,8 @@ around where the paper prints an 18% grey.
 layer in parallel — it cannot fix crossover, where shadows cast one colour and
 highlights the complement. The per-layer trims can.
 
-The inspector's curve plot is drawn from the same function that fills the LUT
-the GPU reads, with the meters' choices filled in, so it cannot drift out of
-step with the image.
+The Print's histogram is counted from the print on screen, in the values the
+file will hold, so it cannot drift out of step with the image.
 
 ## White balance
 
@@ -520,6 +546,17 @@ colour, dodge-and-burn masks and the crop. So do the autos, whatever the last im
 Auto Exposure on, Auto Brightness and Auto Contrast off. A section's Reset puts
 them back the same way.
 
+**Undo** and **Redo**, in the Edit menu or ⌘Z and ⇧⌘Z, take back the last
+change and do it again. A step is one gesture: a slider from press to release,
+a handle, a crop edge or a curve point dragged on the picture, a click on a
+switch, a choice from a menu, a reset or a paste. A double-click that resets a
+slider is one step with its two clicks, so ⌘Z puts the slider back where it
+was. The Edit menu names the step it would take back: Undo Exposure, Redo Add
+Mask. Each image keeps its own history for the session, and a cancelled crop
+leaves none behind. A text field being typed in keeps its own typing's undo.
+Motion keeps a history for each clip the same way; how its files are written is
+a preference, not part of it.
+
 **Copy Settings** and **Paste Settings**, in the toolbar or ⇧⌘C and ⇧⌘V, take
 one image's settings onto another: film, paper, print or transparency, camera
 filter, every slider and auto, and white balance. Masks, gradients and the crop
@@ -536,8 +573,9 @@ next comes forward, and Delete Preset moves the file to the Trash.
 ## Black and white
 
 **Kodak Tri-X 400**, also pushed two stops, **Kodak T-Max 100**, **Ilford HP5
-Plus**, **Fujifilm Neopan 1600** and **Agfa APX 25** print on **Ilford Multigrade
-RC Deluxe**,
+Plus**, **Ilford Delta 100** and **Delta 400**, **Ilford FP4 Plus**, **Ilford Pan F
+Plus**, **Ilford Ortho Plus**, **Fujifilm Neopan 1600** and **Agfa APX 25** print
+on **Ilford Multigrade RC Deluxe**,
 each built from its maker's datasheet (see *Building profiles from datasheets*). Picking one moves
 the print onto Multigrade, and picking a colour film again moves it back; a
 paper chosen on purpose for the kind of film already loaded stays.
@@ -546,7 +584,10 @@ paper chosen on purpose for the kind of film already loaded stays.
   through its own measured spectral sensitivity, so an unfiltered blue sky
   prints lighter and a red darker than their luminance — what yellow and red
   filters exist to correct. Of equal-luminance patches, Tri-X prints the blue
-  at L* 75 and the red at 57. HP5 Plus leans less blue.
+  at L* 75 and the red at 57. HP5 Plus leans less blue. Ilford Ortho Plus is
+  orthochromatic, blue and green sensitive only: it sees nothing past 565 nm,
+  so reds print dark and skin darker than on a panchromatic film, and it takes
+  only the filters Ilford gives it factors for, blue, green and yellow.
 - **Camera filters**, under Negative Exposure: blue, green, yellow, orange and
   red — Kodak Wratten 47, 58, 8, 22 and 25, read off Kodak's own transmission
   curves. Each film has its own exposure LUT per filter, its sensitivity times
@@ -568,8 +609,13 @@ paper chosen on purpose for the kind of film already loaded stays.
 - **Grain is the datasheet's, where the sheet gives it.** Kodak gives Tri-X a
   diffuse RMS granularity of 17 and T-Max 100 one of 8, and Agfa gives APX 25
   one of 7, read the way the datasheets read it: net density 1.0 through a
-  48 um aperture. Ilford publishes none for HP5 Plus, which takes Tri-X's 17,
-  an emulsion of the same class; Neopan 1600 and the push are below. It is one
+  48 um aperture. Ilford publishes none for any of its films, so each takes
+  the Kodak film of its own class: HP5 Plus Tri-X's 17; Delta 100 and Delta
+  400, Ilford's tabular-grain emulsions, T-Max 100's and T-Max 400's 8 and 10;
+  FP4 Plus, Pan F Plus and Ortho Plus, classical emulsions as HP5's is, its 17
+  stepped to their speeds as Agfa's own classical range steps (APX 25, 100 and
+  400 measure 7, 9 and 14), 11.7, 9.6 and 10.5. Neopan 1600 and the push are
+  below. It is one
   silver layer, so the grain is neutral, and its clumps are smaller and
   crisper than a colour film's dye clouds (*Grain*).
 - **So is the sharpness.** Kodak publishes Tri-X's modulation transfer in
@@ -579,7 +625,8 @@ paper chosen on purpose for the kind of film already loaded stays.
   engine runs as the one silver layer's own inhibition, through the stage that
   runs a colour film's DIR couplers. It and the scatter under it are fitted to
   Kodak's curve (`tools/bake/bw_mtf.py`), within 4% from 2.4 to 71 cycles/mm;
-  HP5 Plus, for which Ilford publishes none, takes the same response; APX 25
+  Ilford's films, for which Ilford publishes none, take the same response,
+  each with the edge effect its own curve's slope gives it; APX 25
   and T-Max 100 are fitted to their makers' own curves, up to 50 cycles/mm
   (T-Max 109% at 5, 114% at 20, 112% at 30). A colour
   film's scatter without the couplers' sharpening had left Tri-X at 36% at 24
@@ -657,6 +704,69 @@ precision. Both are off by default and travel with the look to the next
 image. The Motion mode adds a halation effect; Stills leaves it out, since
 the film model's own halation, the physical one, does that job here.
 
+## Curves and the histogram
+
+The Print opens with the finished print's histogram and, under it, point
+curves on the print: **RGB** for all three channels together, and **Red**,
+**Green** and **Blue** for each, which act after RGB.
+
+- **The histogram** counts the print's pixels at each of the 256 values an
+  8-bit file would hold, per channel, as the print is finished: curves and
+  bloom and glow included. Red, green and blue are laid over one another and
+  added, so they show white where they agree. A mark at either end shows a
+  channel piled up at black or at white, in that channel's colour, once more
+  than 0.05% of the print is there.
+- **The curves** act on the print as its file encodes it, with the output
+  space's own transfer curve: the values the histogram shows. Click to add a
+  point (on the curve, if the click is close to it), drag it, and drag it off
+  the graph to take it away. The end points set where black and white fall.
+  The curve through the points is a monotone cubic, Fritsch and Butland's
+  (SciPy's PCHIP), so it never overshoots them: a curve pulled up stays below
+  white between its points, and a rising one never turns back on itself.
+  Behind the curve is the histogram of what it is given, so the points can be
+  put where the print's tones are.
+
+The curves come after the film, the paper and the scan, so they change
+nothing the film or the paper does, and the print meters read the print
+before them: an auto never chases a curve. They run on the GPU, last, on the
+linear print the export writes, so the screen and the file carry them alike.
+Straight, they are skipped, and the print is bit for bit what it was without
+them. They travel with Copy and Paste Settings and with presets, Reset tone
+straightens them, and a newly opened image starts without them, as it does
+with the tone sliders.
+
+## The loupe
+
+**Loupe** (⌘L, in the toolbar) lays a square over the print that shows it at
+100%: one pixel of the full-size export to one pixel of the screen. Drag it
+over the print. It shows what the export will: the grain, the halation, the
+couplers' edges and the sharpness at the size they come out at, which a
+fitted preview cannot.
+
+While the loupe is open the picture is held at full size on the GPU, decoded
+as the export decodes it: 0.44 s for a 45 MP Nikon Z 7 frame, which then
+holds 720 MB until the loupe is put away. Only the part under the loupe is
+printed, with the values the preview resolved, as the export prints them.
+Every stage that spreads light or density reaches past a pixel, so the part
+is made from a box of the frame with each stage's reach around it: four
+sigmas of each blur and every tap of the grain's filters (110 px on a 1500 px
+frame, for halation, the couplers and the grain at their widest). The grain
+is seeded by the frame's pixels and the masks and gradients are placed on the
+frame, so the part draws the same grains and the same dodges and burns as the
+whole. Metal's Gaussian blur makes a wide blur on a coarser grid that starts
+at the texture's corner, so the box's corner is put on that grid, a power of
+two of twice the widest blur's sigma; off it, the part's halation differed
+from the whole's by 1e-3 near a highlight. Bloom and glow reach further than
+a part can hold, up to 8% of the frame's long edge, and take the light from
+beyond the part from the preview's print.
+
+Checked against the whole print, in the file's values, the part comes out
+within 1e-6 of it with halation, the couplers and the grain at their widest,
+within 6e-5 turned, levelled and cropped (the float rounding of the turn),
+and within about 2e-4 with bloom and glow at their widest. The loupe's pixels are
+the exported file's to 1 of 255. A move takes about 7 ms on a 45 MP frame,
+16 ms with bloom and glow on a levelled print.
+
 ## Surround
 
 Three canvas backgrounds — dark, middle grey (L* 50) and white — on a segmented
@@ -731,15 +841,17 @@ granularity — the density fluctuation through a 48 um aperture, times 1000:
 
 | Read at | Stocks |
 |---|---|
-| visual density 1.0 over the minimum | Fujifilm's and Agfa's colour negatives and Fujifilm's slides, from their sheets |
+| visual density 1.0 over the minimum | Fujifilm's, Agfa's and Konica's colour negatives and Fujifilm's slides, from their sheets |
 | gross visual density 1.0 | Kodak's slides |
 | net silver density 1.0 | Tri-X, T-Max 100, APX 25 |
 | Print Grain Index | Kodak's colour negatives for stills: four units are a just-noticeable step, and doubling the enlargement adds 22, so a difference of d is a factor of 2 to the power d/22. The scale is set at Portra 400 = 4, where Kodak's own curves put Vision3 250D and 500T and Fujifilm puts Pro 400H |
 | per layer, against density | Kodak Vision3 50D, 250D and 500T, and EXR 50D and 200T. Vision3 200T's sheet repeats 500T's plot, so 200T sits between 50D and 250D at the 100-speed grain Kodak claims for it, and Verita 200D between them at its own speed |
 
-A few publish nothing: HP5 Plus and Neopan 1600 are derived as noted above,
+A few publish nothing: Ilford's films and Neopan 1600 are derived as noted above,
 Reala 500D takes Eterna 500's figure, Ultramax 400 takes Gold 200's, Phoenix
-200 takes Superia 1600's, and 5251 EXR 200T's curves. Pushed stocks take their
+200 takes Superia 1600's, and 5251 EXR 200T's curves. Konica's Impresa 50
+takes Konica's own step from Centuria Super 100 to 1600 (4 to 6 over four
+stops), carried down one stop to its ISO 50: 3.6. Pushed stocks take their
 normal figure times the root of the slope ratio at mid-grey (Selwyn: the same
 grains, each developed to more density).
 
@@ -876,8 +988,9 @@ it would on Portra. For a tungsten stock 3200 K is the film's own light, and
 daylight goes blue unless it is shot through an 85. Temperature and Tint
 correct it the way a lab would, with the enlarger's filters.
 
-**Black and white.** Tri-X, Tri-X Push 2, T-Max 100, HP5 Plus, Neopan 1600
-and APX 25 print on Multigrade, as in Stills: picking one moves the print onto
+**Black and white.** Tri-X, Tri-X Push 2, T-Max 100, HP5 Plus, Ilford's
+Delta 100 and 400, FP4 Plus, Pan F Plus and Ortho Plus, Neopan 1600 and APX 25
+print on Multigrade, as in Stills: picking one moves the print onto
 silver paper, which has no colour to balance, and the same camera filters
 (Wratten 47, 58, 8, 22 and 25) sit under Film & Paper. The halation effect,
 red on colour film, glows grey in a black-and-white picture.
@@ -893,6 +1006,7 @@ halation effect stands in for the film's own.
 
 **Out.** ProRes 422 HQ or 10-bit HEVC, chosen beside Export in the toolbar as
 a still's format is, the audio copied as it is, rotation and metadata kept,
+with FLX Film Lab, the film and the paper as its software and description,
 tagged Rec.709. macOS and iOS decode Rec.709 video with a 1.961
 power (measured with VideoToolbox, not assumed), so *Apple displays* writes the
 values with its inverse and QuickTime, Photos and Safari show exactly what the
@@ -1104,6 +1218,8 @@ On an M4 Pro, a 45 MP Nikon NEF:
 | Full pipeline incl. decode and JPEG write | 1.9 s |
 | Preview frame, print or tone slider (2560 px) | ~29 ms |
 | Preview frame, exposure or film-character slider | ~50 ms |
+| Loupe, reading the picture at full size (once) | 0.44 s |
+| Loupe, each move or slider tick (600 × 600 px) | ~7 ms |
 
 The preview is 2560 pixels on its long side. Preview size, under Output, also
 offers 1024, 2048, 3072 and 4096, and the choice is kept between launches. At
@@ -1118,7 +1234,13 @@ image, which keeps the colour without taking the grain's coarse structure away
 The preview renders on its own actor (`App/RenderEngine.swift`), never on the
 main thread, so the controls stay responsive whatever a frame costs; while one
 frame renders, further slider ticks collapse into one follow-up with the latest
-values. Each stage is skipped when nothing it depends on changed: the developed
+values. The window redraws only what a change touches. A finished frame
+redraws the print, the status line and the histogram; the inspector waits
+for its own values (`PrintPreview`). A slider tick remakes only the
+inspector's section it is in (`Redrawn`). Dragging a slider on a 24 MP frame,
+the main thread spends about 8 ms a tick; in 1.3.0, which remade the whole
+window for every frame and every tick, it was about 18 ms, and it ran out of
+time before the mouse did. Each stage is skipped when nothing it depends on changed: the developed
 negative is reused while only print controls move, the meters keep their
 reading of the frame, and dodge-and-burn masks are redrawn only when their
 shape changes.
@@ -1304,6 +1426,64 @@ Royal Gold's sheet says nothing of saturation and puts it in the Gold family,
 so it takes Gold 200's on Ektacolor Edge. Vericolor III's sheet plots its MTF,
 to which its scatter and inhibitor are fitted, as the slides' are.
 
+**Konica Centuria Super 100** and **Centuria Super 1600** (2002) and **Impresa
+50 Professional** (1998, TDSN-501) are built as Royal Gold and Vericolor are,
+from Konica's own technical data sheets: characteristic curves, spectral
+sensitivities, the spectral density of D-min (the base) and of a midscale
+neutral, MTF, and the Centurias' RMS granularity, 4 and 6.
+- **Dyes.** None of the three plots single dyes, and one neutral cannot be
+  split into three. Each takes Fujifilm X-TRA 400's dyes, moved and stretched
+  until the three add up to its sheet's neutral over D-min, to 0.014, 0.010
+  and 0.004 in density. Compared as curves after that refinement, X-TRA
+  400's fit all three closely with small moves, and the three refined sets
+  come out one family, as one maker's films should. The sets that fit Super
+  100 closer once refined need larger moves: Kodak's VISION3 cyan moved 14-16
+  nm, Fujifilm C200's yellow 22% wider. Ranked as they were, before
+  refinement, three different negatives had come first.
+- **Sensitivities.** Each continues past its plotted ends at its own final
+  gradient, to three decades under its peak, rather than on a donor's tails,
+  which carry another film's cross-sensitivities: Ektar's green tail would
+  have given Super 1600's green layer 7.6% of its daylight exposure beyond
+  the plot, where its own gives 1.5%.
+- **Placement.** Each is metered at its rating on its sheet's absolute axis,
+  which Konica's exposure tables keep to. The Centurias' curves' own ISO 5800
+  speeds are 293 and 2650 (Konica claims "the highest level of actual speed
+  in its class"); Impresa's is 51.
+- **The sheets against themselves.** Each midscale neutral, read through
+  Status M, lands on its sheet's own three curves within 0.02 (Super 100),
+  0.08 (Super 1600) and 0.06 (Impresa) decades of one exposure. The Centurias'
+  D-min spectra, though, read 0.05 to 0.10 denser through Status M than their
+  curves' own D-min; Impresa's agree. The profiles keep the curves' densities
+  over the spectral D-min, so they sit that much denser than drawn, which the
+  enlarger filtration and print exposure take out.
+- **Impresa's plots are bitmaps,** each picture stored upside down, its curves
+  drawn in one ink, solid, dashed and dash-dot, and crossing in the spectral
+  plot. Each curve is walked along its own stroke, across its dashes' breaks
+  and through the crossings (`trace_raster_plot.follow`).
+- **Paper.** All three print on Kodak Ektacolor Edge. Of agx's papers it prints
+  the Centurias' greys most neutral (within 2.9 and 1.7 a*b* from three stops
+  under to two over; Portra Endura 3.8 and 3.4). Impresa's worst step is about
+  the same on four papers (5.2 to 5.7), and over its whole wedge Edge holds it
+  closest.
+- **Colour.** Super 100's sheet promises "brilliantly colored portrayals" and
+  calls it "the best selection for outdoor snapshots", what Kodak says of Gold
+  200 ("Bright, colorful prints"): Gold 200's chroma on the same paper, 1.19x.
+  Super 1600's says nothing of colour and takes Super 100's. Impresa's
+  "subtle color tones ... with this much fidelity" is Portra 160's chroma on
+  the same paper, 1.15x. On X-TRA 400's coupler strength the three had printed
+  1.45x, 1.47x and 1.35x.
+- **Grain.** Impresa's sheet claims "the highest level of granularity ... of
+  any color print film" and gives no figure. It takes Konica's own step from
+  Super 100 to 1600, carried down one stop: 3.6.
+- **Character.** Konica draws the blue layer steeper against the green than
+  Kodak does. About mid-grey Impresa's is 1.31 times as steep and Super 100's
+  1.24, where Kodak's negatives here run 1.07 to 1.16 and Fujifilm's X-TRA 400
+  1.24. On Kodak's papers their greys cross over around mid-grey: Impresa's
+  run b* +2.7 a stop under and -5.3 a stop over, Super 100's +2.9 and -2.5.
+  Super 1600's (1.14) hold within 1.7. On Crystal Archive Type II Impresa's
+  hold b* within 1.5, and its shadows lean green instead (a* -5.1 two stops
+  under), as X-TRA 400's do on that paper.
+
 **Kodak EXR 50D** (H-1-5245) and **EXR 200T** (H-1-5293), ECN-2 camera
 negatives of the EXR generation, take more again from their own sheets, which
 both plot curves, spectral sensitivities, the midscale neutral and D-min, MTF
@@ -1462,6 +1642,14 @@ carries the one layer three times, each with a third of its density.
 - **Ilford HP5 Plus**: spectral sensitivity and the characteristic curve,
   vector plots whose labels are drawn as outlines, so they are calibrated on
   their own tick marks and grid.
+- **Ilford Delta 100, Delta 400, FP4 Plus, Pan F Plus and Ortho Plus**
+  (HARMAN's technical information, 2018-19): the wedge spectrogram and the
+  characteristic curve each sheet plots for the developer and time it names,
+  bitmaps traced on their own grids: Delta 100 in ID-11 for 8 1/2 minutes,
+  Delta 400 in ID-11 for 8 at 24 C, FP4 Plus and Pan F Plus in ILFOTEC HC 1+31
+  for 8 and 4, and Ortho Plus in ID-11 for 8, the lower of its two pictorial
+  curves. They come out near the normal contrast Ilford sets its times for
+  (G-bar 0.62): 0.65, 0.64, 0.68, 0.71, and Ortho Plus's, labelled 0.62, 0.59.
 - **Fujifilm Neopan 1600** (AF3-608E): spectral sensitivity and the D-76 curve
   at 7 1/2 minutes, Fujifilm's time for EI 1600, traced off scanned line art
   on its own grid.
@@ -1495,7 +1683,11 @@ Ilford gives its spectral data as a "wedge spectrogram to tungsten light" on an
 unlabelled scale. Read literally as tungsten-weighted, HP5 Plus would need a
 12–16x red filter, against the 8x photographers use and the 9x Kodak's data
 gives Tri-X; read as the film's own relative log sensitivity, 6x. The second is
-how it is read. Fujifilm's is a "spectrogram to daylight (5400K)", and read
+how it is read, and Ortho Plus's sheet bears it out with numbers of its own:
+it rates the film ISO 80 in daylight and 40 in tungsten, and its spectrogram
+read this way makes daylight 1.92 times as effective at equal illuminance (2.45
+read as tungsten-weighted); its daylight factor for a yellow filter, 2.5, comes
+out 2.7 through Kodak's Wratten 8 (5.3). Fujifilm's is a "spectrogram to daylight (5400K)", and read
 literally — divided by CIE daylight at 5400 K — it gives Neopan 1600 filter
 factors of 2.6x yellow, 4.3x orange (No. 22) and 7.5x red, against Fujifilm's
 2x, 4x (No. 21) and 8x for daylight; read as it stands the red is 6.6x.

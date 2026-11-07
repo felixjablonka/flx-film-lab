@@ -23,6 +23,9 @@ struct ClipExportOptions {
     ExportCodec codec = ExportCodec::ProRes422HQ;
     LutOutput display = LutOutput::SRGB;
     double seconds = 0;     // only the clip's first `seconds`; 0 for all of it
+    // What made the clip (Provenance), as its QuickTime software and
+    // description, in place of the camera's; empty leaves the camera's.
+    std::string software, description;
 };
 
 struct ExportCancelled : std::runtime_error {
