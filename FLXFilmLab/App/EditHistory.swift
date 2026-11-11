@@ -61,6 +61,8 @@ final class EditHistory<State: Equatable>: ObservableObject {
         var pressed: Bool
     }
     private var open: Open?
+    /// Whether a step is open, waiting for its action or gesture to end.
+    var isStepOpen: Bool { open != nil }
     private var closer: Task<Void, Never>?
     private var recording = true
     private var nextName: String?

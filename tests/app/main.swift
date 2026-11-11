@@ -842,8 +842,18 @@ func undoRedo() async throws {
     var mouseDown = false
     m.history.mouseIsDown = { mouseDown }
     m.history.joinInterval = 0.3
-    /// After an action, as long as the app's run loop takes to close its step.
-    func pause(_ ms: Int = 150) async { try? await Task.sleep(for: .milliseconds(ms)) }
+    func pause(_ ms: Int) async { try? await Task.sleep(for: .milliseconds(ms)) }
+    /// After an action, until the app's run loop has closed its step, at most
+    /// two seconds. A fixed 150 ms ran short on GitHub's runners, whose main
+    /// actor took longer to get to it (1.5.0's CI).
+    func stepClosed() async {
+        await pause(20)
+        var waited = 20
+        while m.history.isStepOpen && waited < 2000 {
+            await pause(10)
+            waited += 10
+        }
+    }
     /// A slider dragged through `values`, from press to release, as the
     /// inspector's binding sets it.
     func drag(_ values: [Double], _ set: (inout Recipe, Double) -> Void) async {
@@ -855,7 +865,7 @@ func undoRedo() async throws {
             await pause(40)
         }
         mouseDown = false
-        await pause()
+        await stepClosed()
     }
     let names = { m.history.stacks.undo.map(\.name) }
 
@@ -874,7 +884,7 @@ func undoRedo() async throws {
     }
     check(m.history.undoName == nil, "while the slider is held, the step stays open")
     mouseDown = false
-    await pause()
+    await stepClosed()
     check(names() == ["Exposure"], "a slider dragged from press to release is one step: \(names())")
     m.history.undo()
     check(m.recipe.exposureEV == 0 && m.recipe.autoExposure && m.history.undoName == nil
@@ -886,9 +896,9 @@ func undoRedo() async throws {
               && m.history.redoName == nil, "⇧⌘Z does it again")
 
     m.recipe.grainEnabled = false
-    await pause()
+    await stepClosed()
     m.recipe.halationEnabled = false
-    await pause()
+    await stepClosed()
     check(names() == ["Exposure", "Grain", "Halation"], "each click is a step of its own: \(names())")
 
     // A double-click on a slider: the slider takes both clicks as moves, and
@@ -896,7 +906,7 @@ func undoRedo() async throws {
     await drag([0.2]) { $0.brightness = $1 }
     await drag([0.25]) { $0.brightness = $1 }
     m.recipe.brightness = 0
-    await pause()
+    await stepClosed()
     check(names() == ["Exposure", "Grain", "Halation"],
           "a double-click that resets a slider already at its default leaves nothing to undo")
     await drag([0.3, 0.4]) { $0.brightness = $1 }
@@ -904,7 +914,7 @@ func undoRedo() async throws {
     await drag([0.2]) { $0.brightness = $1 }
     await drag([0.25]) { $0.brightness = $1 }
     m.recipe.brightness = 0
-    await pause()
+    await stepClosed()
     check(names() == ["Exposure", "Grain", "Halation", "Brightness", "Brightness"]
               && m.history.stacks.undo.last?.before.recipe.brightness == 0.4,
           "a double-click reset is one step with its clicks: \(names())")
@@ -915,7 +925,7 @@ func undoRedo() async throws {
     m.turn(clockwise: true)
     m.history.finish()
     m.turn(clockwise: true)
-    await pause()
+    await stepClosed()
     check(names().suffix(2) == ["Turn", "Turn"], "two quick turns by key are two steps: \(names().suffix(2))")
     m.history.undo()
     check(m.recipe.geometry.quarterTurns == 1, "so ⌘Z undoes one of them")
@@ -923,7 +933,7 @@ func undoRedo() async throws {
     m.resetTone()
     check(m.history.undoName == "Brightness", "a reset that changes nothing leaves nothing to undo")
     m.recipe.highlights = -0.2
-    await pause()
+    await stepClosed()
     m.resetTone()
     check(m.history.undoName == "Reset Tone" && m.recipe.highlights == 0 && !m.recipe.grainEnabled,
           "a reset is a step of its own, called by its name")
@@ -934,13 +944,14 @@ func undoRedo() async throws {
     check(m.recipe.exposureEV == 0.9 && !m.recipe.autoExposure, "and one ⌘Z undoes all four")
 
     m.whiteBalance = .custom
+    await stepClosed()
     await pause(400)
     mouseDown = true
     m.customTemperature = 4500
     await pause(40)
     m.customTemperature = 4000
     mouseDown = false
-    await pause()
+    await stepClosed()
     check(names().suffix(2) == ["White Balance", "White Balance"],
           "choosing a white balance and dragging its temperature are two steps")
     _ = await settle(m)
@@ -952,7 +963,7 @@ func undoRedo() async throws {
           "and the picture is decoded for it again: \(m.whiteBalanceSummary)")
     check(m.history.redoName == "White Balance", "with both to redo")
     m.recipe.snap = 0.1
-    await pause()
+    await stepClosed()
     check(m.history.redoName == nil && m.history.undoName == "Midtone Contrast",
           "a new change after undoing leaves nothing to redo: \(m.history.undoName ?? "-")")
 
@@ -960,26 +971,26 @@ func undoRedo() async throws {
     mask.shape = .oval
     mask.points = [CGPoint(x: 0.5, y: 0.5), CGPoint(x: 0.7, y: 0.5), CGPoint(x: 0.5, y: 0.7)]
     m.recipe.masks.append(mask)
-    await pause()
+    await stepClosed()
     mouseDown = true
     for dx in [0.01, 0.02, 0.05] {
         m.recipe.masks[0].points[1].x = 0.7 + dx
         await pause(40)
     }
     mouseDown = false
-    await pause()
+    await stepClosed()
     m.recipe.masks.removeAll()
-    await pause()
+    await stepClosed()
     check(names().suffix(3) == ["Add Mask", "Mask", "Delete Mask"], "masks: \(names().suffix(3))")
     var oval = ExposureGradient()
     oval.shape = .oval
     oval.points = [CGPoint(x: 0.5, y: 0.5), CGPoint(x: 0.7, y: 0.5), CGPoint(x: 0.5, y: 0.7)]
     m.recipe.gradients.append(oval)
-    await pause()
+    await stepClosed()
     m.recipe.gradients[0].isInverted = true
-    await pause()
+    await stepClosed()
     m.recipe.gradients.append(ExposureGradient())
-    await pause()
+    await stepClosed()
     let gradientSteps = names().suffix(3)
     m.history.undo()
     m.history.undo()
@@ -990,9 +1001,9 @@ func undoRedo() async throws {
     // new picture keeps it, as it keeps the film.
     let filmBefore = m.recipe.filmStock
     m.selectFilm("polaroid_polapan_pro_100")
-    await pause()
+    await stepClosed()
     m.recipe.processingTemperature = 35
-    await pause()
+    await stepClosed()
     let processingStep = m.history.undoName
     let carried = m.recipe.carryingLook().processingTemperature
     m.history.undo()
@@ -1019,13 +1030,13 @@ func undoRedo() async throws {
 
     defaults.set(Vocabulary.darkroom.rawValue, forKey: "vocabulary")
     m.recipe.density = 0.1
-    await pause()
+    await stepClosed()
     check(m.history.undoName == "Density", "the Edit menu uses the darkroom names when the controls do")
     defaults.set(Vocabulary.photographic.rawValue, forKey: "vocabulary")
     m.recipe.density = 0.2
     await pause(400)
     m.recipe.density = 0.3
-    await pause()
+    await stepClosed()
     check(m.history.undoName == "Print Exposure", "and the photographic ones otherwise")
 
     print("undo with several images")
@@ -1033,7 +1044,7 @@ func undoRedo() async throws {
     m.open(url: b)
     check(await settle(m) && m.fileURL == b && m.history.undoName == nil, "B starts with nothing to undo")
     m.recipe.shadows = 0.3
-    await pause()
+    await stepClosed()
     m.open(url: a)
     check(await settle(m) && names() == aSteps, "A keeps its own history: \(names().count) steps")
     m.history.undo()
@@ -1054,14 +1065,14 @@ func undoRedo() async throws {
     m.open(url: a)
     _ = await settle(m)
     m.recipe.glareEnabled = false
-    await pause()
+    await stepClosed()
     m.history.undo()
     let last = m.history.undoName, redo = m.history.redoName
     m.isCropping = true
     m.setStraighten(2)
-    await pause()
+    await stepClosed()
     m.editGeometry { g, f in g.setCrop(CGRect(x: 100, y: 50, width: 300, height: 200), frame: f) }
-    await pause()
+    await stepClosed()
     check(names().suffix(2) == ["Straighten", "Crop"], "each change to the crop is a step: \(names().suffix(2))")
     m.history.undo()
     check(m.recipe.geometry.straighten == 2 && m.recipe.geometry.crop == nil && m.isCropping,
@@ -1072,9 +1083,9 @@ func undoRedo() async throws {
           "a cancelled crop leaves no steps behind: \(last ?? "-") to undo and \(redo ?? "-") to redo, as before")
     m.isCropping = true
     m.setStraighten(1.5)
-    await pause()
+    await stepClosed()
     m.recipe.shadows = 0.2
-    await pause()
+    await stepClosed()
     m.endCropping(keep: false)
     check(m.recipe.geometry == .identity && m.recipe.shadows == 0.2 && m.history.undoName == "Cancel Crop",
           "with another change made meanwhile, going back is a step of its own")
@@ -1084,7 +1095,7 @@ func undoRedo() async throws {
     m.history.undo()
     m.isCropping = true
     m.setStraighten(-1)
-    await pause()
+    await stepClosed()
     m.endCropping(keep: true)
     check(m.history.undoName == "Straighten", "Done keeps the crop's steps")
     m.history.undo()
