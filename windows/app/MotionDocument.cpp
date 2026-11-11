@@ -207,7 +207,7 @@ double MotionDocument::defaultGrade()
 bool MotionDocument::printsOnPaper()
 {
     const ProfilePack *film = filmPack();
-    return !m_look.recipe.scanFilm.value_or(film && film->isPositive());
+    return film ? !film->isViewedDirectly(m_look.recipe.scanFilm) : !m_look.recipe.scanFilm.value_or(false);
 }
 
 // A black-and-white paper prints in silver: whatever the filtration, the
@@ -710,9 +710,26 @@ void MotionDocument::cancelExport()
     m_cancelExport = true;
 }
 
+// What the print is, for an exported LUT (ClipModel.printDescription): its
+// title, and how it was made for its comment. The film on its paper; a slide
+// alone, off the light table; an instant print alone, as the print it is.
+std::pair<std::string, std::string> MotionDocument::printDescription()
+{
+    const std::string film = filmName().toStdString(), paper = paperName().toStdString();
+    const ProfilePack *f = filmPack();
+    if (f && f->isInstantPrint()) {
+        const auto fahrenheit = f->processingFahrenheit(m_look.recipe.processingTemperature);
+        return {film, fahrenheit ? film + ", an instant print processed at " + std::to_string(*fahrenheit) + " F"
+                                 : film + ", an instant print"};
+    }
+    if (f ? f->isViewedDirectly(m_look.recipe.scanFilm) : m_look.recipe.scanFilm.value_or(false))
+        return {film, film + " on a light table"};
+    return {film + " on " + paper, film + " printed on " + paper};
+}
+
 QString MotionDocument::suggestedLUTName()
 {
-    return filmName() + QStringLiteral(" on ") + paperName() + QStringLiteral(".cube");
+    return QString::fromStdString(printDescription().first) + QStringLiteral(".cube");
 }
 
 // The clip's log goes in the way Resolve reads it (exportInputOf): N-Log or
@@ -734,10 +751,10 @@ void MotionDocument::exportLUT(const QString &path)
         break;
     }
     const LutInput input = exportInputOf(format(), fullRange);
-    const std::string film = filmName().toStdString(), paper = paperName().toStdString();
-    const std::string title = film + " on " + paper;
+    const std::pair<std::string, std::string> description = printDescription();
+    const std::string title = description.first;
     std::vector<std::string> comments{
-        "Made with FLX Film Lab (Motion): " + film + " printed on " + paper,
+        "Made with FLX Film Lab (Motion): " + description.second,
         QString::asprintf("Exposure %+.2f EV, brightness %+.3f, grade R%.0f, shadows %+.2f, highlights %+.2f",
                           recipe.exposureEV, recipe.brightness, recipe.grade, recipe.shadows, recipe.highlights)
             .toStdString(),

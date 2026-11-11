@@ -53,7 +53,19 @@ std::vector<std::string> recipeChangeNames(const Recipe &a, const Recipe &b, Voc
     // moving a slider whose auto is on turns the auto off
     add(a.autoExposure != b.autoExposure, ev ? "Exposure" : "Auto Exposure");
     add(a.lensFilter != b.lensFilter, "Filter");
-    add(a.gradients != b.gradients, list(a.gradients, b.gradients, "Gradient"));
+    if (a.gradients != b.gradients) {
+        // the one added, deleted or changed names the step: an oval or a gradient
+        auto missing = [](const std::vector<ExposureGradient> &from, const std::vector<ExposureGradient> &in) {
+            const auto it = std::find_if(from.begin(), from.end(), [&](const ExposureGradient &g) {
+                return std::find(in.begin(), in.end(), g) == in.end();
+            });
+            return it == from.end() ? nullptr : &*it;
+        };
+        const ExposureGradient *one = missing(b.gradients, a.gradients);
+        if (!one)
+            one = missing(a.gradients, b.gradients);
+        add(true, list(a.gradients, b.gradients, one && one->isOval() ? "Oval" : "Gradient"));
+    }
     add(!(a.geometry == b.geometry), shape(a.geometry, b.geometry));
     const bool brightness = a.brightness != b.brightness;
     add(brightness, control(controls::brightness));
@@ -99,6 +111,7 @@ std::vector<std::string> recipeChangeNames(const Recipe &a, const Recipe &b, Voc
     add(a.outputColorSpace != b.outputColorSpace, "Colour Space");
     add(a.gamutCompress != b.gamutCompress, "Gamut Compression");
     add(a.filmFormat != b.filmFormat, "Film Format");
+    add(a.processingTemperature != b.processingTemperature, "Processing Temperature");
     return names;
 }
 

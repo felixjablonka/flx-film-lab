@@ -123,6 +123,21 @@ final class ClipModel: ObservableObject {
 
     var filmName: String { (try? PackLibrary.shared.pack(look.recipe.filmStock))?.name ?? look.recipe.filmStock }
     var paperName: String { (try? PackLibrary.shared.pack(look.recipe.printStock))?.name ?? look.recipe.printStock }
+    /// What the print is, for an exported LUT: its title, and how it was made
+    /// for its comment. The film on its paper; a slide alone, off the light
+    /// table; an instant print alone, as the print it is.
+    var printDescription: (title: String, made: String) {
+        let film = try? PackLibrary.shared.pack(look.recipe.filmStock)
+        if let film, film.isInstantPrint {
+            let made = film.processingFahrenheit(look.recipe.processingTemperature)
+                .map { "\(filmName), an instant print processed at \($0) F" } ?? "\(filmName), an instant print"
+            return (filmName, made)
+        }
+        if film?.isViewedDirectly(scanFilm: look.recipe.scanFilm) ?? (look.recipe.scanFilm ?? false) {
+            return (filmName, "\(filmName) on a light table")
+        }
+        return ("\(filmName) on \(paperName)", "\(filmName) printed on \(paperName)")
+    }
     var isExporting: Bool { exportProgress != nil }
 
     // MARK: Undo
@@ -406,9 +421,9 @@ final class ClipModel: ObservableObject {
         case .auto: fullRange = clip?.fullRange ?? true
         }
         let lutInput = format.exportInput(fullRange: fullRange)
-        let title = "\(filmName) on \(paperName)"
+        let (title, made) = printDescription
         var comments = [
-            "Made with \(Exporter.Provenance.software) (Motion): \(filmName) printed on \(paperName)",
+            "Made with \(Exporter.Provenance.software) (Motion): \(made)",
             String(format: "Exposure %+.2f EV, brightness %+.3f, grade R%.0f, shadows %+.2f, highlights %+.2f",
                    recipe.exposureEV, recipe.brightness, recipe.grade, recipe.shadows, recipe.highlights),
             String(format: "Filtration on top of neutral: %+.0fY %+.0fM", recipe.filterShiftY, recipe.filterShiftM),

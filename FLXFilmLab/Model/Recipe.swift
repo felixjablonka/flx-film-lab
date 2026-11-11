@@ -74,30 +74,82 @@ struct LocalMask: Codable, Equatable, Identifiable {
 /// meters read the frame as if it were not there. Several stack, each adding
 /// its own compensation where it covers.
 struct ExposureGradient: Codable, Equatable, Identifiable {
+    /// A straight gradient across the frame, or an oval one around a point.
+    enum Shape: String, Codable { case linear, oval }
+
     var id = UUID()
     var name: String = "Gradient"
-    /// The darkroom gradient's two handles, in normalised image coordinates:
-    /// the full compensation at and behind the first, none at and past the
-    /// second. Their spacing is the transition, close together for a hard edge.
+    /// In normalised image coordinates. A linear gradient's two handles: the
+    /// full compensation at and behind the first, none at and past the second,
+    /// their spacing the transition, close together for a hard edge. An oval's
+    /// centre and the ends of its two axes, as a Dodge & Burn oval's, so it can
+    /// tilt and shear.
     var points: [CGPoint] = [CGPoint(x: 0.5, y: 0.3), CGPoint(x: 0.5, y: 0.55)]
     /// Stops of exposure on the covered side, like the Exposure slider:
     /// positive gives the film more light, negative less.
     var exposureEV: Double = -1
     var enabled: Bool = true
+    /// Optional, so gradients saved before ovals existed still load: nil is a
+    /// linear gradient (read through `isOval`).
+    var shape: Shape? = nil
+    /// An oval's transition, as a share of its size: the full compensation
+    /// inside the oval shrunk by it, none outside the oval itself. nil is
+    /// `defaultFeather`.
+    var feather: Double? = nil
+    /// An oval's compensation outside it rather than inside. nil is inside.
+    var inverted: Bool? = nil
 
-    var isActive: Bool { enabled && exposureEV != 0 && points.count >= 2 }
+    static let defaultFeather = 0.5
+
+    var isOval: Bool { shape == .oval }
+    var featherAmount: Double {
+        get { feather ?? Self.defaultFeather }
+        set { feather = newValue }
+    }
+    var isInverted: Bool {
+        get { inverted ?? false }
+        set { inverted = newValue ? true : nil }
+    }
+
+    var isActive: Bool { enabled && exposureEV != 0 && points.count >= (isOval ? 3 : 2) }
 
     /// The compensation at `p`, a pixel position in a `width` x `height`
-    /// frame: the darkroom gradient's smoothstep along the handles. The
-    /// film-exposure kernel (`gradientEV` in flx.metal) computes the same.
+    /// frame. A linear gradient's is the darkroom gradient's smoothstep along
+    /// the handles; an oval's the same smoothstep across its transition, from
+    /// the oval shrunk by its feather out to the oval. The film-exposure
+    /// kernel (`gradientEV` in flx.metal) computes the same.
     func exposureEV(atX x: Float, y: Float, width: Float, height: Float) -> Float {
         guard isActive else { return 0 }
         let ax = Float(points[0].x) * width, ay = Float(points[0].y) * height
         let dx = Float(points[1].x) * width - ax, dy = Float(points[1].y) * height - ay
+        if isOval {
+            let ex = Float(points[2].x) * width - ax, ey = Float(points[2].y) * height - ay
+            guard let w = Self.ovalWeight(x - ax, y - ay, u: (dx, dy), v: (ex, ey),
+                                          feather: Float(featherAmount), inverted: isInverted) else { return 0 }
+            return Float(exposureEV) * w
+        }
         let lengthSquared = dx * dx + dy * dy
         guard lengthSquared > 1e-9 else { return 0 }
         let t = min(max(((x - ax) * dx + (y - ay) * dy) / lengthSquared, 0), 1)
         return Float(exposureEV) * (1 - t * t * (3 - 2 * t))
+    }
+
+    /// How much of an oval's compensation reaches a point at (`px`, `py`) from
+    /// its centre, its axes `u` and `v` in pixels: 1 inside the oval shrunk by
+    /// `feather`, 0 outside it, a smoothstep between, the other way round when
+    /// `inverted`. nil for an oval with no area.
+    static func ovalWeight(_ px: Float, _ py: Float, u: (Float, Float), v: (Float, Float),
+                           feather: Float, inverted: Bool) -> Float? {
+        let det = u.0 * v.1 - u.1 * v.0
+        guard abs(det) > 1e-6 else { return nil }
+        // The point in the oval's own axes, where the oval is the unit circle.
+        let a = (px * v.1 - py * v.0) / det
+        let b = (u.0 * py - u.1 * px) / det
+        let r = (a * a + b * b).squareRoot()
+        let inner = 1 - min(max(feather, 0), 1)
+        let t = min(max((r - inner) / max(1 - inner, 1e-4), 0), 1)
+        let w = 1 - t * t * (3 - 2 * t)
+        return inverted ? 1 - w : w
     }
 
     /// What a stack adds up to at `p`: each gradient's compensation, summed.
@@ -261,6 +313,11 @@ struct Recipe: Codable, Equatable {
     /// grain, halation and coupler diffusion. Two formats: a 35 mm frame and
     /// a 6x9 on 120.
     var filmFormat: FilmFormat = .mediumFormat
+    /// An instant print's processing temperature, degrees Celsius
+    /// (`ProfilePack.processed(atC:)`); nil is its sheet's normal one, 70 F.
+    /// Optional, so a recipe saved before it existed still loads. Films without
+    /// processing curves ignore it.
+    var processingTemperature: Double? = nil
 
     /// The recipe a newly opened image starts from: this one's look — film,
     /// paper, how it is printed, the film character and the output — with
@@ -292,6 +349,7 @@ struct Recipe: Codable, Equatable {
         r.glareAmount = glareAmount
         r.effects = effects
         r.filmFormat = filmFormat
+        r.processingTemperature = processingTemperature
         r.outputColorSpace = outputColorSpace
         r.gamutCompress = gamutCompress
         return r

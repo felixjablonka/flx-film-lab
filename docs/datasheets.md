@@ -34,11 +34,19 @@ scripts look for these names.
 | Fujifilm | NEOPAN 1600 SUPER PRESTO | AF3-608E | `datasheet_neopan1600superpresto_en_01.pdf` | `build_bw_profiles.py` |
 | Fujifilm | Professional Film Data Guide | AF3-207U | `Fuji_ProfessionalFilmDataGuide.pdf` | reference only |
 | Kodak Alaris | KODAK PROFESSIONAL EKTACHROME Film E100 | E-4000 | `e4000_ektachrome_100.pdf` | `build_profiles.py`, `sheet_readers.py`, `slide_mtf.py` |
+| Eastman Kodak | KODAK PROFESSIONAL ELITE Chrome Extra Color 100 Film | E-126E (4-05) | `e126e-Elitechrome_100ec.pdf` | `build_profiles.py`, `sheet_readers.py`, `slide_mtf.py` |
+| Eastman Kodak | KODAK PROFESSIONAL ELITE Chrome 200 Film | E-148E (4-05) | `e148e-Elite_chrome_200.pdf` | `build_profiles.py`, `sheet_readers.py`, `slide_mtf.py` |
+| Polaroid Corporation | T-53, T-553 and T-803 B&W High Speed Instant Peel-Apart Coaterless Film, Film Data Sheet | T-553 (1999) | `553fds.pdf` | `polaroid_sheets.py`, `build_instant_profiles.py`, `bw_mtf.py` |
+| Polaroid Corporation | Polapan Pro 100 B&W T-54, T-554, T-664 and T-804, Film Data Sheet | T-554 (1999) | `554fds.pdf` | `polaroid_sheets.py`, `build_instant_profiles.py`, `bw_mtf.py` |
+| Polaroid Corporation | Polacolor 559, and Technical Data for T-88, T-108, T-669, T-669S, T-559, T-559S, T-59 and T-809 Instant Color Peel-Apart Films | T-559 (1999) | `559fds.pdf` | `polaroid_sheets.py`, `build_instant_profiles.py`, `slide_mtf.py` |
 | Kodak Alaris | KODAK PROFESSIONAL EKTAR 100 Film | E-4046 | `e4046_ektar_100.pdf` | reference only |
 | Kodak Alaris | KODAK PROFESSIONAL TRI-X 320 and 400 Films | F-4017 | `Kodak Tri-X 320 and 400 F-4017.pdf` | `build_bw_profiles.py`, `bw_mtf.py` |
 | Eastman Kodak | KODACHROME 25, 64 and 200 Professional Film | E-55 | `Kodachrome Spec Sheet.pdf` | `build_profiles.py`, `slide_mtf.py` |
 | Kodak Alaris | KODAK PROFESSIONAL T-MAX 100 Film | F-4016 | `f4016_tmax_100-2018.pdf` | `build_bw_profiles.py`, `bw_mtf.py` |
 | Kodak Alaris | KODAK PROFESSIONAL T-MAX 400 Film | F-4043 | `f4043_tmax_400.pdf` | none: its RMS granularity, 10, is Delta 400's (`bake_packs.py`) |
+| Eastman Kodak | EASTMAN DOUBLE-X Negative Film 5222/7222 | H-1-5222 (10/2003) | `5222-Double-X_v1.pdf` | `kodak_bw_cine_sheets.py`, `build_bw_profiles.py`, `bw_mtf.py` |
+| Eastman Kodak | EASTMAN DOUBLE-X Negative Film 5222/7222, Technical Data | H-1-5222 (3-22) | `DOUBLEX-Technical-Data-EN_v2.pdf` | `kodak_bw_cine_sheets.py`, `build_bw_profiles.py` |
+| Eastman Kodak | KODAK Black-and-White Print Film 2302/3302, Technical Data | H-1-2302 (2022) | `Kodak 2302.pdf` | `kodak_bw_cine_sheets.py`, `build_bw_profiles.py` |
 | Eastman Kodak | KODAK ROYAL GOLD 100 Film | E-41 | `e41-1998_02_Kodak Royal Gold 100.pdf` | `build_profiles.py`, `sheet_readers.py` |
 | Eastman Kodak | KODAK VERICOLOR III Professional Film | E-26 | `e26-Vericolor_III.pdf` | `build_profiles.py`, `sheet_readers.py`, `slide_mtf.py` |
 | Kodak | KODAK WRATTEN 2 Optical Filter No. 8, 22, 25, 47 and 58 | filter data | `Kodak Wratten 2 Filter 8.pdf (and 22, 25, 47, 58)` | `lens_filters.py` |

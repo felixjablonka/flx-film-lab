@@ -57,10 +57,13 @@ struct FilmUniforms {
 
 // One exposure gradient, handles in pixels. ExposureGradientUniform in Swift.
 struct ExposureGradientU {
-    float2 a;                 // the full compensation at and behind a
-    float2 b;                 // none at and past b
+    float2 a;                 // linear: the full compensation at and behind a; oval: its centre
+    float2 b;                 // linear: none at and past b; oval: the end of one axis
+    float2 c;                 // oval: the end of the other axis
     float  ev;
-    float  _p0, _p1, _p2;
+    int    kind;              // 0 linear, 1 oval
+    float  feather;           // oval: the transition, a share of its size
+    int    inverted;          // oval: the compensation outside it
 };
 
 struct DevelopUniforms {
@@ -222,15 +225,32 @@ inline float2 intoTriangle(float2 xy, float2 white) {
 // Stage 1 — filming.expose : working RGB -> film log exposure
 // ---------------------------------------------------------------------------
 
-/// The stacked exposure gradients' compensation in EV at pixel position `p`:
-/// each one's smoothstep along its handles, as the darkroom gradient's, and
-/// the stack summed. ExposureGradient.exposureEV in Recipe.swift is the same
-/// on the CPU.
+/// The stacked exposure gradients' compensation in EV at pixel position `p`,
+/// the stack summed. A linear gradient's is a smoothstep along its handles, as
+/// the darkroom gradient's; an oval's the same smoothstep across its
+/// transition, from the oval shrunk by its feather out to the oval itself,
+/// the other way round when inverted. ExposureGradient.exposureEV in
+/// Recipe.swift is the same on the CPU.
 static float gradientEV(float2 p, constant ExposureGradientU *gradients, int count)
 {
     float ev = 0.0f;
     for (int i = 0; i < count; i++) {
         float2 d = gradients[i].b - gradients[i].a;
+        if (gradients[i].kind == 1) {
+            float2 v = gradients[i].c - gradients[i].a;
+            float det = d.x * v.y - d.y * v.x;
+            if (fabs(det) <= 1e-6f) continue;
+            // The point in the oval's own axes, where the oval is the unit circle.
+            float2 q = p - gradients[i].a;
+            float a = (q.x * v.y - q.y * v.x) / det;
+            float b = (d.x * q.y - d.y * q.x) / det;
+            float r = sqrt(a * a + b * b);
+            float inner = 1.0f - clamp(gradients[i].feather, 0.0f, 1.0f);
+            float t = clamp((r - inner) / max(1.0f - inner, 1e-4f), 0.0f, 1.0f);
+            float w = 1.0f - t * t * (3.0f - 2.0f * t);
+            ev += gradients[i].ev * (gradients[i].inverted != 0 ? 1.0f - w : w);
+            continue;
+        }
         float lengthSquared = dot(d, d);
         if (lengthSquared <= 1e-9f) continue;
         float t = clamp(dot(p - gradients[i].a, d) / lengthSquared, 0.0f, 1.0f);

@@ -54,6 +54,8 @@ struct ContentView: View {
     @State private var isNamingPreset = false
     @State private var presetName = ""
     @AppStorage("canvasBackground") private var backgroundRaw = CanvasBackground.dark.rawValue
+    /// The masks' and gradients' lines hidden, to judge the print without them.
+    @AppStorage("hideMaskLines") private var hideMaskLines = false
 
     private var background: CanvasBackground {
         CanvasBackground(rawValue: backgroundRaw) ?? .dark
@@ -71,6 +73,10 @@ struct ContentView: View {
         .toolbar { toolbarContent }
         // A mask selected on one image means nothing on the next.
         .onChange(of: model.fileURL) { selectedMask = nil }
+        // Hiding the lines puts editing down; choosing a mask or gradient to
+        // edit, or adding one, takes it up again, lines and all.
+        .onChange(of: hideMaskLines) { if hideMaskLines { selectedMask = nil } }
+        .onChange(of: selectedMask) { if selectedMask != nil { hideMaskLines = false } }
         // A preset file may have been copied in, or taken away, in Finder.
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             model.reloadPresets()
@@ -132,7 +138,7 @@ struct ContentView: View {
     /// watch the preview themselves, so a finished frame redraws them alone.
     private var canvas: some View {
         PrintCanvas(model: model, preview: model.preview, selectedMask: $selectedMask,
-                    background: background, open: { isImporting = true })
+                    background: background, linesHidden: hideMaskLines, open: { isImporting = true })
             .overlay(alignment: .bottom) {
                 StatusLine(model: model, preview: model.preview, background: background)
             }
@@ -176,6 +182,12 @@ struct ContentView: View {
                 .keyboardShortcut("r", modifiers: .command)
                 .disabled(!model.hasImage)
                 .help("Crop, turn and level the print (⌘R): the whole frame shows with the crop on it. Return keeps the crop, Escape goes back.")
+        }
+        ToolbarItem {
+            Toggle(isOn: $hideMaskLines) { Label("Hide Mask Lines", systemImage: "eye.slash") }
+                .keyboardShortcut("h", modifiers: [.command, .shift])
+                .disabled(!model.hasImage)
+                .help("Hide the lines of the masks and gradients (⇧⌘H), to see the print without them: they still act. Choosing one to edit shows them again.")
         }
         ToolbarItem {
             Toggle(isOn: $model.loupeOn) { Label("Loupe", systemImage: "magnifyingglass") }
@@ -234,6 +246,7 @@ private struct PrintCanvas: View {
     @ObservedObject var preview: PrintPreview
     @Binding var selectedMask: UUID?
     let background: CanvasBackground
+    let linesHidden: Bool
     let open: () -> Void
 
     var body: some View {
@@ -263,7 +276,8 @@ private struct PrintCanvas: View {
                                         selected: $selectedMask,
                                         frame: CGRect(origin: .zero, size: fitted),
                                         map: preview.map,
-                                        onLightBackground: background.isLight)
+                                        onLightBackground: background.isLight,
+                                        linesHidden: linesHidden)
                                 .frame(width: fitted.width, height: fitted.height)
                         }
                     }

@@ -18,6 +18,8 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <string>
+#include <utility>
 #include <vector>
 
 // A movie, by its name: what opens in the Motion mode (AppMode.opening).
@@ -132,6 +134,7 @@ public:
     // only: no effects.
     void exportLUT(const QString &path);
     QString suggestedLUTName();
+    std::pair<std::string, std::string> printDescription();
 
 signals:
     // Anything the controls or the toolbar show.

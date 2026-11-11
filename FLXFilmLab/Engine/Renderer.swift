@@ -16,16 +16,18 @@ struct FilmUniforms {
     var gradientCount: Int32 = 0
 }
 
-/// One exposure gradient as `film_expose` reads it: both handles in pixels of
-/// the frame being rendered, and the compensation in EV. `ExposureGradientU`
-/// in flx.metal.
+/// One exposure gradient as `film_expose` reads it: its handles in pixels of
+/// the frame being rendered (a linear gradient's two, an oval's centre and
+/// axis ends), the compensation in EV, and an oval's feather and side.
+/// `ExposureGradientU` in flx.metal.
 struct ExposureGradientUniform {
     var a: SIMD2<Float> = .zero
     var b: SIMD2<Float> = .zero
+    var c: SIMD2<Float> = .zero
     var ev: Float = 0
-    var pad0: Float = 0
-    var pad1: Float = 0
-    var pad2: Float = 0
+    var kind: Int32 = 0
+    var feather: Float = 0
+    var inverted: Int32 = 0
 }
 
 struct DevelopUniforms {
@@ -117,6 +119,8 @@ struct FilmStageKey: Equatable {
     var grain: [Double]
     var cameraSharpness: Bool
     var filmFormat: FilmFormat
+    /// An instant print's processing temperature, which picks its curves.
+    var processingTemperature: Double?
     /// The grain is drawn on the frame, unless the print is shaped: then it
     /// is drawn on the print's own pixels (`Renderer.render`, step 2d).
     var grainOnFrame: Bool
@@ -133,6 +137,7 @@ struct FilmStageKey: Equatable {
         grain = [recipe.grainEnabled ? 1 : 0, recipe.grainAmount, recipe.grainScale]
         cameraSharpness = recipe.keepsCameraSharpness
         filmFormat = recipe.filmFormat
+        processingTemperature = setup.film.processing == nil ? nil : recipe.processingTemperature
         self.grainOnFrame = grainOnFrame
     }
 }
@@ -504,10 +509,16 @@ final class Renderer {
             // The exposure gradients change what the film receives, so they act
             // on the exposure itself, before halation spreads it in the film.
             var gradients = setup.exposureGradients.map { g in
-                ExposureGradientUniform(
-                    a: SIMD2(Float(g.points[0].x) * Float(frameWidth), Float(g.points[0].y) * Float(frameHeight)) - origin,
-                    b: SIMD2(Float(g.points[1].x) * Float(frameWidth), Float(g.points[1].y) * Float(frameHeight)) - origin,
-                    ev: Float(g.exposureEV))
+                let pixel = { (p: CGPoint) in
+                    SIMD2(Float(p.x) * Float(frameWidth), Float(p.y) * Float(frameHeight)) - origin
+                }
+                return ExposureGradientUniform(
+                    a: pixel(g.points[0]), b: pixel(g.points[1]),
+                    c: g.isOval ? pixel(g.points[2]) : .zero,
+                    ev: Float(g.exposureEV),
+                    kind: g.isOval ? 1 : 0,
+                    feather: Float(g.featherAmount),
+                    inverted: g.isInverted ? 1 : 0)
             }
             var filmUniforms = FilmUniforms(rgbToXYZ: setup.film.rgbToXYZMatrix,
                                             exposureScale: pow(2, setup.exposureEV),
@@ -530,6 +541,7 @@ final class Renderer {
                 exposed = encodeHalation(cb, source: raw, destination: rawB,
                                          scratch1: scratch1, scratch2: scratch2,
                                          halation: halation, recipe: recipe,
+                                         frame: setup.film.frame(recipe.filmFormat),
                                          width: width, height: height)
             }
 
@@ -804,7 +816,7 @@ final class Renderer {
                            setup: RenderSetup, recipe: Recipe, origin: SIMD2<UInt32> = .zero) {
         let width = clean.width, height = clean.height
         let pitch = Self.pixelSizeUm(width: Int(imageSize.width), height: Int(imageSize.height),
-                                     format: recipe.filmFormat)
+                                     frame: setup.film.frame(recipe.filmFormat))
         let size = Float(recipe.grainScale)
         let top = grain.tableDensityMax
         var table = grain.selwynUm2
@@ -967,7 +979,7 @@ final class Renderer {
     /// (`Part.beyond`).
     static func reach(setup: RenderSetup, recipe: Recipe, frameWidth: Int, frameHeight: Int,
                       shaped: Bool) -> Reach {
-        let pitch = pixelSizeUm(width: frameWidth, height: frameHeight, format: recipe.filmFormat)
+        let pitch = pixelSizeUm(width: frameWidth, height: frameHeight, frame: setup.film.frame(recipe.filmFormat))
         func mean(_ v: [Float]) -> Float { v.isEmpty ? 0 : v.reduce(0, +) / Float(v.count) }
         var film: Float = 0, widest: Float = 0
         if recipe.halationEnabled, let h = setup.film.defaults.halation, h.active {
@@ -1206,9 +1218,10 @@ final class Renderer {
                                 scratch2: MTLTexture,
                                 halation: HalationDefaults,
                                 recipe: Recipe,
+                                frame: (long: Double, short: Double),
                                 width: Int, height: Int) -> MTLTexture {
         let pixelSizeUm = Self.pixelSizeUm(width: Int(imageSize.width), height: Int(imageSize.height),
-                                           format: recipe.filmFormat)
+                                           frame: frame)
         var current = source
 
         // --- scatter --- (none with Camera sharpness: the file's own detail)
@@ -1343,7 +1356,7 @@ final class Renderer {
               let dc = setup.film.defaults.dirCouplers, dc.diffusionSizeUm > 0 else { return 0 }
         let pixelSizeUm = Self.pixelSizeUm(width: Int(imageSize.width),
                                            height: Int(imageSize.height),
-                                           format: recipe.filmFormat)
+                                           frame: setup.film.frame(recipe.filmFormat))
         return dc.diffusionSizeUm * Float(recipe.couplersDiffusion) / pixelSizeUm
     }
 
@@ -1355,9 +1368,14 @@ final class Renderer {
     /// side, 24 mm on 35 mm and 56 mm on 120, and one wider than 3:2 spans
     /// the long side, inside the frame either way.
     static func pixelSizeUm(width: Int, height: Int, format: FilmFormat) -> Float {
+        pixelSizeUm(width: width, height: height, frame: format.frameMM)
+    }
+
+    /// The same on a frame of `frame` mm: an instant print's own
+    /// (`ProfilePack.frame`).
+    static func pixelSizeUm(width: Int, height: Int, frame: (long: Double, short: Double)) -> Float {
         let long = Float(max(width, height)), short = Float(min(width, height))
         guard short > 0 else { return 10 }
-        let frame = format.frameMM
         return min(Float(frame.long) * 1000 / long, Float(frame.short) * 1000 / short)
     }
 

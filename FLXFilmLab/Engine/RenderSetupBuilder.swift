@@ -34,14 +34,17 @@ enum RenderSetupBuilder {
     /// the meters read; `nil` falls back to the recipe's own slider.
     static func build(recipe: Recipe, exposureEV: Float? = nil) throws -> RenderSetup {
         let library = PackLibrary.shared
-        let film = try library.pack(recipe.filmStock)
+        // An instant print is processed at the recipe's temperature: its own
+        // curves for it (`ProfilePack.processed(atC:)`).
+        let film = try library.pack(recipe.filmStock).processed(atC: recipe.processingTemperature)
         let paper = try library.pack(recipe.printStock)
         let shared = library.shared_
 
         // A positive stock printed onto RA-4 paper comes out inverted. That is
         // exactly what would happen in a lab, and exactly what nobody wants, so
-        // slides default to being read directly off the light table.
-        let scanFilm = recipe.scanFilm ?? film.isPositive
+        // slides default to being read directly off the light table. An
+        // instant print is the print: it is always seen as it is.
+        let scanFilm = film.isViewedDirectly(scanFilm: recipe.scanFilm)
 
         // --- Enlarger -------------------------------------------------------
         // Neutral filtration comes from agx's measured table for this exact

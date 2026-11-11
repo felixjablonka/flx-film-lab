@@ -114,7 +114,10 @@ int main(int argc, char **argv)
         clock.start();
         const LookLUT lut = baker.bake(recipe, size, inputs.at(inputName), outputs.at(outputName));
         const double ms = double(clock.nsecsElapsed()) / 1e6;
-        const std::string text = lut.cubeText(f.name + " on " + packs.pack(recipe.printStock).name);
+        // a slide or an instant print is seen as it is: no paper in its title
+        const std::string text = lut.cubeText(f.isViewedDirectly(recipe.scanFilm)
+                                                  ? f.name
+                                                  : f.name + " on " + packs.pack(recipe.printStock).name);
         QFile out(args[0]);
         if (!out.open(QIODevice::WriteOnly) || out.write(text.data(), qint64(text.size())) != qint64(text.size()))
             throw std::runtime_error("cannot write " + args[0].toStdString());

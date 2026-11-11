@@ -33,7 +33,10 @@ struct MotionInspector: View {
     private var paper: ProfilePack? { try? PackLibrary.shared.pack(model.look.recipe.printStock) }
 
     private var printsOnPaper: Binding<Bool> {
-        Binding(get: { !(model.look.recipe.scanFilm ?? (film?.isPositive ?? false)) },
+        Binding(get: {
+                    guard let film else { return !(model.look.recipe.scanFilm ?? false) }
+                    return !film.isViewedDirectly(scanFilm: model.look.recipe.scanFilm)
+                },
                 set: { model.look.recipe.scanFilm = !$0 })
     }
 
@@ -55,8 +58,11 @@ struct MotionInspector: View {
     private var stockSection: some View {
         Section("Film & Paper", subtitle: "The look is the film's and the paper's own spectral data, baked into the clip's colours.") {
             StockPicker(title: "Film", entries: PackLibrary.shared.filmStocks, selection: filmStock)
-            ToggleRow(title: "Print on paper", isOn: printsOnPaper,
-                      help: "Off reads the developed film straight off a light table, the way a slide is viewed. Slide stocks default to that.")
+            // An instant print is the print: there is no paper to put it on.
+            if film?.isInstantPrint != true {
+                ToggleRow(title: "Print on paper", isOn: printsOnPaper,
+                          help: "Off reads the developed film straight off a light table, the way a slide is viewed. Slide stocks default to that.")
+            }
             if printsOnPaper.wrappedValue {
                 StockPicker(title: "Paper", entries: PackLibrary.shared.printStocks, films: false,
                             selection: $model.look.recipe.printStock)

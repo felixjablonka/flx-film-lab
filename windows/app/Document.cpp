@@ -44,6 +44,7 @@ Recipe carryingLook(const Recipe &from, double defaultGrade)
     r.glareAmount = from.glareAmount;
     r.effects = from.effects;
     r.filmFormat = from.filmFormat;
+    r.processingTemperature = from.processingTemperature;
     r.outputColorSpace = from.outputColorSpace;
     r.gamutCompress = from.gamutCompress;
     return r;
@@ -94,6 +95,7 @@ Document::Document(const AppData &data, QObject *parent)
     const auto &sizes = previewSizes();
     if (std::find(sizes.begin(), sizes.end(), saved) != sizes.end())
         m_previewSize = saved;
+    m_maskLinesHidden = appSettings().value("hideMaskLines", false).toBool();
     m_presets = m_presetStore.load();
     m_history = std::make_unique<EditHistory<Look>>(
         this, [this] { return m_edits; }, [this](const Look &look) { restore(look); },
@@ -536,10 +538,12 @@ double Document::filmReferenceTemperature()
     return referenceTemperature(film && !film->referenceIlluminant.empty() ? film->referenceIlluminant : "D55");
 }
 
+// Read as a transparency rather than printed; an instant print is the print,
+// seen as it is.
 bool Document::isTransparency()
 {
     const ProfilePack *film = filmPack();
-    return m_edits.recipe.scanFilm.value_or(film && film->isPositive());
+    return film ? film->isViewedDirectly(m_edits.recipe.scanFilm) : m_edits.recipe.scanFilm.value_or(false);
 }
 
 bool Document::printsOnPaper()
@@ -781,6 +785,21 @@ void Document::setSelected(const std::string &id)
     if (id == m_selected)
         return;
     m_selected = id;
+    if (!id.empty() && m_maskLinesHidden) {
+        m_maskLinesHidden = false;
+        appSettings().setValue("hideMaskLines", false);
+    }
+    emit changed();
+}
+
+void Document::setMaskLinesHidden(bool hidden)
+{
+    if (hidden == m_maskLinesHidden)
+        return;
+    m_maskLinesHidden = hidden;
+    appSettings().setValue("hideMaskLines", hidden);
+    if (hidden)
+        m_selected.clear();
     emit changed();
 }
 
@@ -795,21 +814,36 @@ std::vector<PointD> Document::framePoints(const std::vector<PointD> &points) con
     return out;
 }
 
-void Document::addGradient()
+// A new gradient, or oval, laid on the part of the frame in view.
+void Document::addGradient(bool oval)
 {
     Recipe r = m_edits.recipe;
     if (int(r.gradients.size()) >= kMaxExposureGradients)
         return;
     ExposureGradient g;
     g.id = newIdentifier();
-    g.name = QStringLiteral("Gradient %1").arg(r.gradients.size() + 1).toStdString();
-    const std::vector<PointD> points = framePoints({{g.ax, g.ay}, {g.bx, g.by}});
+    g.name = QStringLiteral("%1 %2").arg(oval ? "Oval" : "Gradient").arg(r.gradients.size() + 1).toStdString();
+    std::vector<PointD> points = {{g.ax, g.ay}, {g.bx, g.by}};
+    if (oval) {
+        g.shape = GradientShape::Oval;
+        g.points = 3;
+        points = {{0.5, 0.5}, {0.75, 0.5}, {0.5, 0.75}};
+    }
+    points = framePoints(points);
     g.ax = points[0].x;
     g.ay = points[0].y;
     g.bx = points[1].x;
     g.by = points[1].y;
+    if (oval) {
+        g.cx = points[2].x;
+        g.cy = points[2].y;
+    }
     r.gradients.push_back(g);
     m_selected = g.id;
+    if (m_maskLinesHidden) {
+        m_maskLinesHidden = false;
+        appSettings().setValue("hideMaskLines", false);
+    }
     setRecipe(r);
 }
 
@@ -829,6 +863,10 @@ void Document::addMask(MaskShape shape)
     m.points = framePoints(m.points);
     r.masks.push_back(m);
     m_selected = m.id;
+    if (m_maskLinesHidden) {
+        m_maskLinesHidden = false;
+        appSettings().setValue("hideMaskLines", false);
+    }
     setRecipe(r);
 }
 

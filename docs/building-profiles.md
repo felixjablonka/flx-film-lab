@@ -1,8 +1,8 @@
 # Building a film profile from its datasheet: the rules
 
 What every new film stock in `profiles/` is held to, and what the builds so
-far have taught. The README's "Building profiles from datasheets" says how
-each stock was built; this is the checklist for the next one.
+far have taught. `docs/profiles.md` says how each stock was built; this is the
+checklist for the next one.
 
 ## Take everything the sheet gives
 
@@ -73,7 +73,69 @@ each stock was built; this is the checklist for the next one.
   figure as the maker's.
 - **Overlay every trace on the plot image and look at it,** every curve end to
   end, before using it. A bitmap with dashed curves that cross needs each
-  curve walked along its own stroke (`trace_raster_plot.follow`).
+  curve walked along its own stroke (`trace_raster_plot.follow`). Curves drawn
+  in one ink that never cross but run together (Double-X's development series)
+  are told apart by their order: each column's runs shared out top to bottom,
+  the split that moves them least from the column before. Where a sheet draws
+  each curve in one stroke, read it one stroke at a time
+  (`vector_plots.runs`): chaining strokes by their ends (`joined`) runs two
+  curves into one where they end at the same point, as Elite Chrome's green
+  and red curves, and its yellow and magenta dyes, do.
+- **Calibrate a chart on its frame and its ticks together, and read every
+  curve to the frame's edge.** Polaroid's large charts put the frame's edges
+  up to 8 points from where the inner ticks would (their small ones agree to
+  a fifth of a point): each axis is a line fitted to both. Their curves run on
+  past the frame under a clipping path, so a trace is clipped to it, with half
+  a point's slack: without it Polapan's MTF lost its last half cycle per mm,
+  where it falls to 50%. A legend sample drawn inside the frame in the
+  curve's own colour is left out by its box.
+- **Offer only what the sheet plots.** Polaroid's sheets give each print at
+  three processing temperatures: the app offers those three, each its own
+  curves, and nothing between them (Felix, 2026-11-11).
+- **Place a print on its sheet's reference density.** A sheet that plots a
+  print against relative log exposure, with a rating its axis does not place,
+  can still name the density it measures at: Polaroid's "neutral density of
+  .75", which is what an 18% grey card reads on a print. Mid-grey goes there.
+- **Before taking a cast for the film's, see whether any dyes could undo it.**
+  Polacolor's sheet plots no dyes, and draws green 0.1 to 0.4 denser than red
+  and blue: with every one of eleven dye sets, and with the best moved and
+  stretched to the fit's limits, its greys still run magenta. That is the
+  sheet's, and the film's: Polacolor's magenta shadows are its known
+  character (Felix, 2026-11-11). The profile keeps it.
+- **Take a caption for what the plot draws.** Elite Chrome Extra Color's dye
+  plot is captioned "for a midscale neutral subject and D-min" but draws the
+  three dyes and a neutral only. A slide with no D-min spectrum takes its base
+  from its curves' own D-min, in its own dyes (`unmasked_base`).
+- **Where a sheet comes in editions, read them all and lay them over each
+  other.** Take each part from the edition that measures it best (a vector
+  plot over a bitmap of the same data), and the curve from the edition and
+  development the rating names. Double-X's 2003 and 2022 editions share their
+  spectral sensitivity and MTF, but not their curves.
+- **Measure a stated contrast on the sheet's own curves, by the sheet's own
+  formula,** and set it beside any plot of it. 2302's curves measure 0.23 to
+  0.47 above its gamma-against-time plot at every time. Show both readings and
+  their prints, say so, and let the choice be made: for 2302 Felix took the
+  plot's time for the control gamma, the harder of the two.
+- **Check where a curve's D-min lies against what its base can read.** 2302's
+  curves start at 0.005 to 0.016, which no polyester base reads: they are
+  plotted net of the base, and the base comes from another of its figures (its
+  granularity plot, drawn gross).
+- **Check a slide's grey balance against its spectral sensitivity too.** A
+  sensitivity plot is absolute: integrated against daylight, it gives the
+  exposure at which each layer reaches the plot's density, and that should
+  agree with where the curves put each layer. Kodak's Elite Chrome sheets put
+  the blue layer 0.07 and 0.10 decades ahead of the green on their curves, and
+  0.12 and 0.10 by their sensitivities in D55: their greys view blue, and are
+  kept so (`as_drawn`). A dye plot's visual neutral ("normalized dyes to form
+  a visual neutral density of 1.0") is how the dyes add up to a grey, not how
+  the film renders one.
+- **Use the sheet's ratings to check its spectral sensitivity.** A daylight and
+  a tungsten rating fix how much more one light exposes the film than the
+  other at equal illuminance, more exactly than a filter-factor table rounded
+  to practical numbers: Double-X's plot gives 1.254, its EI 250 and 200 1.25.
+- **Place a motion picture film at the maker's normal exposure, and check it
+  against its exposure table.** Kodak's is 10/EI; Double-X's footcandle table,
+  worked through for an 18% grey card, gives exactly that.
 
 ## Never move the curves
 
@@ -92,6 +154,11 @@ shift a layer's curve to hide it.
   - Measure the anchor film on the new film's own paper, so film is compared
     with film.
   - A sheet without colour words takes its sister stock's colour.
+  - First see what the film's own data give on its donor's coupler strength,
+    and judge it by eye on real pictures. Elite Chrome Extra Color's "highest
+    color saturation ... in a 100-speed consumer film", matched to Velvia
+    100's chroma, looked extreme; on E100's strength its own dyes and curves
+    already put it above every other consumer slide here.
 - **Paper.**
   - The maker's own, if agx has it.
   - Otherwise the paper that prints the film's grey wedge most neutral, three
@@ -102,7 +169,9 @@ shift a layer's curve to hide it.
   - The sheet's RMS granularity or Print Grain Index.
   - Without one, the maker's own speed steps, or the class analogue stepped
     by the maker's own range. Say it is an estimate.
-- **Sharpness.** The sheet's MTF, fitted in the bake (`slide_mtf.py`).
+- **Sharpness.** The sheet's MTF, fitted in the bake (`slide_mtf.py`; for
+  silver, `bw_mtf.py`, which fits the scatter's tail as well as its core when
+  the core alone misses a sheet's curve by more than 5%, as on Double-X).
 
 ## Judge by eye
 

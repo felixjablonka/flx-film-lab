@@ -59,6 +59,18 @@ COLOUR: dict[str, dict] = {
     # effect": Provia 100F's colour, 1.04x the scene's chroma and C*/L* where
     # Provia 100F's are 1.03x and 1.05x (agx's strength gives 1.28x).
     "fujifilm_provia_400x": {"interlayer": 0.45},
+    # Kodak's ELITE Chrome slides (E-126E, E-148E) keep the coupler strength of
+    # E100, whose couplers they take: on it their own curves, sensitivities and
+    # dyes render 1.12x and 1.08x the scene's chroma, measured with E100
+    # (1.035x) and Velvia 100 (1.275x) in one harness. Extra Color's "highest
+    # color saturation available today in a 100-speed consumer film" is then
+    # the most of any consumer slide here, and 200's "excellent color ...
+    # similar to 100-speed daylight slide films" next to E100's. Felix's pick
+    # from side-by-sides (2026-11-10), which keeps them in Kodak's slide family:
+    # matched to Velvia 100 instead, at 1.55 times the coupling, Extra Color
+    # looked extreme.
+    "kodak_elite_chrome_extra_color_100": {},
+    "kodak_elite_chrome_200": {},
     # Colour negatives, measured on the print. Where a sheet places its colour
     # only in words, "restrained" or "natural" is taken at Kodak Portra 160's
     # chroma (1.06x on Portra Endura) and "high saturation" at Ektar 100's,
@@ -118,6 +130,11 @@ PAPER: dict[str, str] = {
 }
 
 
+# Polaroid's instant peel-apart prints (`build_instant_profiles.py`): positives
+# on a paper support, each carrying its curves at every processing temperature
+# and its 4x5 frame (`profiles/processing/`).
+INSTANT = ("polaroid_553", "polaroid_polapan_pro_100", "polaroid_polacolor_559")
+
 # Stocks run without DIR couplers. HARMAN Phoenix 200's curves rise about 1.3
 # in density a decade, twice a usual colour negative's: at agx's coupler
 # strength the inhibition would take more than all of that contrast (b = 1.31,
@@ -128,7 +145,9 @@ PAPER: dict[str, str] = {
 # colored to provide masking correction" (Kodak, SMPTE 1968, of 5254,
 # "structurally the same"), which its equivalent dyes carry, and its film-only
 # MTF never rises over 100% as an inhibitor's edge effect would make it.
-NO_COUPLERS = {"harman_phoenix_200", "kodak_5251_50t"}
+# Polaroid's prints: their MTFs fall from the start, with no edge effect; dye
+# developers and a silver transfer have no inhibitor of a DIR coupler's kind.
+NO_COUPLERS = {"harman_phoenix_200", "kodak_5251_50t", *INSTANT}
 
 # The light a stock is balanced for, where agx's is not its sheet's. Kodak's
 # VISION3 200T and 500T sheets: "balanced for exposure with tungsten

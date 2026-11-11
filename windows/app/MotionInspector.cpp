@@ -151,9 +151,11 @@ void MotionInspector::buildStocks()
         film->setCurrent(QString::fromStdString(r.filmStock));
         const bool printing = m_doc.printsOnPaper();
         onPaper->setChecked(printing);
+        // an instant print is the print: there is no paper to put it on
+        const ProfilePack *f = m_doc.filmPack();
+        onPaper->setVisible(!(f && f->isInstantPrint()));
         paper->setVisible(printing);
         paper->setCurrent(QString::fromStdString(r.printStock));
-        const ProfilePack *f = m_doc.filmPack();
         bool suggest = false;
         if (printing && f && !f->targetPrint.empty() && f->targetPrint != r.printStock)
             for (const PackIndexEntry &e : m_doc.packs().paperEntries())

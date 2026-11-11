@@ -467,9 +467,11 @@ final class DocumentModel: ObservableObject {
     }
 
     /// True when the loaded stock is being read as a transparency rather than
-    /// printed, which changes which controls are meaningful.
+    /// printed, which changes which controls are meaningful. An instant print
+    /// is the print, seen as it is.
     var isTransparency: Bool {
-        recipe.scanFilm ?? (filmPack?.isPositive ?? false)
+        guard let film = filmPack else { return recipe.scanFilm ?? false }
+        return film.isViewedDirectly(scanFilm: recipe.scanFilm)
     }
 
     // MARK: - Rendering

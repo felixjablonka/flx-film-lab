@@ -149,6 +149,25 @@ def by_dashes(plot: VectorPlot, patterns: dict[str, tuple[float, ...]],
     return out
 
 
+def runs(plot: VectorPlot) -> list[np.ndarray]:
+    """Every curve in the plot as data, one per stroke, sorted along x: each
+    sub-path that has extent across both axes (rules and ticks have none
+    across one), never chained to another. For a sheet that draws each curve
+    in one stroke, where curves meet at their ends: `joined` would run two of
+    them into one there."""
+    page = pymupdf.open(plot.pdf)[plot.page]
+    out = []
+    for path in page.get_drawings():
+        if path.get("type") != "s" or not _inside(plot, path["rect"]):
+            continue
+        for run in _subpaths([i for i in path["items"] if i[0] in ("l", "c")]):
+            points = _flatten_path(run, steps=32)
+            if np.ptp(points[:, 0]) >= 0.5 and np.ptp(points[:, 1]) >= 0.5:
+                data = _to_data(plot, points)
+                out.append(data[np.argsort(data[:, 0], kind="stable")])
+    return out
+
+
 def joined(plot: VectorPlot, tolerance: float = 0.3) -> list[np.ndarray]:
     """Every curve in the plot as data, its strokes joined end to end.
 

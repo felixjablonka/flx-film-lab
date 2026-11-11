@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 # the Mac release this port matches
-project(flx_film_lab_win VERSION 1.4.0 LANGUAGES CXX)
+project(flx_film_lab_win VERSION 1.5.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -118,6 +118,9 @@ flx_tool(flxport-render tools/port-render/main.cpp)
 flx_tool(flxport-setup tools/port-setup/main.cpp)
 flx_tool(flxport-lut tools/port-lut/main.cpp)
 flx_tool(flxport-checks tools/port-checks/main.cpp)
+# the undo steps' names are the app's (EditNames)
+target_sources(flxport-checks PRIVATE app/EditNames.cpp app/Vocabulary.cpp app/Presets.cpp)
+target_include_directories(flxport-checks PRIVATE app)
 
 # The port's RAW decoder, against Apple's (tools/mac-reference/flxdecode).
 # On the CPU, and on the GPU with these kernels (GpuDecoder), as the film's.

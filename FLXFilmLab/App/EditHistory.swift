@@ -237,7 +237,10 @@ enum EditNames {
             // Moving a slider whose auto is on turns the auto off.
             case "autoExposure": return set.contains("exposureEV") ? "Exposure" : "Auto Exposure"
             case "lensFilter": return "Filter"
-            case "exposureGradients": return list(a.gradients, b.gradients, "Gradient")
+            case "exposureGradients":
+                // The one added, deleted or changed names the step: an oval or a gradient.
+                let one = b.gradients.first { !a.gradients.contains($0) } ?? a.gradients.first { !b.gradients.contains($0) }
+                return list(a.gradients, b.gradients, one?.isOval == true ? "Oval" : "Gradient")
             case "frameGeometry": return shape(a.geometry, b.geometry)
             case "brightness": return Controls.brightness.name(v)
             case "autoDensity": return set.contains("brightness") ? Controls.brightness.name(v) : "Auto Brightness"
@@ -277,6 +280,7 @@ enum EditNames {
             case "outputColorSpace": return "Colour Space"
             case "gamutCompress": return "Gamut Compression"
             case "filmFormat": return "Film Format"
+            case "processingTemperature": return "Processing Temperature"
             default: return nil
             }
         }.map(titled)

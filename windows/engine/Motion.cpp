@@ -73,6 +73,7 @@ MotionLook MotionLook::carryingLook(double defaultGrade) const
     r.glareAmount = recipe.glareAmount;
     r.effects = recipe.effects;
     r.filmFormat = recipe.filmFormat;
+    r.processingTemperature = recipe.processingTemperature;
     r.outputColorSpace = recipe.outputColorSpace;
     r.gamutCompress = recipe.gamutCompress;
     next.recipe = r;
@@ -87,7 +88,7 @@ bool printsInBlackAndWhite(const Recipe &recipe, PackLibrary &packs)
         const ProfilePack &film = packs.pack(recipe.filmStock);
         if (film.isMonochrome())
             return true;
-        const bool onPaper = !recipe.scanFilm.value_or(film.isPositive());
+        const bool onPaper = !film.isViewedDirectly(recipe.scanFilm);
         return onPaper && packs.pack(recipe.printStock).isMonochrome();
     } catch (const std::exception &) {
         return false;

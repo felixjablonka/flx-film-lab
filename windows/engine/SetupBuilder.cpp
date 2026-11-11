@@ -233,15 +233,20 @@ float3 SetupBuilder::neutralFiltration(const ProfilePack &film, const ProfilePac
 
 BuiltSetup SetupBuilder::build(const Recipe &recipe, float exposureEV, int width, int height)
 {
-    const ProfilePack &film = m_packs.pack(recipe.filmStock);
+    // An instant print is processed at the recipe's temperature: its own
+    // curves for it (ProfilePack::processed).
+    const ProfilePack film = m_packs.pack(recipe.filmStock).processed(recipe.processingTemperature);
     const ProfilePack &paper = m_packs.pack(recipe.printStock);
     const SharedData &shared = m_packs.shared();
     if (!film.rgbToXYZ)
         throw std::runtime_error(recipe.filmStock + " is not a film for the camera");
 
     // A slide printed onto RA-4 paper comes out inverted: by default slides
-    // are read off the light table.
-    const bool scanFilm = recipe.scanFilm.value_or(film.isPositive());
+    // are read off the light table. An instant print is the print: it is
+    // always seen as it is.
+    const bool scanFilm = film.isViewedDirectly(recipe.scanFilm);
+    // the frame the picture is laid on: an instant print's own, or the format's
+    const auto [frameLong, frameShort] = film.frame(recipe.frameLongMM(), recipe.frameShortMM());
     const LensFilterRef *lensFilter = film.lensFilter(recipe.lensFilter);
 
     // the enlarger
@@ -337,17 +342,23 @@ BuiltSetup SetupBuilder::build(const Recipe &recipe, float exposureEV, int width
     // film_expose
     putColumns(film.rgbToXYZMatrix(), s.film.rgbToXYZ);
     s.film.scale = {std::pow(2.0f, exposureEV), 0, 0, 0};
+    // three vec4 a gradient, as the Mac's ExposureGradientUniform: its handles
+    // in pixels (a linear gradient's two, an oval's centre and axis ends), then
+    // the compensation, the kind, an oval's feather and side
     for (const ExposureGradient &g : recipe.gradients) {
-        if (!g.isActive() || s.gradients.size() / 2 >= size_t(kMaxExposureGradients))
+        if (!g.isActive() || s.gradients.size() / kGradientVec4s >= size_t(kMaxExposureGradients))
             continue;
         s.gradients.push_back({float(g.ax) * float(width), float(g.ay) * float(height),
                                float(g.bx) * float(width), float(g.by) * float(height)});
-        s.gradients.push_back({float(g.exposureEV), 0, 0, 0});
+        s.gradients.push_back(g.isOval() ? Vec4{float(g.cx) * float(width), float(g.cy) * float(height), 0, 0}
+                                         : Vec4{0, 0, 0, 0});
+        s.gradients.push_back({float(g.exposureEV), g.isOval() ? 1.0f : 0.0f, float(g.featherAmount()),
+                               g.isInverted() ? 1.0f : 0.0f});
     }
     s.film.counts = {film.tcLutSize ? film.tcLutSize : 192, film.isMonochrome() ? 1 : 0,
-                     int32_t(s.gradients.size() / 2), 0};
+                     int32_t(s.gradients.size() / kGradientVec4s), 0};
     if (s.gradients.empty())
-        s.gradients.resize(2);
+        s.gradients.resize(kGradientVec4s);
 
     // filming.develop
     s.develop.axis = {film.logExposureStart(), film.logExposureStep(), edgeScale.empty() ? 0.0f : 1.0f,
@@ -402,8 +413,8 @@ BuiltSetup SetupBuilder::build(const Recipe &recipe, float exposureEV, int width
     s.recipe.grainAmount = recipe.grainAmount;
     s.recipe.grainScale = recipe.grainScale;
     s.recipe.cameraSharpness = recipe.keepsCameraSharpness();
-    s.recipe.frameLongMM = recipe.frameLongMM();
-    s.recipe.frameShortMM = recipe.frameShortMM();
+    s.recipe.frameLongMM = frameLong;
+    s.recipe.frameShortMM = frameShort;
     if (film.halation) {
         const HalationDefaults &h = *film.halation;
         s.halation.active = h.active;
@@ -424,7 +435,7 @@ BuiltSetup SetupBuilder::build(const Recipe &recipe, float exposureEV, int width
         s.grain.samples = film.grain->tableSamples();
         s.selwyn = table(film.grain->selwynUm2, 3, 3 * s.grain.samples, 1);
     }
-    s.pixelSizeUm = pixelSizeUm(width, height, recipe.frameLongMM(), recipe.frameShortMM());
+    s.pixelSizeUm = pixelSizeUm(width, height, frameLong, frameShort);
     s.stages.halation = recipe.halationEnabled && film.halation && film.halation->active;
     s.stages.couplers = recipe.couplersEnabled && recipe.couplersAmount > 0 && film.dirCouplers.has_value();
     s.stages.grain = recipe.grainEnabled && recipe.grainAmount > 0 && film.grain.has_value();

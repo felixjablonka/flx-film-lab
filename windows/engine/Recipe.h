@@ -24,17 +24,40 @@ struct CMYOffset {
     bool operator==(const CMYOffset &) const = default;
 };
 
-// Graduated exposure: the handles in normalised image coordinates.
+// Graduated exposure (ExposureGradient): the handles in normalised image
+// coordinates. A linear gradient's two, the full compensation at and behind
+// a, none at and past b; an oval's centre a and the ends of its two axes b and
+// c, as a Dodge & Burn oval's, so it can tilt and shear.
+enum class GradientShape { Linear, Oval };
 struct ExposureGradient {
+    static constexpr double kDefaultFeather = 0.5;
     std::string id;                 // a UUID, as Foundation writes it
     std::string name = "Gradient";
-    double ax = 0.5, ay = 0.3, bx = 0.5, by = 0.55;
+    double ax = 0.5, ay = 0.3, bx = 0.5, by = 0.55, cx = 0, cy = 0;
     int points = 2;
     double exposureEV = -1;
     bool enabled = true;
-    bool isActive() const { return enabled && exposureEV != 0 && points >= 2; }
+    // Optional, as the Mac's, so gradients saved before ovals load: none is
+    // a linear gradient, the default feather, the compensation inside.
+    std::optional<GradientShape> shape;
+    std::optional<double> feather;  // an oval's transition, a share of its size
+    std::optional<bool> inverted;   // an oval's compensation outside it
+    bool isOval() const { return shape == GradientShape::Oval; }
+    double featherAmount() const { return feather.value_or(kDefaultFeather); }
+    bool isInverted() const { return inverted.value_or(false); }
+    bool isActive() const { return enabled && exposureEV != 0 && points >= (isOval() ? 3 : 2); }
+    // The compensation in EV at (x, y), a pixel position in a width x height
+    // frame: a linear gradient's smoothstep along its handles, an oval's
+    // across its transition (film_expose.comp's gradientEV does the same).
+    double exposureAt(double x, double y, double width, double height) const;
     bool operator==(const ExposureGradient &) const = default;
 };
+// How much of an oval's compensation reaches a point (px, py) from its centre,
+// its axes u and v in pixels: 1 inside the oval shrunk by its feather, 0
+// outside it, a smoothstep between, the other way round when inverted;
+// nullopt for an oval with no area (ExposureGradient.ovalWeight).
+std::optional<double> ovalWeight(double px, double py, double ux, double uy, double vx, double vy, double feather,
+                                 bool inverted);
 
 // A darkroom mask (LocalMask): its points in normalised frame coordinates, so
 // a mask drawn on the preview applies unchanged to the export.
@@ -152,6 +175,10 @@ struct Recipe {
     std::string outputColorSpace = "sRGB";
     bool gamutCompress = true;
     std::string filmFormat = "120"; // "35 mm" or "120"
+    // An instant print's processing temperature, degrees Celsius
+    // (ProfilePack::processed); none is its sheet's normal one, 70 F. Films
+    // without processing curves ignore it.
+    std::optional<double> processingTemperature;
     // What the file carries that the port does not model, kept as it was
     // read so it is written back the same.
     QJsonObject extra;

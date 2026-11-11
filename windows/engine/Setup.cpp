@@ -72,15 +72,17 @@ RenderSetup loadSetup(const QString &directory)
     s.film.scale.x = number(film, "exposureScale");
     s.film.counts.x = integer(film, "tcLutSize");
     s.film.counts.y = integer(film, "intoTriangle");
+    // a, b, c, ev, kind, feather, inverted, as ExposureGradientUniform
     for (const QJsonValue &g : field(s.json, "gradients").toArray()) {
         const QJsonArray a = g.toArray();
-        s.gradients.push_back({float(a[0].toDouble()), float(a[1].toDouble()),
-                               float(a[2].toDouble()), float(a[3].toDouble())});
-        s.gradients.push_back({float(a[4].toDouble()), 0, 0, 0});
+        auto at = [&](int i) { return float(a[i].toDouble()); };
+        s.gradients.push_back({at(0), at(1), at(2), at(3)});
+        s.gradients.push_back({at(4), at(5), 0, 0});
+        s.gradients.push_back({at(6), at(7), at(8), at(9)});
     }
-    s.film.counts.z = int32_t(s.gradients.size() / 2);
+    s.film.counts.z = int32_t(s.gradients.size() / kGradientVec4s);
     if (s.gradients.empty())
-        s.gradients.resize(2);      // a storage buffer must have a size
+        s.gradients.resize(kGradientVec4s);     // a storage buffer must have a size
 
     const QJsonObject develop = field(s.json, "developUniforms").toObject();
     s.develop.axis = {number(develop, "logE0"), number(develop, "logEStep"),

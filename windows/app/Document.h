@@ -141,8 +141,14 @@ public:
     // The mask or gradient whose handles show on the canvas: identifiers are
     // unique across both. A viewing state, never in the recipe.
     const std::string &selected() const { return m_selected; }
+    // The masks' and gradients' lines hidden, to judge the print without them;
+    // they go on acting. Hiding puts editing down; choosing a mask or gradient
+    // to edit, or adding one, takes it up again, lines and all. A viewing
+    // preference, kept between sessions.
+    bool maskLinesHidden() const { return m_maskLinesHidden; }
+    void setMaskLinesHidden(bool hidden);
     void setSelected(const std::string &id);
-    void addGradient();
+    void addGradient(bool oval = false);
     void addMask(MaskShape shape);
     void removeGradient(const std::string &id);
     void removeMask(const std::string &id);
@@ -261,4 +267,5 @@ private:
     std::optional<FrameGeometry> m_shapeBeforeCropping;    // what the meters read meanwhile, and Cancel's
     std::optional<GeometryMap> m_displayMap;
     std::string m_selected;
+    bool m_maskLinesHidden = false;
 };

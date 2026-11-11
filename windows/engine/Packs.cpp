@@ -7,7 +7,10 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 
+#include <algorithm>
+#include <cmath>
 #include <cstring>
+#include <limits>
 #include <stdexcept>
 
 namespace {
@@ -145,6 +148,16 @@ ProfilePack parsePack(const QJsonObject &o)
     }
     p.gradeSoftest = optionalNumber(o, "gradeSoftest");
     p.gradeDefault = optionalNumber(o, "gradeDefault");
+    if (o.value("processing").isObject()) {
+        const QJsonObject q = o.value("processing").toObject();
+        ProcessingCurves c;
+        c.normalC = float(q.value("normalC").toDouble());
+        c.temperaturesC = floats(q.value("temperaturesC"));
+        for (const QJsonValue &curves : q.value("densityCurves").toArray())
+            c.densityCurves.push_back(floats(curves));
+        p.processing = std::move(c);
+    }
+    p.frameMM = floats(o.value("frameMM"));
     return p;
 }
 
@@ -158,6 +171,58 @@ const LensFilterRef *ProfilePack::lensFilter(const std::optional<std::string> &i
         if (f.id == *id)
             return &f;
     return nullptr;
+}
+
+namespace {
+
+// The index of the temperature nearest t, the first of two as near.
+size_t nearestTemperature(const std::vector<float> &temperatures, float t)
+{
+    size_t best = 0;
+    for (size_t i = 1; i < temperatures.size(); ++i)
+        if (std::abs(temperatures[i] - t) < std::abs(temperatures[best] - t))
+            best = i;
+    return best;
+}
+
+} // namespace
+
+std::optional<int> ProfilePack::processingFahrenheit(const std::optional<double> &temperatureC) const
+{
+    if (!processing)
+        return std::nullopt;
+    const float t = temperatureC ? float(*temperatureC) : processing->normalC;
+    const float nearest = processing->temperaturesC.empty()
+        ? processing->normalC
+        : processing->temperaturesC[nearestTemperature(processing->temperaturesC, t)];
+    return int(std::lround(nearest * 9 / 5 + 32));
+}
+
+ProfilePack ProfilePack::processed(const std::optional<double> &temperatureC) const
+{
+    if (!processing || !temperatureC || processing->temperaturesC.empty()
+        || processing->densityCurves.size() != processing->temperaturesC.size())
+        return *this;
+    const std::vector<float> &curves =
+        processing->densityCurves[nearestTemperature(processing->temperaturesC, float(*temperatureC))];
+    if (curves.size() != densityCurves.size())
+        return *this;
+    ProfilePack out = *this;
+    out.densityCurves = curves;
+    for (size_t c = 0; c < 3; ++c) {
+        float top = -std::numeric_limits<float>::infinity();
+        for (size_t i = c; i < curves.size(); i += 3)
+            top = std::max(top, curves[i]);
+        out.densityMax[c] = top;
+    }
+    return out;
+}
+
+std::pair<double, double> ProfilePack::frame(double formatLongMM, double formatShortMM) const
+{
+    if (frameMM.size() == 2)
+        return {std::max(frameMM[0], frameMM[1]), std::min(frameMM[0], frameMM[1])};
+    return {formatLongMM, formatShortMM};
 }
 
 std::vector<float> ProfilePack::normalizedDensityCurves() const
@@ -312,15 +377,18 @@ const std::vector<float> &PackLibrary::tcLut(const ProfilePack &pack, const Lens
 
 std::vector<StockGroup> stockGroups(const std::vector<PackIndexEntry> &entries, bool films)
 {
-    std::vector<PackIndexEntry> monochrome, still, cine;
+    std::vector<PackIndexEntry> monochrome, still, cine, instant;
     for (const PackIndexEntry &e : entries)
-        (e.isMonochrome() ? monochrome : e.isMotionPicture() ? cine : still).push_back(e);
+        (films && e.isInstantPrint() ? instant
+         : e.isMonochrome()          ? monochrome
+         : e.isMotionPicture()       ? cine
+                                     : still).push_back(e);
     std::vector<StockGroup> parts;
     if (films) {
         StockGroup negative{"Colour negative", {}}, slide{"Colour slide", {}};
         for (const PackIndexEntry &e : still)
             (e.type == "positive" ? slide : negative).entries.push_back(e);
-        parts = {negative, {"Motion picture", cine}, slide, {"Black and white", monochrome}};
+        parts = {negative, {"Motion picture", cine}, slide, {"Black and white", monochrome}, {"Instant print", instant}};
     } else {
         parts = {{"Colour", still}, {"Motion picture", cine}, {"Black and white", monochrome}};
     }

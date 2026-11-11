@@ -21,6 +21,7 @@ import argparse
 import glob
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -158,6 +159,9 @@ BW_RMS_GRANULARITY = {
     "kodak_tri_x_400_push2": 19.0,
     "agfa_apx_25": 7.0,         # Agfa's range sheet, REFINAL 6 min at 20 C
     "kodak_t_max_100": 8.0,     # Kodak F-4016, D-76 at 20 C
+    # Kodak H-1-5222, both editions: D-96 to the recommended control gamma,
+    # tungsten exposure.
+    "kodak_double_x_5222": 14.0,
     # HARMAN publishes no granularity for any of its films; each takes the
     # Kodak film of its own class (Felix's pick, 2026-11-06). Delta 100 and 400
     # are Ilford's tabular-grain (core-shell) emulsions, T-Max's class: T-Max
@@ -191,6 +195,11 @@ BW_RMS_GRANULARITY.update({
     "ilford_fp4_plus": apx_step(125),
     "ilford_pan_f_plus": apx_step(50),
     "ilford_ortho_plus": apx_step(80),
+    # Polaroid publishes no granularity, and its prints, seen at their own
+    # size, show next to none: an estimate, 4 for Polapan Pro 100's fine
+    # silver, stepped to Type 553's ISO 800 as Agfa's range steps with speed.
+    "polaroid_polapan_pro_100": 4.0,
+    "polaroid_553": apx_step(800, rms=4.0, at_iso=100.0),
 })
 
 
@@ -213,10 +222,22 @@ def bw_defaults(profile, out: dict) -> dict:
     # Kodak's response at 24 cycles/mm. The inhibition is set from this
     # stock's own curve slope at mid-grey, so it gets the fitted response.
     own = bw_mtf.SHEET_MTF.get(profile.info.stock)
-    fit = bw_mtf.fit(own() if own else None)
+    edge = profile.info.stock not in stock_overrides.NO_COUPLERS
+    fit = bw_mtf.fit(own() if own else None, edge=edge)
     hal.update(scatterCoreUm=[fit["scatterCoreUm"]] * 3,
                scatterTailUm=[fit["scatterTailUm"]] * 3,
                scatterTailWeight=[fit["scatterTailWeight"]] * 3)
+    if not edge:
+        # A print with no adjacency effect (Polaroid's): the scatter alone, with
+        # the black-and-white films' halation the fit is made with (a slide's,
+        # which the bake's positive stand-in brings, is three times as strong
+        # and left Polapan's print 2 points softer than its sheet at 4 cycles/mm).
+        hal["halationStrength"] = [bw_mtf.HALATION_STRENGTH] * 3
+        hal["halationFirstSigmaUm"] = [bw_mtf.HALATION_SIGMA_UM] * 3
+        hal["halationNBounces"] = bw_mtf.HALATION_BOUNCES
+        hal["halationBounceDecay"] = bw_mtf.HALATION_DECAY
+        out.pop("dirCouplers", None)
+        return out
     curve = np.asarray(profile.data.density_curves)[:, 0]
     log_exposure = np.asarray(profile.data.log_exposure)
     ok = np.isfinite(curve)
@@ -567,6 +588,15 @@ def bake_profile(stock: str, out_dir: Path, tc_lut_size_note: dict) -> dict:
         pack["lensFilters"] = bake_lens_filters(stock, sensitivity, adaptation, out_dir,
                                                 p.info.reference_illuminant, filters)
 
+    # An instant print's curves at every processing temperature and its frame
+    # (`build_instant_profiles.py`), from beside its profile.
+    processing = LOCAL_PROFILES / "processing" / f"{stock}.json"
+    if processing.exists():
+        sidecar = json.loads(processing.read_text())
+        pack["processing"] = {"normalC": sidecar["normalC"], "temperaturesC": sidecar["temperaturesC"],
+                              "densityCurves": sidecar["densityCurves"]}
+        pack["frameMM"] = sidecar["frameMM"]
+
     (out_dir / f"{stock}.json").write_text(json.dumps(pack))
     return pack
 
@@ -635,6 +665,28 @@ def bake_lens_filters(stock: str, sensitivity: np.ndarray, adaptation, out_dir: 
     return baked
 
 
+# The film menu's order, which the app and the LUT pack keep (the index's):
+# by maker, each product line together, its speeds rising, a push after its
+# film (Felix, 2026-11-11: "the lower speed version should come before the
+# higher speed variant"). A stock's line is the first word after its maker;
+# Polaroid's two black-and-white prints are one line.
+FILM_LINE = {"polaroid_553": ("polaroid black and white", 800),
+             "polaroid_polapan_pro_100": ("polaroid black and white", 100)}
+
+
+def film_order(stock: str) -> tuple:
+    maker, _, rest = stock.partition("_")
+    if stock in FILM_LINE:
+        line, speed = FILM_LINE[stock]
+        return (maker, line, speed, "", stock)
+    words = rest.split("_")
+    for i, word in enumerate(words[1:], 1):
+        number = re.match(r"\d+", word)
+        if number:
+            return (maker, words[0], int(number.group()), "_".join(words[i + 1:]), stock)
+    return (maker, words[0], 0, "", stock)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--out", type=Path, default=DEFAULT_OUT)
@@ -682,8 +734,8 @@ def main() -> int:
         print(f"  {stock:34s} {pack['stage']:8s} {pack['type']:8s}"
               f"{'  tclut ' + str(shape) if shape else ''}")
 
-    for stage in ("filming", "printing"):
-        index[stage].sort(key=lambda e: e["stock"])
+    index["filming"].sort(key=lambda e: film_order(e["stock"]))
+    index["printing"].sort(key=lambda e: e["stock"])
     index_path.write_text(json.dumps(index))
     bake_shared(out_dir, illuminant_names)
 

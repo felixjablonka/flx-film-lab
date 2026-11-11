@@ -1,6 +1,6 @@
 ; FLX Film Lab's installer for Windows (Inno Setup 7). tools\pc\package.cmd
 ; builds it from dist\FLX Film Lab once the app is installed there:
-;   ISCC /DAppVersion=1.4.0 tools\pc\installer.iss
+;   ISCC /DAppVersion=1.5.0 tools\pc\installer.iss
 ;
 ; It installs for the person running it, with no administrator rights, in
 ; their own Programs folder, or for everyone if they choose that in its
@@ -10,7 +10,7 @@
 ; takes all of that away again; the app's settings stay.
 
 #ifndef AppVersion
-  #define AppVersion "1.4.0"
+  #define AppVersion "1.5.0"
 #endif
 #define AppName "FLX Film Lab"
 #define AppExe "FLXFilmLab.exe"

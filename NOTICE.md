@@ -124,9 +124,10 @@ FLX Film Lab is *not* a faithful reproduction:
    The split-contrast and regional-colour zones use the same lightness scale.
    Auto Contrast fits the frame's textured shadow-to-highlight range onto the
    paper rather than NegPy's textural-range formula.
-10. **25 colour profiles are built here rather than upstream** — every
+10. **27 colour profiles are built here rather than upstream** — every
    slide film (Provia 100F, Provia 400X, Astia 100F, Velvia 50, Velvia 100,
-   Ektachrome E100, Kodachrome 25, 64 and 200), Superia 1600 and Superia Reala
+   Ektachrome E100, Elite Chrome Extra Color 100 and Elite Chrome 200,
+   Kodachrome 25, 64 and 200), Superia 1600 and Superia Reala
    100, Agfa Optima II 100 and Portrait XPS 160, Fujifilm's Eterna Vivid
    160T, Eterna 500T and Reala 500D motion picture negatives, Kodak Royal Gold
    100 and Vericolor III 160, Kodak's EXR 50D, EXR 200T and 5251 50T motion
@@ -146,7 +147,15 @@ FLX Film Lab is *not* a faithful reproduction:
    and blue layer speeds are set so a grey views neutral from three stops under
    mid-grey to two over, as each of these sheets says its greys are, within
    0.07 decades of where the sheet draws them; a trace alone left visible
-   casts. Superia 1600 is metered at its EI 1600, takes the per-layer contrast
+   casts. Kodak's Elite Chrome Extra Color 100 (E-126E) and Elite Chrome 200
+   (E-148E), both of 2005, are not: their layers stay as drawn, and their
+   greys view blue (b* -11 and -8 at mid-grey), where Kodak draws the blue
+   layer reaching a density of 1.0 0.10 and 0.07 decades before the green and
+   the sheets' own spectral sensitivities put it there too in daylight. They
+   take from agx only E100's coupler model, at its own strength: their base is
+   their curves' own D-min in their own dyes (neither sheet plots a D-min
+   spectrum), their sensitivities continue past the plotted range at their own
+   final gradients, and they run without agx's per-stock adaptation window. Superia 1600 is metered at its EI 1600, takes the per-layer contrast
    correction agx applied to its X-TRA 400 against Fujifilm's sheet (red
    x0.922, green x0.965, blue x1.093), and has its layer speeds set so a grey
    prints neutral; Superia Reala 100 takes the same correction, metered at its
@@ -230,11 +239,14 @@ FLX Film Lab is *not* a faithful reproduction:
    Tri-X 400 (Kodak F-4017), Kodak T-Max 100 (Kodak Alaris F-4016), Ilford HP5
    Plus, Delta 100, Delta 400, FP4 Plus, Pan F Plus, Ortho Plus and Ilford
    Multigrade RC Deluxe (HARMAN technology technical information), Fujifilm Neopan 1600
-   (Fujifilm AF3-608E) and Agfa APX 25 (Agfa's Professional range sheet), in
+   (Fujifilm AF3-608E), Agfa APX 25 (Agfa's Professional range sheet), and
+   Kodak Double-X 5222 (Kodak H-1-5222, editions of 2003 and 2022) and its
+   release print film Kodak 2302 (Kodak H-1-2302), in
    `profiles/` by
-   `tools/bake/build_bw_profiles.py`. agx's own black-and-white work (Double-X,
-   2302, a Tri-X reversal) sits on its unmerged `dev` branch with a one-channel
-   pipeline; here a silver layer is carried as three identical channels a third
+   `tools/bake/build_bw_profiles.py`. agx's own black-and-white work (its own
+   Double-X and 2302, a Tri-X reversal) sits on its unmerged `dev` branch with
+   a one-channel pipeline; the Double-X and 2302 here are built from Kodak's
+   sheets, not from those. Here a silver layer is carried as three identical channels a third
    each, so the three-layer engine renders it unchanged and neutral by
    construction, with grain drawn once for all three. These profiles copy no
    agx data, only its format. Choices the datasheets leave open: mid-grey sits
@@ -269,7 +281,20 @@ FLX Film Lab is *not* a faithful reproduction:
    T-Max 100 takes Kodak's small-tank D-76 time, 6 1/2 minutes, interpolated
    between the sheet's 6 and 7 1/2 minute curves the same way; its scatter and
    edge effect are fitted to Kodak's own T-Max MTF (to 50 cycles/mm), and its
-   grain to Kodak's RMS 8. A
+   grain to Kodak's RMS 8. Double-X takes the 2022 edition's D-96 curve for 6
+   1/2 minutes, the development its exposure index is for; its mid-grey sits
+   at Kodak's normal exposure, 10/EI, which its own exposure table gives an 18%
+   grey card; its spectral sensitivity is the 2003 edition's D = 1.0 curve,
+   continued to 400 and 670 nm by the D = 0.3 curve's shape; and its scatter,
+   tail as well as core, and edge effect are fitted to its own MTF (to 50
+   cycles/mm), its grain to Kodak's RMS 14. 2302 is projected as agx's 2383,
+   with mid-grey printing at 18.4% transmission and its sensitivity level set
+   to collect as much printer lamp as 2383; its sheet's curves are plotted net
+   of the base, which comes from its granularity plot (0.048), and its curve
+   is interpolated between its 5 and 7 minute curves at 6.52 minutes, where
+   its gamma-against-time plot reaches 2.5, the middle of its control gamma
+   (2.4 to 2.6); measured by the sheet's own formula that curve is 2.78, and the
+   sheet's curves all measure 0.23 to 0.47 above its plot. A
    black-and-white negative on colour paper, a pair agx's neutral-filtration
    table does not cover, has its filtration solved so a mid-grey prints
    neutral. Camera filters for these
@@ -294,7 +319,12 @@ FLX Film Lab is *not* a faithful reproduction:
    the 100F films" and "color fidelity"; x0.65). Provia 100F runs at x1.3,
    picked from side-by-sides: at agx's value it rendered 0.94x the scene's
    chroma, where Fujifilm calls it "vivid and faithful"; it now renders 1.03x.
-   Velvia 100, Kodachrome 64 and Ektachrome E100 keep agx's values. Colour
+   Velvia 100, Kodachrome 64 and Ektachrome E100 keep agx's values, and Kodak's
+   Elite Chromes E100's: on it their own curves and dyes render Extra Color 100
+   ("the highest color saturation available today in a 100-speed consumer
+   film") at 1.12x, the most of the consumer slides here, and Elite Chrome 200
+   ("excellent color ... similar to 100-speed daylight slide films") at 1.08x,
+   beside E100's 1.035x in the same harness. Colour
    negatives are measured on the print, a sheet's "restrained" or "natural"
    taken at Kodak Portra 160's chroma (1.06x on Portra Endura) and "high
    saturation" at Ektar 100's (1.20x), whose sheet says just that: Agfa Portrait
@@ -383,6 +413,24 @@ FLX Film Lab is *not* a faithful reproduction:
    The stocks built here on them (EXR 200T, Eterna 500T, Eterna Vivid 160T,
    5251 50T) take the same light, and Film reference decodes them all at the
    Planckian 3200 K (`tools/bake/stock_overrides.py`).
+17. **Polaroid's instant prints are built here**, a kind of stock agx does not
+   have: Polaroid 553, Polapan Pro 100 and Polacolor 559 (Polaroid
+   Corporation's data sheets of 1999), by
+   `tools/bake/build_instant_profiles.py`. Each is a positive on a paper support
+   (`support: "paper"`), viewed as the engine views a slide, white-pointed on
+   its D-min, from its print's own reflection densities; its picture is laid
+   on the 4x5 print's 117 x 89 mm whatever the recipe's film format; and it
+   carries its print's curves at the three temperatures its sheet plots, 55,
+   70 and 95 F, in `profiles/processing/`, one of which the recipe's
+   processing temperature picks (`ProfilePack.processed(atC:)`). Mid-grey sits
+   where the 70 F curve reads the sheets' reference density, 0.75. The
+   black-and-white two are one silver layer, as item 11's; Polacolor's dyes,
+   which its sheet does not plot, are Fujifilm Crystal Archive's (agx's), the
+   set of agx's slides and papers that views its curves most neutral; as drawn
+   they view magenta, Polacolor's known magenta shadows. None has DIR couplers. Their grain is an estimate,
+   no sheet giving one; their sharpness is fitted to the black-and-white
+   sheets' MTF, Polacolor's to Type 553's moved along frequency as far as the
+   two black-and-white sheets show a print's MTF moves with resolving power.
 
 Everything else matches: `tests/parity` checks the film exposure and negative
 density taps as bit-exact and the final RGB to within 6e-4 across four
@@ -467,7 +515,7 @@ covers it: a fork or redistribution needs its own icon.
 ## Manufacturer datasheets
 
 The profiles are measured off the manufacturers' published datasheets (Kodak,
-Kodak Alaris, Fujifilm, Agfa, HARMAN technology / Ilford). The sheets themselves
+Kodak Alaris, Fujifilm, Agfa, HARMAN technology / Ilford, Konica, Polaroid). The sheets themselves
 are not included; `docs/datasheets.md` lists them. Film, paper, filter, camera and
 format names are trademarks of their owners, used only to say what a profile or
 format models; FLX Film Lab is not affiliated with or endorsed by any of them.

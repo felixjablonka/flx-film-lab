@@ -329,7 +329,19 @@ void Inspector::buildStocks()
         "frame is enlarged less."));
     connect(format, &Segmented::chosen, this,
             [this](int i) { edit([&](Recipe &r) { r.filmFormat = i == 0 ? "35 mm" : "120"; }); });
-    body->addWidget(labelled(QStringLiteral("Film format"), format));
+    auto *formatRow = labelled(QStringLiteral("Film format"), format);
+    body->addWidget(formatRow);
+
+    // An instant print in place of the format: its own frame, and a choice of
+    // the processing temperatures its sheet plots, each its own curves.
+    auto *instantNote = note(QString());
+    body->addWidget(instantNote);
+    auto *processingRow = new QWidget;
+    auto *processingLayout = new QVBoxLayout(processingRow);
+    processingLayout->setContentsMargins(0, 0, 0, 0);
+    body->addWidget(processingRow);
+    auto processingBuilt = std::make_shared<std::vector<float>>();
+    auto processing = std::make_shared<Segmented *>(nullptr);
 
     auto *sharpness = new Segmented({QStringLiteral("Film"), QStringLiteral("Camera")});
     sharpness->setHelp(QStringLiteral(
@@ -367,11 +379,62 @@ void Inspector::buildStocks()
         film->setCurrent(QString::fromStdString(r.filmStock));
         format->setCurrent(r.filmFormat == "35 mm" ? 0 : 1);
         sharpness->setCurrent(r.keepsCameraSharpness() ? 1 : 0);
+        const ProfilePack *f = m_doc.filmPack();
+        const bool instant = f && f->isInstantPrint();
+        formatRow->setVisible(!instant);
+        instantNote->setVisible(instant);
+        processingRow->setVisible(instant && f->processing);
+        if (instant) {
+            const auto [frameLong, frameShort] = f->frame(r.frameLongMM(), r.frameShortMM());
+            instantNote->setText(QStringLiteral("A 4x5 instant print, %1 x %2 mm: the film is the print.")
+                                     .arg(frameLong, 0, 'f', 0)
+                                     .arg(frameShort, 0, 'f', 0));
+        }
+        if (instant && f->processing) {
+            const ProcessingCurves &pc = *f->processing;
+            // built again only for a film whose sheet plots other temperatures
+            if (*processingBuilt != pc.temperaturesC) {
+                *processingBuilt = pc.temperaturesC;
+                while (QLayoutItem *item = processingLayout->takeAt(0)) {
+                    delete item->widget();
+                    delete item;
+                }
+                QStringList labels;
+                for (float t : pc.temperaturesC)
+                    labels << QStringLiteral("%1 °F").arg(std::lround(t * 9 / 5 + 32));
+                auto *choice = new Segmented(labels);
+                choice->setHelp(QStringLiteral(
+                    "The temperature the print develops at, in the camera or the holder: the three Polaroid's sheet "
+                    "plots it at, 55, 70 and 95 F (13, 21 and 35 C), each its own curves. Its normal is 70 F. The "
+                    "exposure stays as you set it, as a meter's would; the sheet's table opens up for cold "
+                    "processing and stops down for hot."));
+                const std::vector<float> temperatures = pc.temperaturesC;
+                const float normal = pc.normalC;
+                connect(choice, &Segmented::chosen, this, [this, temperatures, normal](int i) {
+                    if (i < 0 || size_t(i) >= temperatures.size())
+                        return;
+                    const float t = temperatures[size_t(i)];
+                    edit([&](Recipe &x) {
+                        x.processingTemperature = t == normal ? std::nullopt : std::optional<double>(double(t));
+                    });
+                });
+                processingLayout->addWidget(labelled(QStringLiteral("Processing"), choice));
+                *processing = choice;
+            }
+            // the chosen temperature, or the normal one, as the nearest the sheet plots
+            const float t = r.processingTemperature ? float(*r.processingTemperature) : pc.normalC;
+            int nearest = 0;
+            for (int i = 1; i < int(pc.temperaturesC.size()); ++i)
+                if (std::abs(pc.temperaturesC[size_t(i)] - t) < std::abs(pc.temperaturesC[size_t(nearest)] - t))
+                    nearest = i;
+            if (*processing)
+                (*processing)->setCurrent(nearest);
+        }
+        onPaper->setVisible(!instant);
         const bool printing = m_doc.printsOnPaper();
         onPaper->setChecked(printing);
         paper->setVisible(printing);
         paper->setCurrent(QString::fromStdString(r.printStock));
-        const ProfilePack *f = m_doc.filmPack();
         bool suggest = false;
         if (printing && f && !f->targetPrint.empty() && f->targetPrint != r.printStock)
             for (const PackIndexEntry &e : m_doc.packs().paperEntries())
@@ -518,18 +581,27 @@ void Inspector::buildGradients()
     m_content->layout()->addWidget(section);
     QVBoxLayout *body = section->body();
     auto *empty = note(QStringLiteral(
-        "Add a gradient, then drag its handles on the image: the full compensation is at the solid line, none past "
-        "the dashed one, and the middle handle moves both. Gradients stack, each adding its own exposure where it "
-        "covers."));
+        "Add a gradient or an oval, then drag its handles on the image: the full compensation is at the solid line, "
+        "none past the dashed one. A gradient's middle handle moves it, as an oval's centre does. They stack, each "
+        "adding its own exposure where it covers."));
     body->addWidget(empty);
     auto *rows = new QWidget;
     auto *rowsLayout = new QVBoxLayout(rows);
     rowsLayout->setContentsMargins(0, 0, 0, 0);
     rowsLayout->setSpacing(2);
     body->addWidget(rows);
-    auto *add = addButton(QStringLiteral("Add gradient"));
-    connect(add, &QPushButton::clicked, this, [this] { m_doc.addGradient(); });
-    body->addWidget(add, 0, Qt::AlignLeft);
+    auto *add = new QWidget;
+    auto *addRow = new QHBoxLayout(add);
+    addRow->setContentsMargins(0, 4, 0, 0);
+    addRow->setSpacing(6);
+    auto *addLinear = addButton(QStringLiteral("Add gradient"));
+    connect(addLinear, &QPushButton::clicked, this, [this] { m_doc.addGradient(false); });
+    auto *addOval = addButton(QStringLiteral("Add oval"));
+    connect(addOval, &QPushButton::clicked, this, [this] { m_doc.addGradient(true); });
+    addRow->addWidget(addLinear);
+    addRow->addWidget(addOval);
+    addRow->addStretch(1);
+    body->addWidget(add);
 
     // the rows, built again when the gradients or the selection change
     auto built = std::make_shared<QString>();
@@ -580,7 +652,8 @@ void Inspector::buildGradients()
                 };
                 connect(enabled, &QCheckBox::toggled, this, [edit](bool on) { edit([&](ExposureGradient &x) { x.enabled = on; }); });
                 connect(remove, &QToolButton::clicked, this, [this, id] { m_doc.removeGradient(id); });
-                ParamSlider *exposure = nullptr;
+                ParamSlider *exposure = nullptr, *feather = nullptr;
+                QCheckBox *invert = nullptr;
                 if (selected) {
                     exposure = new ParamSlider(QStringLiteral("Exposure"), -4, 4, 0, 2, QStringLiteral(" EV"));
                     exposure->setHelp(QStringLiteral(
@@ -589,11 +662,27 @@ void Inspector::buildGradients()
                     connect(exposure, &ParamSlider::valueChanged, this,
                             [edit](double v) { edit([&](ExposureGradient &x) { x.exposureEV = v; }); });
                     row->layout()->addWidget(exposure);
+                    if (g.isOval()) {
+                        feather = new ParamSlider(QStringLiteral("Feather"), 0, 1, ExposureGradient::kDefaultFeather, 2);
+                        feather->setHelp(QStringLiteral(
+                            "How gradually the compensation fades: full inside the oval shrunk by this share of its "
+                            "size (the solid line), none outside the oval (the dashed one). 0 is a hard edge."));
+                        connect(feather, &ParamSlider::valueChanged, this,
+                                [edit](double v) { edit([&](ExposureGradient &x) { x.feather = v; }); });
+                        invert = new QCheckBox(QStringLiteral("Invert"));
+                        invert->setFont(theme::small());
+                        invert->setToolTip(QStringLiteral("The compensation outside the oval instead of inside it."));
+                        connect(invert, &QCheckBox::toggled, this, [edit](bool on) {
+                            edit([&](ExposureGradient &x) { x.inverted = on ? std::optional<bool>(true) : std::nullopt; });
+                        });
+                        row->layout()->addWidget(feather);
+                        row->layout()->addWidget(invert);
+                    }
                 }
                 rowsLayout->addWidget(row);
                 // shown now: one added while its section is on screen was not
                 row->show();
-                rowRefreshers->push_back([this, id, row, enabled, ev, exposure] {
+                rowRefreshers->push_back([this, id, row, enabled, ev, exposure, feather, invert] {
                     for (const ExposureGradient &x : m_doc.recipe().gradients) {
                         if (x.id != id)
                             continue;
@@ -609,6 +698,12 @@ void Inspector::buildGradients()
                         }
                         if (exposure)
                             exposure->setValue(x.exposureEV);
+                        if (feather)
+                            feather->setValue(x.featherAmount());
+                        if (invert) {
+                            const QSignalBlocker blockInvert(invert);
+                            invert->setChecked(x.isInverted());
+                        }
                     }
                 });
             }
@@ -1094,11 +1189,13 @@ void Inspector::buildFilmCharacter()
         QStringLiteral("Edge effects"), &Recipe::couplersEnabled,
         QStringLiteral("Development's by-products spread out of dense areas and hold back development beside them, so "
                        "every edge comes out crisper: the adjacency effect behind silver film's acutance. Matched to "
-                       "Kodak's measured sharpness of Tri-X in D-76.")));
+                       "each film's published sharpness, or to Kodak's measured Tri-X in D-76 for a film that "
+                       "publishes none.")));
     edgesLayout->addWidget(slider(QStringLiteral("Edge effect"), 0, 2, 1, 2, {}, &Recipe::couplersAmount,
-                                  QStringLiteral("How strongly development holds back next to dense areas. 1 is D-76; "
-                                                 "above that leans toward a dilute acutance developer such as "
-                                                 "Rodinal; 0 is none.")));
+                                  QStringLiteral("How strongly development holds back next to dense areas. 1 is the "
+                                                 "developer the film's sheet measures, D-76 for most; above that "
+                                                 "leans toward a dilute acutance developer such as Rodinal; 0 is "
+                                                 "none.")));
     auto *edgeWidth = slider(QStringLiteral("Edge width"), 0, 3, 1, 2, {}, &Recipe::couplersDiffusion,
                              QStringLiteral("How far the by-products spread before they act. Wider reads as local "
                                             "contrast more than as edge sharpness."));

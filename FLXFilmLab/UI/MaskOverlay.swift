@@ -16,6 +16,9 @@ struct MaskOverlay: View {
     var map: GeometryMap? = nil
     /// A white outline vanishes on a white surround, so it flips to dark.
     var onLightBackground: Bool = false
+    /// The lines hidden, to see the print without them: the masks and
+    /// gradients still act, and nothing can be dragged (ContentView).
+    var linesHidden: Bool = false
 
     /// Drag locations have to be read in the overlay's own space.
     ///
@@ -33,6 +36,14 @@ struct MaskOverlay: View {
     @State private var gradientDragOrigin: [CGPoint]?
 
     var body: some View {
+        if linesHidden {
+            Color.clear.allowsHitTesting(false)
+        } else {
+            overlay
+        }
+    }
+
+    private var overlay: some View {
         ZStack {
             ForEach(masks) { mask in
                 if mask.enabled {
@@ -48,12 +59,12 @@ struct MaskOverlay: View {
                 }
             }
             ForEach(gradients) { g in
-                if g.enabled, g.points.count >= 2 {
+                if g.enabled, g.points.count >= (g.isOval ? 3 : 2) {
                     let colour = g.id == selected
                         ? Color.accentColor
                         : (onLightBackground ? Color.black.opacity(0.45) : Color.white.opacity(0.45))
                     let width: CGFloat = g.id == selected ? 1.5 : 1
-                    let lines = gradientLines(g)
+                    let lines = g.isOval ? ovalLines(g) : gradientLines(g)
                     // Solid where the compensation is full, dashed where it has
                     // faded out, so the direction reads at a glance. Clipped to
                     // the frame: there is nothing to act on past it.
@@ -69,11 +80,17 @@ struct MaskOverlay: View {
             }
             if let selected, let index = masks.firstIndex(where: { $0.id == selected }) {
                 handles(maskIndex: index)
-            } else if let selected, let index = gradients.firstIndex(where: { $0.id == selected }),
-                      gradients[index].points.count >= 2 {
-                gradientHandle(id: selected, pointIndex: 0)
-                gradientHandle(id: selected, pointIndex: 1)
-                gradientHandle(id: selected, pointIndex: nil)
+            } else if let selected, let index = gradients.firstIndex(where: { $0.id == selected }) {
+                if gradients[index].isOval, gradients[index].points.count >= 3 {
+                    // The centre carries the oval; each axis end shapes it.
+                    gradientHandle(id: selected, pointIndex: 0, movesAll: true)
+                    gradientHandle(id: selected, pointIndex: 1)
+                    gradientHandle(id: selected, pointIndex: 2)
+                } else if gradients[index].points.count >= 2 {
+                    gradientHandle(id: selected, pointIndex: 0)
+                    gradientHandle(id: selected, pointIndex: 1)
+                    gradientHandle(id: selected, pointIndex: nil, movesAll: true)
+                }
             }
         }
         .coordinateSpace(name: Self.space)
@@ -218,20 +235,47 @@ struct MaskOverlay: View {
         return (full, none)
     }
 
-    /// One of a gradient's two handles, or (`pointIndex` nil) the one between
-    /// them, which slides the whole transition without changing its angle or
-    /// width. Found by identifier on every access, so deleting the gradient
-    /// while it is being dragged is harmless.
-    private func gradientHandle(id: UUID, pointIndex: Int?) -> some View {
+    /// An oval gradient's two outlines, each the oval scaled about its centre:
+    /// the oval itself, where its compensation has faded out, and the oval
+    /// shrunk by its feather, inside which it is full; swapped when it acts
+    /// outside. Drawn as the linear gradient's lines are, solid where the
+    /// compensation is full and dashed where it is none.
+    private func ovalLines(_ g: ExposureGradient) -> (full: Path, none: Path) {
+        let c = g.points[0]
+        let u = CGPoint(x: g.points[1].x - c.x, y: g.points[1].y - c.y)
+        let v = CGPoint(x: g.points[2].x - c.x, y: g.points[2].y - c.y)
+        func ellipse(_ scale: CGFloat) -> Path {
+            // Through `point` a sample at a time, so a turned or levelled print
+            // draws it where the frame's pixels went.
+            var path = Path()
+            for i in 0...96 {
+                let t = 2 * CGFloat.pi * CGFloat(i) / 96
+                let p = point(CGPoint(x: c.x + scale * (u.x * cos(t) + v.x * sin(t)),
+                                      y: c.y + scale * (u.y * cos(t) + v.y * sin(t))))
+                if i == 0 { path.move(to: p) } else { path.addLine(to: p) }
+            }
+            return path
+        }
+        let outer = ellipse(1), inner = ellipse(CGFloat(1 - min(max(g.featherAmount, 0), 1)))
+        return g.isInverted ? (outer, inner) : (inner, outer)
+    }
+
+    /// One of a gradient's handles, or (`pointIndex` nil) the one between a
+    /// linear gradient's two. A handle that `movesAll` carries the whole
+    /// gradient: the middle one slides the transition without changing its
+    /// angle or width, an oval's centre moves the oval. Found by identifier on
+    /// every access, so deleting the gradient while it is being dragged is
+    /// harmless.
+    private func gradientHandle(id: UUID, pointIndex: Int?, movesAll: Bool = false) -> some View {
         let points = gradients.first(where: { $0.id == id })?.points ?? []
         let position: CGPoint
         if points.count >= 2 {
-            position = pointIndex.map { point(points[$0]) }
+            position = pointIndex.map { points.indices.contains($0) ? point(points[$0]) : .zero }
                 ?? point(CGPoint(x: (points[0].x + points[1].x) / 2, y: (points[0].y + points[1].y) / 2))
         } else {
             position = .zero
         }
-        let isMiddle = pointIndex == nil
+        let isMiddle = movesAll
 
         return Circle()
             .fill(isMiddle ? Color.white : Color.accentColor)
@@ -246,10 +290,10 @@ struct MaskOverlay: View {
                               gradients[index].points.count >= 2 else { return }
                         let start = gradientDragOrigin ?? gradients[index].points
                         if gradientDragOrigin == nil { gradientDragOrigin = start }
-                        if let i = pointIndex {
-                            gradients[index].points[i] = dragged(start[i], by: value.translation)
-                        } else {
+                        if movesAll {
                             gradients[index].points = start.map { dragged($0, by: value.translation) }
+                        } else if let i = pointIndex, start.indices.contains(i) {
+                            gradients[index].points[i] = dragged(start[i], by: value.translation)
                         }
                     }
                     .onEnded { _ in gradientDragOrigin = nil }

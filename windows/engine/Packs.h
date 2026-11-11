@@ -8,6 +8,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 // The film and paper data the Mac app bundles (FLXFilmLab/Resources/packs in
@@ -81,6 +82,15 @@ struct LensFilterRef {
     std::string designation() const { return wratten.empty() ? name : name + ", Wratten " + wratten; }
 };
 
+// An instant print's curves at each processing temperature its sheet plots
+// (ProcessingCurves): Polaroid's plot the print at 55, 70 and 95 F, and those
+// three are all there is.
+struct ProcessingCurves {
+    float normalC = 0;                              // the sheets' normal one, 70 F: the pack's own curves
+    std::vector<float> temperaturesC;               // ascending
+    std::vector<std::vector<float>> densityCurves;  // one (256, 3) set per temperature, on the normal print's base
+};
+
 struct ProfilePack {
     std::string stock, name, type, support, stage, channelModel, targetPrint;
     std::string referenceIlluminant, viewingIlluminant;
@@ -100,8 +110,31 @@ struct ProfilePack {
     int tcLutSize = 0;
     std::vector<LensFilterRef> lensFilters;
     std::optional<float> gradeSoftest, gradeDefault;
+    std::optional<ProcessingCurves> processing;         // an instant print's, at each temperature
+    std::vector<float> frameMM;                         // an instant print's own frame, mm, or empty
 
     bool isPositive() const { return type == "positive"; }
+    // A film that develops straight into its own print (Polaroid's peel-apart
+    // films): a positive on a paper support, seen by reflection, which the
+    // engine shows as it shows a slide, white-pointed on its base, the paper.
+    bool isInstantPrint() const { return isFilmStage() && support == "paper"; }
+    // Seen as it is, not printed: a slide off the light table unless scanFilm
+    // says otherwise, an instant print always.
+    bool isViewedDirectly(const std::optional<bool> &scanFilm) const
+    {
+        return isInstantPrint() || scanFilm.value_or(isPositive());
+    }
+    // The processing temperature its sheet plots nearest temperatureC (none:
+    // the normal one), in whole degrees Fahrenheit; none without processing curves.
+    std::optional<int> processingFahrenheit(const std::optional<double> &temperatureC) const;
+    // The print processed at temperatureC (none: the sheets' normal one), the
+    // nearest of the temperatures its sheet plots: that print's own curves,
+    // nothing between them. D-min stays the normal print's, so a cold or hot
+    // print's whites keep what processing gave them.
+    ProfilePack processed(const std::optional<double> &temperatureC) const;
+    // The frame a picture is laid on, long and short side in mm: an instant
+    // print's own, or the recipe's format's.
+    std::pair<double, double> frame(double formatLongMM, double formatShortMM) const;
     bool isMonochrome() const { return channelModel == "bw"; }
     bool isMotionPicture() const { return use == "cine"; }
     bool isFilmStage() const { return stage == "filming"; }
@@ -139,6 +172,7 @@ struct PackIndexEntry {
     std::string stock, name, type, support, targetPrint, channelModel, use;
     bool isMonochrome() const { return channelModel == "bw"; }
     bool isMotionPicture() const { return use == "cine"; }
+    bool isInstantPrint() const { return support == "paper"; }   // a film that is its own print
 };
 
 // The stock pickers' sections, in the order they are listed

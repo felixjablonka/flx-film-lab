@@ -15,6 +15,11 @@ struct IVec4 {
     int32_t x = 0, y = 0, z = 0, w = 0;
 };
 
+// An exposure gradient takes three vec4 in RenderSetup::gradients: a, b; c;
+// the compensation in EV, the kind (0 linear, 1 oval), an oval's feather and
+// side (film_expose.comp).
+constexpr size_t kGradientVec4s = 3;
+
 // The uniform blocks, laid out as the shaders declare them: whole vec4s only,
 // which std140, Direct3D's constant buffers and Metal all lay out alike.
 struct FilmBlock {
@@ -113,7 +118,7 @@ struct RenderSetup {
     int height = 0;
 
     FilmBlock film;
-    std::vector<Vec4> gradients;    // two vec4 per gradient; one zero pair when none
+    std::vector<Vec4> gradients;    // kGradientVec4s per gradient; one zero set when none
     DevelopBlock develop;
     PrintBlock print;
     ShapeBlock shape;               // the frame as it is, or the print's shape (shape.active.x 1)

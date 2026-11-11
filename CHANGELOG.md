@@ -1,5 +1,46 @@
 # Changelog
 
+## 1.5.0 (2026-11-11)
+
+Kodak's black-and-white motion picture pair, two Elite Chrome slides,
+Polaroid's peel-apart prints, ovals in Graduated Exposure and a switch for the
+mask lines: 55 film stocks and 14 print stocks in all.
+
+### FLX Film Lab for Windows
+- **Everything new below,** with Ctrl in place of ⌘: the new films, Polaroid's
+  processing temperatures, ovals in Graduated Exposure and Hide Mask Lines
+  (Ctrl+Shift+H).
+
+### New
+- **Kodak Double-X 5222 and its print film, Kodak 2302:** Kodak's
+  black-and-white motion picture negative, printed on its release print film
+  and projected, each from Kodak's own data. Picking Double-X moves the print
+  onto 2302. The V-Log LUT pack has it too.
+- **Polaroid's instant prints:** 553, Polapan Pro 100 and Polacolor 559 (the
+  Polacolor ER of 669), Polaroid's 4x5 peel-apart films, each from Polaroid's
+  own data sheet. The film is the print: shown as it is, on its own 4x5 frame,
+  with a choice of the three processing temperatures its sheet plots, 55, 70
+  and 95 F. The V-Log LUT pack has them too, at 70 F.
+- **Ovals in Graduated Exposure:** exposure compensation inside an oval, or
+  outside it, fading out over its Feather: to give a subject more light or its
+  surroundings less, on the film. It stretches, tilts and moves like a Dodge &
+  Burn oval, and stacks with the gradients.
+- **Hide Mask Lines** (⇧⌘H): the masks' and gradients' lines off the print, to
+  judge it without them; they go on acting.
+- **Kodak Elite Chrome Extra Color 100 and Elite Chrome 200:** Kodak's E-6
+  slides of 2005, each from Kodak's own data, as Kodak drew them: Extra Color
+  the most saturated of the consumer slides, and both with greys that run cool
+  on the light table, as their sheets put them; an 81C warms them back. The
+  V-Log LUT pack has them too.
+
+### Changed
+- **A line of films in order of speed:** the Film menu lists Velvia 50 before
+  Velvia 100, Kodachrome 25, 64 and 200 in that order, and Vision3 50D before
+  200T, 250D and 500T.
+- **A slide's LUT names no paper:** Motion's Export LUT titles a slide by its
+  film alone and says it is viewed on a light table, where it named the paper
+  the slide was never printed on.
+
 ## 1.4.0 (2026-11-07)
 
 Curves, a histogram, a loupe and undo, eight films from Ilford and Konica,

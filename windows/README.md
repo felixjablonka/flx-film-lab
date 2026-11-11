@@ -95,6 +95,23 @@ the RTX 5070 Ti, Direct3D 12 and 11 match as closely, once Direct3D 11 no
 longer read and wrote one texture in a dispatch: with Camera sharpness the
 halation did, which Direct3D 11 does not allow.
 
+Followed to the Mac's 1.5.0: Double-X and 2302, the two Elite Chromes and
+Polaroid's three instant prints come with the packs. The port mirrors the
+instant print: seen as it is whatever Print on paper says, laid on its own
+4x5 frame (117.5 x 88.9 mm, which sets the pitch), and processed at the
+temperature its sheet plots nearest the one chosen (55, 70 or 95 F),
+nothing between. It also mirrors the ovals in Graduated Exposure (three
+vec4 a gradient in `film_expose.comp`), Hide Mask Lines (Ctrl+Shift+H)
+and the films in the menu's order. From DSC_0871 at 3000 px, the port's own
+setup is identical to the Mac's (5e-7 at most), and its renders on Metal,
+Direct3D 12 and 11 alike are within ΔE2000 0.014 with three gradients, two
+of them ovals; 0.08 on Elite Chrome Extra Color; 0.21 on Polaroid 553 at
+55 F and Polacolor at 95 F; 0.16 on Double-X on 2302. Never more than one
+8-bit level off. The Polaroids' residual is the blur's, as above.
+Double-X's is in its development's edge effects: the same code as Tri-X's,
+but stronger (0.39 against 0.27) and wider, so it carries the float steps
+further.
+
 Past 12 MP the intermediates are half precision, as the Mac's. The shaped
 print (`apply_geometry`), dodge & burn (MaskRasterizer) and Glow's effects
 (Core Image kernels on the Mac) are ported with the app (below), and the RAW
@@ -117,7 +134,7 @@ levelling (by the slider, or a line drawn along the horizon), crops of fixed
 or free proportions dragged on the whole frame, the film exposed and
 developed whole and the print made at the crop's own size with its grain
 drawn after (`apply_geometry`), the meters reading the upright crop.
-Graduated exposure and dodge & burn are the Mac's too: gradients given to
+Graduated exposure and dodge & burn are the Mac's too: gradients and ovals given to
 the film at capture, masks (polygons, ovals, gradient cards, feathered,
 inverted, with a local grade) rasterised on the CPU into the 1024-pixel map
 the print kernel reads, each mask's coverage kept while only its strength

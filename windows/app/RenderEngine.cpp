@@ -670,11 +670,13 @@ void RenderEngine::printPart(PartRenderer &part, const Dump &full, const std::st
     }
 
     // the setup of the whole print, for this part of it
-    for (size_t i = 0; i + 1 < s.gradients.size(); i += 2) {
+    for (size_t i = 0; i + kGradientVec4s <= s.gradients.size(); i += kGradientVec4s) {
         s.gradients[i].x -= float(box.x());
         s.gradients[i].y -= float(box.y());
         s.gradients[i].z -= float(box.x());
         s.gradients[i].w -= float(box.y());
+        s.gradients[i + 1].x -= float(box.x());     // an oval's second axis end
+        s.gradients[i + 1].y -= float(box.y());
     }
     s.width = box.width();
     s.height = box.height();

@@ -179,6 +179,12 @@ class Build:
     # With `fit_dyes`: why the donor's dyes were the ones refined, for the
     # datasource, where they were not simply the best fit `--donors` ranks.
     donor_reason: str | None = None
+    # A slide's layers as its sheet draws them on its one exposure axis:
+    # neither matched to the donor's densities at mid-grey
+    # (`align_channel_balance`) nor moved so a grey views neutral
+    # (`neutral_greys`). A curve is never moved to fix a grey (Felix,
+    # 2026-11-01); the slides built before keep their reviewed shifts.
+    as_drawn: bool = False
     created: str = "2026-10-18"
 
 
@@ -234,6 +240,33 @@ BUILDS = [
           "e4000_ektachrome_100.pdf", 2, 100,
           "Kodak Alaris E-4000 (rev. 8-18), KODAK PROFESSIONAL EKTACHROME Film E100, Process E-6, Status A.",
           unmix=True, neutral_greys=True, source=True),
+    # Kodak's ELITE Chrome Extra Color 100 and ELITE Chrome 200 (both sheets
+    # April 2005), E-6 consumer slides, each built on its own sheet as far as
+    # it goes: curves, spectral sensitivities (continued past their plotted
+    # ends on their own gradients), dyes and midscale neutral, and the curves'
+    # own D-min as the base, neither sheet plotting a D-min spectrum (Extra
+    # Color's dye plot is captioned for one but draws none). Only the coupler
+    # model is Ektachrome E100's, Kodak's E-6 slide in agx's set, at E100's own
+    # strength (`stock_overrides.COLOUR`); agx's adaptation window, fitted to
+    # E100's own sensitivities, is left out. Placed as every slide
+    # here is, at E100's D-min + 1.0 speed point: ISO 2240's speed point, read
+    # on the mean of their curves, rates them 111 and 193 against the sheets'
+    # 100 and 200. The layers stay as drawn (`as_drawn`): read through Status A,
+    # each sheet's own visual neutral lands on its blue curve 0.14 (Extra
+    # Color) and 0.10 (200) decades under its green, as E100's does by 0.09,
+    # so their greys view a little blue. Neither sheet mentions antihalation;
+    # an E-6 slide's undercoat is E100's "strong".
+    Build("kodak_elite_chrome_extra_color_100", "Kodak Elite Chrome Extra Color 100", "kodak_ektachrome_100",
+          "e126e-Elitechrome_100ec.pdf", 4, 100,
+          "Kodak E-126E (minor revision 4-05), KODAK PROFESSIONAL ELITE Chrome Extra Color 100 Film, Process E-6, "
+          "Status A.",
+          unmix=True, source=True, as_drawn=True, unmasked_base=True, own_tails=True, no_window=True,
+          created="2026-11-10"),
+    Build("kodak_elite_chrome_200", "Kodak Elite Chrome 200", "kodak_ektachrome_100",
+          "e148e-Elite_chrome_200.pdf", 3, 200,
+          "Kodak E-148E (minor revision 4-05), KODAK PROFESSIONAL ELITE Chrome 200 Film, Process E-6, Status A.",
+          unmix=True, source=True, as_drawn=True, unmasked_base=True, own_tails=True, no_window=True,
+          created="2026-11-10"),
     Build("fujifilm_velvia_50", "Fujifilm Velvia 50", "fujifilm_velvia_100",
           "VELVIA 50 Spec Sheet.pdf", 7, 50,
           "Fujifilm AF3-0221E2, FUJICHROME Velvia 50 Professional [RVP50], E-6/CR-56, Status A.",
@@ -1266,6 +1299,10 @@ def build_unmixed(build: Build) -> Path:
         measured["dyes"] = np.where(defined[:, None], cd, np.nan)
         measured["base"] = np.where(defined, bd, np.nan)
         measured["fog"] = base
+        if "neutral" in sourced:
+            # the sheet's own midscale neutral, kept with the profile
+            n = sourced["neutral"]
+            measured["neutral"] = np.interp(wl, n[:, 0], n[:, 1], left=np.nan, right=np.nan)
 
     if build.normal_log_h is not None:
         normal = build.normal_log_h() if callable(build.normal_log_h) else build.normal_log_h
@@ -1320,7 +1357,10 @@ def build_unmixed(build: Build) -> Path:
                               for c in range(3)], axis=-1)
         placement += (" Layer speeds moved by " + ", ".join(f"{n} {v:+.3f}" for n, v in zip("RGB", build.layer_shifts))
                       + " decades so a grey prints grey; the curves are otherwise as drawn.")
-    if positive and build.layer_shifts is None and not build.neutral_greys:
+    if positive and build.as_drawn:
+        placement += (" The three layers stay as the sheet draws them on its one axis, none moved to make a grey "
+                      "view neutral.")
+    elif positive and build.layer_shifts is None and not build.neutral_greys:
         # The per-layer speed balance is the part of a trace that cannot be
         # trusted (see align_channel_balance); a slide takes its donor's, read
         # the same way, so its greys come out as neutral as the donor's.
@@ -1413,9 +1453,12 @@ def build_unmixed(build: Build) -> Path:
                          "are balanced so an 18% grey exposes every layer equally.")
         base_note = (" The base density is the sheet's own D-min spectral density, base and fog, and the profile "
                      "keeps its midscale neutral." if build.sheet_base else
-                     " The film has no orange mask: its base is its fog and stain, the dyes in the amounts that read "
-                     "the curves' own D-min (" + ", ".join(f"{n} {v:.2f}" for n, v in zip("RGB", measured["fog"]))
-                     + ")." if build.unmasked_base else "")
+                     (" The sheet plots no D-min spectrum: the slide's base is its D-min, the sheet's dyes in the "
+                      "amounts that read the curves' own D-min (" if positive else
+                      " The film has no orange mask: its base is its fog and stain, the dyes in the amounts that read "
+                      "the curves' own D-min (") + ", ".join(f"{n} {v:.2f}" for n, v in zip("RGB", measured["fog"]))
+                     + ")." + (" The profile keeps the sheet's midscale neutral." if "neutral" in measured else "")
+                     if build.unmasked_base else "")
         dyes_note = ""
         if build.fit_dyes and build.dyes_from is not None:
             q = measured["dye fit"]

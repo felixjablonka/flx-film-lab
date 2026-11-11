@@ -410,6 +410,72 @@ def exr_200t():
             "sensitivity": vector_plots.joined_by_peak(EXR_200T_SENSITIVITY, ("B", "G", "R"))}
 
 
+# --- Kodak ELITE Chrome Extra Color 100 (E-126E) and ELITE Chrome 200 (E-148E) ----
+# Kodak's E-6 consumer slide films, both sheets of April 2005 and laid out as
+# E100's: vector polylines, every curve black, the labels text with a separate
+# bar for each minus sign, so the rules are named here from the ticks and
+# gridlines. Extra Color's plots are all on page 5; 200's curves and
+# sensitivities on page 4, its dyes on page 5. The curves are named B, G, R
+# from the top at the dense end, the sensitivities and the dyes by where they
+# peak, with the visual neutral drawn among the dyes left out (the one curve
+# that never falls low across the middle). Extra Color's dye plot is captioned
+# "for a midscale neutral subject and D-min", but draws the three dyes and the
+# neutral only, as 200's does: neither sheet plots a D-min spectrum.
+EBX = "e126e-Elitechrome_100ec.pdf"
+EBX_CURVES = _plot(EBX, 4, (86.61, 93.35, 271.12, 277.86),
+                   zip((86.61, 132.74, 178.87, 224.99, 271.12), range(-3, 2)),
+                   zip((277.86, 231.73, 185.61, 139.48, 93.35), range(0, 5)))
+EBX_SENSITIVITY = _plot(EBX, 4, (362.66, 92.34, 563.19, 243.81),
+                        zip((382.76, 402.86, 422.95, 443.05, 463.14, 483.24, 503.34, 523.43, 543.53),
+                            range(300, 701, 50)),
+                        ((92.34, 2.0), (130.21, 1.0), (168.08, 0.0), (205.94, -1.0), (243.81, -2.0)))
+EBX_DYES = _plot(EBX, 4, (86.77, 351.4, 271.1, 535.71),
+                 ((86.77, 400), (148.22, 500), (209.67, 600), (271.1, 700)),
+                 ((535.71, 0.0), (489.63, 0.5), (443.54, 1.0), (397.45, 1.5), (351.4, 2.0)))
+ED = "e148e-Elite_chrome_200.pdf"
+ED_CURVES = _plot(ED, 3, (74.61, 477.97, 259.12, 662.47),
+                  zip((74.61, 120.74, 166.87, 212.99, 259.12), range(-3, 2)),
+                  zip((662.47, 616.35, 570.22, 524.09, 477.97), range(0, 5)))
+ED_SENSITIVITY = _plot(ED, 3, (350.66, 288.95, 551.19, 440.42),
+                       zip((370.76, 390.86, 410.95, 431.05, 451.14, 471.24, 491.34, 511.43, 531.53),
+                           range(300, 701, 50)),
+                       ((288.95, 2.0), (326.82, 1.0), (364.68, 0.0), (402.55, -1.0), (440.42, -2.0)))
+# The dye plot's two ticks sit about a point below where its frame puts 0.5 and
+# 1.0; frame and ticks are fitted together, to 0.01 in density.
+ED_DYES = _plot(ED, 4, (88.52, 57.4, 273.02, 241.7),
+                ((88.67, 400), (150.12, 500), (211.57, 600), (273.02, 700)),
+                ((241.7, 0.0), (181.32, 0.5), (119.58, 1.0), (57.4, 1.5)))
+
+
+def _strokes(plot: VectorPlot, count: int) -> list[np.ndarray]:
+    """The plot's curves, one stroke each (`vector_plots.runs`): these sheets
+    draw every curve in one, and end some of them at the same point."""
+    found = vector_plots.runs(plot)
+    if len(found) != count:
+        raise ValueError(f"{plot.pdf} page {plot.page + 1}: {len(found)} curves, expected {count}")
+    return found
+
+
+def _elite_chrome(curves: VectorPlot, sensitivity: VectorPlot, dyes: VectorPlot, at_x: float):
+    spectra = _strokes(dyes, 4)
+    floor = [float(c[(c[:, 0] >= 475.0) & (c[:, 0] <= 625.0), 1].min()) for c in spectra]
+    neutral = spectra.pop(int(np.argmax(floor)))
+    by_peak = lambda found: sorted(found, key=lambda c: c[np.argmax(c[:, 1]), 0])   # noqa: E731
+    by_value = sorted(_strokes(curves, 3), key=lambda c: -float(np.interp(at_x, c[:, 0], c[:, 1])))
+    return {"curves": dict(zip("BGR", by_value)),
+            "sensitivity": dict(zip("BGR", by_peak(_strokes(sensitivity, 3)))),
+            "dyes": dict(zip("YMC", by_peak(spectra))),
+            "neutral": neutral}
+
+
+def elite_chrome_extra_color_100():
+    return _elite_chrome(EBX_CURVES, EBX_SENSITIVITY, EBX_DYES, at_x=-2.5)
+
+
+def elite_chrome_200():
+    return _elite_chrome(ED_CURVES, ED_SENSITIVITY, ED_DYES, at_x=-2.5)
+
+
 # --- HARMAN Phoenix 200 (Sep 2024), pages 2 and 3 --------------------------------
 # Bitmaps: black curves on white over a grey grid, calibrated on the grid —
 # relative log exposure 0-3 and density 0-4 every half; 300-800 nm every 50
@@ -630,6 +696,8 @@ SOURCES = {
     "konica_centuria_super_100": centuria_super_100,
     "konica_centuria_super_1600": centuria_super_1600,
     "konica_impresa_50": impresa_50,
+    "kodak_elite_chrome_extra_color_100": elite_chrome_extra_color_100,
+    "kodak_elite_chrome_200": elite_chrome_200,
 }
 
 # How the curves of a sheet read here were told apart, for the profile's
@@ -655,4 +723,6 @@ CURVES_READ = {
     "konica_centuria_super_100": "read from the vector plot, each layer by its dash pattern",
     "konica_centuria_super_1600": "read from the vector plot, each layer by its dash pattern",
     "konica_impresa_50": "traced off the sheet's bitmap, each layer walked along its own dashed stroke",
+    "kodak_elite_chrome_extra_color_100": "read from the vector plot, each layer by its order at the dense end",
+    "kodak_elite_chrome_200": "read from the vector plot, each layer by its order at the dense end",
 }

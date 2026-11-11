@@ -44,7 +44,7 @@ func writeImage(_ url: URL, width: Int, height: Int, colour: (Float, Float, Floa
 func size(_ image: CGImage?) -> String { image.map { "\($0.width)x\($0.height)" } ?? "none" }
 
 /// Mean of the display image's pixels in rows `rows` (fractions of the height), as 0...1 luminance.
-func meanLuminance(_ image: CGImage?, rows: ClosedRange<Double>) -> Double {
+func meanLuminance(_ image: CGImage?, rows: ClosedRange<Double>, columns: ClosedRange<Double> = 0...1) -> Double {
     guard let image else { return -1 }
     let w = image.width, h = image.height
     var buffer = [UInt8](repeating: 0, count: w * h * 4)
@@ -56,8 +56,8 @@ func meanLuminance(_ image: CGImage?, rows: ClosedRange<Double>) -> Double {
     // A bitmap context's memory starts at the top row, like the fractions.
     for y in Int(rows.lowerBound * Double(h))..<max(Int(rows.upperBound * Double(h)), 1) {
         let row = min(y, h - 1) * w * 4
-        for x in 0..<w {
-            let o = row + x * 4
+        for x in Int(columns.lowerBound * Double(w))..<max(Int(columns.upperBound * Double(w)), 1) {
+            let o = row + min(x, w - 1) * 4
             sum += (0.2126 * Double(buffer[o]) + 0.7152 * Double(buffer[o + 1]) + 0.0722 * Double(buffer[o + 2])) / 255
             n += 1
         }
@@ -203,6 +203,31 @@ func run() async throws {
               && (m.meteredExposureEV, m.meteredGrade, m.meteredBrightness) == meteredBare,
           String(format: "two -1 EV gradients stack to one -2 EV: top %.3f against %.3f, bottom %.3f",
                  topStacked, topSingle, bottomStacked))
+    // An oval darkens its middle and leaves the edges, inverted the other way
+    // round, and the meters see neither. The middle is well inside the full
+    // compensation, the top band well outside the oval.
+    func middle() -> Double { meanLuminance(m.displayImage, rows: 0.4...0.6, columns: 0.35...0.65) }
+    rc.gradients = []
+    m.recipe = rc
+    _ = await settle(m)
+    let middleBare = middle()
+    for inverted in [false, true] {
+        var oval = ExposureGradient()
+        oval.shape = .oval
+        oval.points = [CGPoint(x: 0.5, y: 0.5), CGPoint(x: 0.85, y: 0.5), CGPoint(x: 0.5, y: 0.75)]
+        oval.featherAmount = 0.3
+        oval.isInverted = inverted
+        oval.exposureEV = -2
+        rc.gradients = [oval]
+        m.recipe = rc
+        _ = await settle(m)
+        let (top, mid) = (meanLuminance(m.displayImage, rows: 0.0...0.2), middle())
+        let metered = (m.meteredExposureEV, m.meteredGrade, m.meteredBrightness)
+        check((inverted ? abs(mid - middleBare) < 0.002 && top < topBare - 0.1
+                        : mid < middleBare - 0.1 && abs(top - topBare) < 0.002) && metered == meteredBare,
+              String(format: "an oval at -2 EV%@: middle %.3f -> %.3f, top %.3f -> %.3f, meters unchanged: %@",
+                     inverted ? ", inverted" : "", middleBare, mid, topBare, top, metered == meteredBare ? "yes" : "no"))
+    }
     m.recipe = cBefore
     _ = await settle(m)
 
@@ -262,6 +287,14 @@ func run() async throws {
     check(m.recipe.printStock == "fujifilm_fcp_3510", "Eterna 500T onto its own, F-CP 3510")
     m.selectFilm("kodak_5251_50t")
     check(m.recipe.printStock == "kodak_5385", "5251 onto its companion print film, 5385 (\(m.recipe.printStock))")
+    m.selectFilm("kodak_double_x_5222")
+    check(m.recipe.printStock == "kodak_2302", "Double-X onto its silver release print film, 2302 (\(m.recipe.printStock))")
+    m.selectFilm("kodak_tri_x_400")
+    check(m.recipe.printStock == "ilford_multigrade_rc_deluxe",
+          "a still silver film leaves 2302 for its own paper (\(m.recipe.printStock))")
+    m.selectFilm("kodak_double_x_5222")
+    m.selectFilm("kodak_vision3_500t")
+    check(m.recipe.printStock == "kodak_2383", "a colour film leaves 2302 for its own print film (\(m.recipe.printStock))")
     m.recipe.printStock = "kodak_2393"
     m.selectFilm("kodak_vision3_250d")
     check(m.recipe.printStock == "kodak_2383", "Vision3 250D onto 2383, from a print film chosen by hand too")
@@ -288,6 +321,10 @@ func run() async throws {
     m.recipe = printedSlide
     m.selectFilm("kodak_ektachrome_100")
     check(!m.isTransparency, "slides printed on paper by choice: another slide is printed too")
+    m.selectFilm("polaroid_polacolor_559")
+    check(m.isTransparency && m.recipe.scanFilm == false,
+          "an instant print after them is the print, seen as it is, whatever the slides were set to")
+    m.selectFilm("kodak_ektachrome_100")
     m.selectFilm("kodak_portra_400")
     check(!m.isTransparency && m.recipe.scanFilm == nil, "and a negative after it prints, as its stock does")
     check(await settle(m) && m.displayImage != nil, "and it renders")
@@ -346,8 +383,24 @@ func run() async throws {
     }
     let filmGroups = PackIndexEntry.groups(PackLibrary.shared.filmStocks, films: true)
     let titles = filmGroups.map { $0.title }
-    check(titles == ["Colour negative", "Motion picture", "Colour slide", "Black and white"],
-          "films: \(titles.joined(separator: ", "))")
+    check(titles == ["Colour negative", "Motion picture", "Colour slide", "Black and white", "Instant print"]
+              && stocks(filmGroups, "Instant print") == ["polaroid_polacolor_559", "polaroid_polapan_pro_100", "polaroid_553"]
+              && !stocks(filmGroups, "Black and white").contains("polaroid_553"),
+          "films: \(titles.joined(separator: ", ")); Polaroid's prints apart from the films they are not")
+    // A maker's line together, the lower speed first (Felix, 2026-11-11).
+    let all = PackLibrary.shared.filmStocks.map(\.stock)
+    let lines = [["fujifilm_velvia_50", "fujifilm_velvia_100"],
+                 ["kodak_elite_chrome_extra_color_100", "kodak_elite_chrome_200"],
+                 ["kodak_vision3_50d", "kodak_vision3_200t", "kodak_vision3_250d", "kodak_vision3_500t"],
+                 ["kodak_exr_50d", "kodak_exr_200t"], ["fujifilm_eterna_vivid_160t", "fujifilm_eterna_500t"],
+                 ["kodak_kodachrome_25", "kodak_kodachrome_64", "kodak_kodachrome_200"],
+                 ["kodak_portra_800", "kodak_portra_800_push1", "kodak_portra_800_push2"],
+                 ["polaroid_polapan_pro_100", "polaroid_553"]]
+    let misordered = lines.filter { line in
+        let at = line.compactMap { all.firstIndex(of: $0) }
+        return at.count != line.count || at != at.sorted() || at.last! - at.first! != line.count - 1
+    }
+    check(misordered.isEmpty, "each line of films together, slowest first\(misordered.isEmpty ? "" : ": not \(misordered)")")
     let cine = stocks(filmGroups, "Motion picture"), negatives = stocks(filmGroups, "Colour negative")
     check(cine.contains("kodak_vision3_500t") && !negatives.contains("kodak_vision3_500t")
           && negatives.contains("kodak_portra_400"),
@@ -473,6 +526,14 @@ func run() async throws {
     slide.scanFilm = nil
     check(Exporter.Provenance(recipe: slide).description == "Film: Fujifilm Provia 100F; viewed on a light table",
           "a slide viewed as one names the light table, not a paper: \(Exporter.Provenance(recipe: slide).description)")
+    var instant = m.recipe.loadingFilm("polaroid_polacolor_559")
+    instant.scanFilm = false
+    instant.processingTemperature = 35
+    check(Exporter.Provenance(recipe: instant).description == "Film: Polaroid Polacolor 559; instant print, processed at 95 F",
+          "an instant print names how warm it developed, not a paper or a light table: \(Exporter.Provenance(recipe: instant).description)")
+    instant.processingTemperature = nil
+    check(Exporter.Provenance(recipe: instant).description == "Film: Polaroid Polacolor 559; instant print, processed at 70 F",
+          "and its sheet's normal temperature when none is chosen: \(Exporter.Provenance(recipe: instant).description)")
 
     // A manual lens Nikon names only in its maker notes, and the GPS block a
     // Leica M writes without a fix.
@@ -910,6 +971,35 @@ func undoRedo() async throws {
     m.recipe.masks.removeAll()
     await pause()
     check(names().suffix(3) == ["Add Mask", "Mask", "Delete Mask"], "masks: \(names().suffix(3))")
+    var oval = ExposureGradient()
+    oval.shape = .oval
+    oval.points = [CGPoint(x: 0.5, y: 0.5), CGPoint(x: 0.7, y: 0.5), CGPoint(x: 0.5, y: 0.7)]
+    m.recipe.gradients.append(oval)
+    await pause()
+    m.recipe.gradients[0].isInverted = true
+    await pause()
+    m.recipe.gradients.append(ExposureGradient())
+    await pause()
+    let gradientSteps = names().suffix(3)
+    m.history.undo()
+    m.history.undo()
+    m.history.undo()
+    check(gradientSteps == ["Add Oval", "Oval", "Add Gradient"] && m.recipe.gradients.isEmpty,
+          "an oval and a gradient: \(gradientSteps), undone to none")
+    // An instant print's processing temperature is a step of its own, and a
+    // new picture keeps it, as it keeps the film.
+    let filmBefore = m.recipe.filmStock
+    m.selectFilm("polaroid_polapan_pro_100")
+    await pause()
+    m.recipe.processingTemperature = 35
+    await pause()
+    let processingStep = m.history.undoName
+    let carried = m.recipe.carryingLook().processingTemperature
+    m.history.undo()
+    m.history.undo()
+    check(processingStep == "Processing Temperature" && carried == 35 && m.recipe.processingTemperature == nil
+              && m.recipe.filmStock == filmBefore,
+          "a processing temperature is its own step (\(processingStep ?? "-")), carried to a new picture, undone")
     m.history.undo()
     check(m.recipe.masks.first?.points[1].x == 0.7 + 0.05, "undoing the delete brings the mask back as it was")
     m.history.undo()

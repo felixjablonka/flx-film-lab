@@ -72,6 +72,8 @@ NAMES = {
     "fujifilm_velvia_100": "VELV100",
     "fujifilm_velvia_50": "VELV50",
     "kodak_ektachrome_100": "E100",
+    "kodak_elite_chrome_extra_color_100": "EBX100",
+    "kodak_elite_chrome_200": "ED200",
     "kodak_kodachrome_25": "KCHR25",
     "kodak_kodachrome_64": "KCHR64",
     "kodak_kodachrome_200": "KCHR200",
@@ -86,6 +88,10 @@ NAMES = {
     "kodak_tri_x_400": "TRIX400",
     "kodak_tri_x_400_push2": "TRIXPSH2",
     "kodak_t_max_100": "TMAX100",
+    "kodak_double_x_5222": "DOUBLEX",
+    "polaroid_553": "POLA553",
+    "polaroid_polapan_pro_100": "POLAPAN",
+    "polaroid_polacolor_559": "POLA559",
 }
 # Stocks the app has that the pack leaves out. Felix's pick: Portra 800 pushed
 # one and two stops.
@@ -115,12 +121,15 @@ def number(n: int) -> str:
 
 def groups(films: list[dict]) -> list[tuple[str, list[dict]]]:
     """The film menu's groups, in its order (PackIndexEntry.groups)."""
-    bw = [e for e in films if e["channelModel"] == "bw"]
-    colour = [e for e in films if e["channelModel"] != "bw"]
+    instant = [e for e in films if e["support"] == "paper"]
+    rest = [e for e in films if e["support"] != "paper"]
+    bw = [e for e in rest if e["channelModel"] == "bw"]
+    colour = [e for e in rest if e["channelModel"] != "bw"]
     return [("Colour negative", [e for e in colour if e["use"] != "cine" and e["type"] != "positive"]),
             ("Motion picture", [e for e in colour if e["use"] == "cine"]),
             ("Colour slide", [e for e in colour if e["use"] != "cine" and e["type"] == "positive"]),
-            ("Black and white", bw)]
+            ("Black and white", bw),
+            ("Instant print", instant)]
 
 
 def main() -> None:
@@ -178,7 +187,8 @@ def main() -> None:
         shared = len(prints) == 1
         if shared:
             only = prints.pop()
-            heading += f", printed on {papers[only]}" if only else ", on a light table"
+            heading += (f", printed on {papers[only]}" if only else
+                        ", processed at 70 F" if heading == "Instant print" else ", on a light table")
         listing += ["", heading]
         for film in entries:
             listing.append(bake(NAMES[film["stock"]], film, shared_paper=shared))
@@ -222,7 +232,7 @@ README = """\
 
 All {stocks} film stocks in FLX Film Lab {version}, with Tri-X pushed two stops, Tri-X through each of its {filters} camera filters, and, for daylight, EXR 200T through a Wratten 85 and an 85B and Kodak 5251 through an 85: {count} LUTs for a Lumix camera's Real Time LUT, which applies them to photos (JPEG and HEIF) as well as to video.
 
-Colour negatives are printed on their usual paper, black-and-white films on Ilford Multigrade, and slide films are shown as transparencies, all with the app's default settings, except that Tri-X, pushed and through its filters too, HP5 Plus and T-Max 100 are printed at Contrast +20 (ISO R102), as they come out a little flat otherwise. Phoenix 200 is printed at the slightly softer contrast the app opens it at, Contrast -30 on its own scale (ISO R200.5).
+Colour negatives are printed on their usual paper, black-and-white films on Ilford Multigrade, slide films are shown as transparencies and Polaroid's instant films as the prints they are, processed at 70 F, all with the app's default settings, except that Tri-X, pushed and through its filters too, HP5 Plus and T-Max 100 are printed at Contrast +20 (ISO R102), as they come out a little flat otherwise. Phoenix 200 is printed at the slightly softer contrast the app opens it at, Contrast -30 on its own scale (ISO R200.5).
 
 Each is a 33-point .cube file for V-Log: full-range V-Log in, the sRGB curve out, with V-Log named as the base Photo Style. The file names are at most eight letters and digits, as the camera's card needs.
 

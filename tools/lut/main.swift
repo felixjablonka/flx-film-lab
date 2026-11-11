@@ -169,9 +169,18 @@ do {
     let lut = try baker.bake(recipe: recipe, size: size, input: input, output: output)
     let bakeTime = CFAbsoluteTimeGetCurrent() - start
 
-    // A slide is read off a light table unless it is printed on purpose.
-    let lightTable = recipe.scanFilm ?? film.isPositive
-    let rendering = lightTable ? "\(film.name) on a light table" : "\(film.name) printed on \(paper.name)"
+    // A slide is read off a light table unless it is printed on purpose; an
+    // instant print is the print.
+    let lightTable = film.isViewedDirectly(scanFilm: recipe.scanFilm)
+    let rendering: String
+    if film.isInstantPrint {
+        rendering = film.processingFahrenheit(recipe.processingTemperature)
+            .map { "\(film.name), an instant print processed at \($0) F" } ?? "\(film.name), an instant print"
+    } else if lightTable {
+        rendering = "\(film.name) on a light table"
+    } else {
+        rendering = "\(film.name) printed on \(paper.name)"
+    }
     var comments = ["Made with FLX Film Lab (flxlut): \(rendering)"]
     if let filter {
         comments.append(String(format: "Camera filter: %@, %.1fx (exposure opened %.1f stops)",

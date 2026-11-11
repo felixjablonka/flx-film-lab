@@ -165,7 +165,7 @@ struct MotionContentView: View {
     private func chooseLUTExport() {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [UTType(filenameExtension: "cube") ?? .data]
-        panel.nameFieldStringValue = "\(model.filmName) on \(model.paperName).cube"
+        panel.nameFieldStringValue = "\(model.printDescription.title).cube"
         if panel.runModal() == .OK, let url = panel.url { model.exportLUT(to: url) }
     }
 }

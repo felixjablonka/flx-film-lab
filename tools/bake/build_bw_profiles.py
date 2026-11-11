@@ -21,6 +21,10 @@ Six stocks, each from its maker's own sheet in `film spec sheets/`:
   technology's technical information, 2018-19): the wedge spectrogram and the
   characteristic curve for the developer and time each sheet names, bitmaps
   on a ruled grid, traced (`harman_sheet`).
+- Kodak Double-X 5222, Kodak's black-and-white motion picture negative, and
+  Kodak 2302, the release print film it is printed on (H-1-5222 in its
+  editions of 2003 and 2022, H-1-2302): `kodak_bw_cine_sheets`. 2302 is the
+  first black-and-white print film here, projected like agx's 2383.
 
 Unlike `build_profiles.py`, nothing here is inherited from a donor: a
 black-and-white emulsion is one silver layer with a flat spectral density, so
@@ -58,6 +62,17 @@ Choices the datasheets leave open, and how they are made here:
 - Multigrade's native curve is grade 1 (ISO R110 on Ilford's table): the
   app's Contrast is relative to a paper's own curve with 115 as neutral, so the
   slider then reads close to Multigrade's real ISO-R grades.
+- Double-X's mid-grey goes at Kodak's normal exposure, 10/EI, as the colour
+  motion picture films' does: its own exposure table, worked through for an
+  18% grey card, gives exactly that, not the 8.1/EI of a reflected-light
+  meter's mid-tone.
+- 2302's sheet disagrees with itself about its contrast. Its control gamma is
+  2.4 to 2.6, and its gamma-against-time plot reaches the middle, 2.5, at 6.52
+  minutes, which is the development taken (interpolated between its 5 and 7
+  minute curves). Measured by the formula the sheet states for its control
+  gamma, though, every plotted curve is 0.23 to 0.47 above that plot, and this
+  one 2.78; the 5 minute curve, 2.53 so measured, would have been the other
+  reading, a print about a tenth softer.
 
 Run:  PYTHONPATH=<spektrafilm>/src python tools/bake/build_bw_profiles.py
 """
@@ -109,6 +124,12 @@ TMAX_DEVELOPMENT_MINUTES = 6.5    # D-76 stock, small tank, 20 C: Kodak's time
 NEOPAN_EI = 1600                 # D-76 stock, small tank, 7 1/2 min at 20 C: Fujifilm's time for EI 1600
 FILM_CURVE_EXTENSION = 0.8        # decades past each sheet's last plotted exposure (see characteristic)
 MULTIGRADE_NATIVE_GRADE = "1"     # ISO R110 on Ilford's table
+DOUBLE_X_MINUTES = 6.5            # D-96 at 21 C: the curve the exposure index's "gamma of 0.65" names
+DOUBLE_X_EI = 250                 # daylight, the light its curves are exposed to; 200 to tungsten
+PRINT_2302_GAMMA = 2.5            # the middle of 2302's control gamma, 2.4 to 2.6, on its gamma plot
+# A projected print's mid-grey, agx's rule for every print film: 18.4% of the
+# projector's light through it.
+MID_GREY_TRANSMISSION_DENSITY = float(-np.log10(0.184))           # 0.735
 
 
 @dataclass(frozen=True)
@@ -162,8 +183,16 @@ ORTHO = Film("ilford_ortho_plus", "Ilford Ortho Plus", 80,
              "HARMAN technology, ILFORD ORTHO PLUS technical information (Oct 2019), ID-11 stock 8 min at 20 C, "
              "intermittent agitation: the lower of the sheet's two pictorial curves, G-bar 0.62 (Ilford calls "
              "0.62-0.70 normal for camera use, and rates the film ISO 80 to daylight in ID-11 at normal contrast).")
+DOUBLEX = Film("kodak_double_x_5222", "Kodak Double-X 5222", DOUBLE_X_EI,
+                "Kodak H-1-5222 (3-22), EASTMAN DOUBLE-X Negative Film 5222 / 7222: its characteristic curve "
+                f"for D-96 at 21 C, {DOUBLE_X_MINUTES:g} min (gamma 0.66), the development its exposure index "
+                "names ('for development to a gamma of 0.65'), daylight exposure, Status M (blue) density; its "
+                "spectral sensitivity and MTF off the vector plots of the edition of 10/2003 (H-1-5222), which "
+                "the 3-22 edition's bitmaps repeat.")
 PAPER_STOCK = "ilford_multigrade_rc_deluxe"
 PAPER_NAME = "Ilford Multigrade RC Deluxe"
+PRINT_2302_STOCK = "kodak_2302"
+PRINT_2302_NAME = "Kodak 2302"
 
 
 # --------------------------------------------------------------------------
@@ -756,12 +785,23 @@ def assemble(info: ProfileInfo, log_sensitivity: np.ndarray, base_density: float
 
 
 def build_film(film: Film, spectral: np.ndarray, curve: np.ndarray, sensitivity_note: str,
-               cross_check=None, metered_at: int | None = None, created: str = "2026-10-14") -> Profile:
+               cross_check=None, metered_at: int | None = None, created: str = "2026-10-14",
+               normal_log_h: float | None = None, normal_note: str = "", use: str = "still",
+               target_print: str = PAPER_STOCK, densitometer: str = "diffuse_visual") -> Profile:
     """`metered_at`: place mid-grey where a meter set to that exposure index
     puts it on the sheet's absolute lux-second axis, for a film whose rating
-    is not its ISO speed. Otherwise mid-grey is 1.007 decades above the ISO
-    speed point."""
-    if metered_at is None:
+    is not its ISO speed. `normal_log_h`: mid-grey at that log H on the
+    sheet's axis, the maker's own normal exposure (`normal_note` says whose
+    and why). Otherwise mid-grey is 1.007 decades above the ISO speed point."""
+    if normal_log_h is not None:
+        anchor = lambda e, net: normal_log_h
+        sheet = np.linspace(curve[:, 0].min(), curve[:, 0].max(), 1024)
+        density = ds.resample(curve, sheet)
+        iso = 0.8 / 10 ** speed_point(sheet, density - density.min())
+        placement = (f"with mid-grey at log H {normal_log_h:.3f} on the sheet's absolute axis, {normal_note} "
+                     f"The curve's own ISO speed point is ISO {iso:.0f}")
+        print(f"    {film.stock}: ISO speed point of the sheet curve ISO {iso:.0f}, rated EI {film.iso}")
+    elif metered_at is None:
         anchor = lambda e, net: speed_point(e, net) + MID_TONE_ABOVE_SPEED_POINT
         placement = (f"with the ISO speed point (0.10 over base + fog) {MID_TONE_ABOVE_SPEED_POINT:.3f} "
                      f"decades below mid-grey, box speed ISO {film.iso}")
@@ -780,8 +820,8 @@ def build_film(film: Film, spectral: np.ndarray, curve: np.ndarray, sensitivity_
     log_s -= np.log10(neutral_mid_grey_raw(log_s, "D55"))     # an 18% grey exposes 1, as in agx
 
     info = ProfileInfo(stock=film.stock, name=film.name, type="negative", support="film",
-                       stage="filming", use="still", antihalation="strong",
-                       target_print=PAPER_STOCK, channel_model="bw", densitometer="diffuse_visual",
+                       stage="filming", use=use, antihalation="strong",
+                       target_print=target_print, channel_model="bw", densitometer=densitometer,
                        log_sensitivity_density_over_min=1.0, reference_illuminant="D55",
                        viewing_illuminant="D50")
     datasource = (
@@ -864,6 +904,87 @@ def _paper_level(log_s: np.ndarray) -> float:
     return float(np.log10(endura_raw / ours))
 
 
+def build_print_film() -> Profile:
+    """Kodak 2302, the black-and-white release print film a Double-X negative
+    is printed on, projected as agx projects 2383.
+
+    The sheet develops it to a control gamma of 2.4 to 2.6, and its own plot of
+    gamma against development time in D-97 reaches the middle of that, 2.5, at
+    6.52 minutes: the curve is interpolated there between the sheet's 5 and 7
+    minute curves, along exposure at each density (`between_times`), plotted
+    net of the base (the base, 0.048, from its granularity plot,
+    `kodak_bw_cine_sheets`). The sheet disagrees with itself here: measured as
+    it defines its control gamma ("D-min + 0.95 density to + 0.50 log E"), its
+    curves come out 0.23 to 0.47 above that plot at every time, this one 2.78,
+    and its plotted 5 minute curve, 2.53, would meet the control gamma so
+    measured. Felix's pick (2026-11-08): the plot's time, the harder print of
+    the two. Mid-grey prints at 18.4%
+    transmission (log H 0), agx's rule for its print films; the spectral
+    sensitivity is the sheet's (D-min + 0.2, 380-500 nm, blue-sensitive), at
+    the level that collects as much of agx's printer lamp as 2383 does through
+    its filtration for Vision3 250D, so Highlight protection's pre-flash acts
+    the same on both. The sheet's MTF and granularity are read but not
+    modelled: the app blurs and grains the negative, not the print."""
+    import kodak_bw_cine_sheets as cine
+    import spektrafilm
+    from build_print_profiles import LEVEL_NEGATIVE, TEMPLATE, lamp_collected
+    from spektrafilm.profiles.io import load_profile
+
+    curves = cine.print_2302_curves()
+    plot = cine.print_2302_gamma_plot()
+    on_plot = lambda t: float(np.interp(t, plot[:, 0], plot[:, 1]))
+    for t, c in curves.items():
+        print(f"    2302 {t:g} min: gamma {cine.kodak_print_gamma(c):.2f} by the sheet's formula, "
+              f"{on_plot(t):.2f} on its gamma plot")
+    base_plate, toe, fog = cine.print_2302_base()
+    minutes = cine.print_2302_minutes_for(PRINT_2302_GAMMA)
+    curve = between_times({5.0: curves[5.0], 7.0: curves[7.0]}, minutes,
+                          np.linspace(curves[5.0][0, 0], curves[5.0][-1, 0], 800))
+    gamma = cine.kodak_print_gamma(curve)
+    print(f"    2302 at {minutes:.2f} min, gamma {on_plot(minutes):.2f} on its plot: {gamma:.2f} by the sheet's formula "
+          f"(5 min {cine.kodak_print_gamma(curves[5.0]):.2f})")
+    curve[:, 1] += base_plate                       # plotted net of the base
+    gross_min = float(curve[:, 1].min())
+    anchor = lambda e, net: float(np.interp(MID_GREY_TRANSMISSION_DENSITY - gross_min, net, e))
+    net, base, shift, model = characteristic(curve, anchor)
+
+    log_s = on_grid(cine.print_2302_spectral(), WAVELENGTHS)
+    template = load_profile(TEMPLATE)
+    table = json.loads((Path(spektrafilm.__file__).parent / "data" / "filters" / "neutral_print_filters.json")
+                       .read_text())
+    reference = table[TEMPLATE]["TH-KG3"][LEVEL_NEGATIVE]
+    level = (lamp_collected(np.asarray(template.data.log_sensitivity, float), reference)
+             - lamp_collected(np.repeat(log_s[:, None], 3, axis=1), (0.0, 0.0, 0.0)))
+    log_s = log_s + level
+
+    info = ProfileInfo(stock=PRINT_2302_STOCK, name=PRINT_2302_NAME, type="negative", support="film",
+                       stage="printing", use="cine", antihalation="strong", target_print=None,
+                       channel_model="bw", densitometer="diffuse_visual",
+                       log_sensitivity_density_over_min=0.2, reference_illuminant="TH-KG3",
+                       viewing_illuminant="K75P")
+    datasource = (
+        "Traced off the bitmaps of Kodak H-1-2302 (3-22), KODAK Black-and-White Print Film 2302 / 3302: its "
+        f"characteristic curve for D-97 at 21 C, {minutes:.2f} min, where the sheet's gamma-against-time plot "
+        f"reaches {PRINT_2302_GAMMA:g}, the middle of the control gamma it develops to (2.4 to 2.6), interpolated "
+        "between its 5 and 7 minute curves along exposure at each density (tungsten 1/50 s, diffuse visual). "
+        "The sheet disagrees with itself: measured as it defines its control gamma (D-min + 0.95 to + 0.50 log "
+        f"E), its curves come out 0.23 to 0.47 above that plot at every time, this one {gamma:.2f}, and its 5 "
+        "minute curve (2.53) would meet the control gamma so measured; the plot's time is taken, the harder "
+        "print of the two. The curves are plotted net of the base: "
+        f"base {base_plate:.3f}, the toe of the sheet's granularity plot ({toe:.3f}, Status A green, 3 1/2 "
+        f"min) less its net fog at 3 1/2 minutes ({fog:.3f}); D-min {base:.3f}. Mid-grey (18.4% "
+        "transmission) at log E 0, agx's rule for its print films. Spectral sensitivity at D-min + 0.2, "
+        "380-500 nm (blue-sensitive; nothing beyond), at the level that collects as much of agx's printer "
+        "lamp (TH-KG3) as 2383 does through its filtration for Kodak Vision3 250D. Printing lamp TH-KG3 and "
+        "projector K75P as agx's 2383. Its MTF and granularity are read, not modelled. One silver layer, "
+        "carried as three identical channels."
+    )
+    profile = assemble(info, log_s, base, net, model, datasource, created="2026-11-08")
+    print(f"  {PRINT_2302_STOCK:28s} D-min {base:.3f}  D-max net {net[:, 0].max():.2f}  axis shift {shift:+.3f}  "
+          f"fit RMS {model['rms']:.4f}  lamp level {level:+.3f}")
+    return profile
+
+
 def write(profile: Profile) -> Path:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     path = OUT_DIR / f"{profile.info.stock}.json"
@@ -921,6 +1042,37 @@ def main() -> int:
                      metered_at=NEOPAN_EI))
     spectral, curves = multigrade_sheet()
     write(build_paper(spectral, curves))
+
+    import kodak_bw_cine_sheets as cine
+    write(build_print_film())
+    curves = cine.double_x_curves()
+    for t, c in sorted(curves.items()):
+        print(f"    Double-X {t:g} min: gamma {cine.slope_gamma(c):.2f} as traced, "
+              f"{cine.DOUBLE_X_GAMMAS[t]:.2f} labelled")
+    early, late = cine.double_x_2003_curve(), curves[5.0]
+    for e in (-2.0, -1.4, -0.5):
+        print(f"    Double-X at log H {e}: 2003 edition {np.interp(e, *early.T):.3f}, 3-22 edition's 5 min "
+              f"{np.interp(e, *late.T):.3f}")
+    # Kodak's normal exposure for its motion picture films, 10/EI: the sheet's
+    # own tungsten exposure table, f/5.6 at 200 footcandles (2153 lux) at 24 fps
+    # with a 170-degree shutter (1/50.8 s), gives an 18% grey card
+    # 0.65 x 0.18 x 2153 / pi x (1/50.8) / 5.6^2 = 0.049-0.050 lux-seconds,
+    # 10/200, through a lens of ISO 2720's q = 0.65.
+    normal = float(np.log10(10.0 / DOUBLEX.iso))
+    metered = float(np.log10(0.65 * 12.5 / DOUBLEX.iso))
+    write(build_film(DOUBLEX, cine.double_x_spectral(), curves[DOUBLE_X_MINUTES],
+                     "Spectral sensitivity: the D = 1.0 over gross fog curve (equal-energy, erg/cm^2, effective "
+                     "exposure 1.4 s, D-96 to the recommended control gamma, diffuse visual), drawn from 420 to "
+                     "660 nm and continued to 400 and 670 nm by the D = 0.3 curve's own shape, joined where it "
+                     "stops. The base is grey (its antihalation), 0.20 by the sheet.",
+                     normal_log_h=normal,
+                     normal_note=("Kodak's normal exposure, 10/EI at EI 250 daylight: the sheet's tungsten exposure "
+                                  "table (f/5.6 at 200 footcandles, 24 fps, 170-degree shutter) gives an 18% grey "
+                                  "card 0.049-0.050 lux-seconds at EI 200 through a lens of ISO 2720's q = 0.65, "
+                                  "which is 10/EI."),
+                     use="cine", target_print=PRINT_2302_STOCK, densitometer="status_M", created="2026-11-08",
+                     cross_check=lambda shift: f"a meter's ISO 2720 mid-tone at EI {DOUBLEX.iso} would sit "
+                                               f"{metered - normal:+.3f} decades from it"))
     return 0
 
 

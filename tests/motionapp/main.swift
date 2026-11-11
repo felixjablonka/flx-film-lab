@@ -184,6 +184,18 @@ func run() async throws {
     let text = (try? String(contentsOf: cube, encoding: .utf8)) ?? ""
     check(text.contains("LUT_3D_SIZE 65") && text.contains("video levels") && text.contains("BT.1886"),
           "65 points, N-Log video levels in, BT.1886 out")
+    check(text.contains("TITLE \"Kodak Portra 800 on Kodak Professional Portra Endura\"")
+              && text.contains("(Motion): Kodak Portra 800 printed on Kodak Professional Portra Endura"),
+          "titled with the film on its paper")
+    let negative = m.look
+    m.selectFilm("fujifilm_velvia_50")
+    check(m.printDescription == ("Fujifilm Velvia 50", "Fujifilm Velvia 50 on a light table"),
+          "a slide's names the light table, not a paper: \(m.printDescription)")
+    m.selectFilm("polaroid_553")
+    check(m.printDescription == ("Polaroid 553", "Polaroid 553, an instant print processed at 70 F"),
+          "an instant print's, the print it is: \(m.printDescription)")
+    m.look = negative
+    _ = await settled(m)
 
     print("log formats")
     check(m.format == .nlog && m.bakedFormat == .nlog, "the synthetic Nikon clips are read as N-Log")

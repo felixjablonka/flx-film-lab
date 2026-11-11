@@ -251,7 +251,7 @@ struct MotionLook: Codable, Equatable {
         let library = PackLibrary.shared
         guard let film = try? library.pack(recipe.filmStock) else { return false }
         if film.isMonochrome { return true }
-        let onPaper = !(recipe.scanFilm ?? film.isPositive)
+        let onPaper = !film.isViewedDirectly(scanFilm: recipe.scanFilm)
         return onPaper && ((try? library.pack(recipe.printStock))?.isMonochrome ?? false)
     }
 

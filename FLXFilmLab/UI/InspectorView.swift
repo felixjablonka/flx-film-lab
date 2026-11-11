@@ -18,7 +18,8 @@ struct InspectorView: View {
                 Redrawn(Inputs(r.frameGeometry, model.isCropping, model.isLevelling, model.hasImage)) {
                     cropSection
                 }
-                Redrawn(Inputs(r.filmStock, r.printStock, r.filmFormat, r.cameraSharpness, r.scanFilm)) {
+                Redrawn(Inputs(r.filmStock, r.printStock, r.filmFormat, r.cameraSharpness, r.scanFilm,
+                               r.processingTemperature)) {
                     stockSection
                 }
                 Redrawn(Inputs(r.filmStock, r.exposureEV, r.autoExposure, model.meteredExposureEV, r.lensFilter,
@@ -65,8 +66,18 @@ struct InspectorView: View {
     /// shows the resolved value and writes an explicit override.
     private var printsOnPaper: Binding<Bool> {
         Binding(
-            get: { !(model.recipe.scanFilm ?? (model.filmPack?.isPositive ?? false)) },
+            get: { !model.isTransparency },
             set: { model.recipe.scanFilm = !$0 })
+    }
+
+    /// An instant print's processing temperature, one of those its sheet
+    /// plots: the normal one until another is chosen.
+    private func processingTemperature(_ processing: ProcessingCurves) -> Binding<Float> {
+        Binding(get: {
+                    let t = Float(model.recipe.processingTemperature ?? Double(processing.normalC))
+                    return processing.temperaturesC.min { abs($0 - t) < abs($1 - t) } ?? processing.normalC
+                },
+                set: { model.recipe.processingTemperature = $0 == processing.normalC ? nil : Double($0) })
     }
 
     /// A black-and-white paper prints in silver: whatever the filtration and
@@ -172,11 +183,30 @@ struct InspectorView: View {
         Section("Film & Paper", subtitle: "Spectral profiles derived from manufacturer datasheets.") {
             StockPicker(title: "Film", entries: model.filmEntries, selection: filmStock)
 
-            Picker("Film format", selection: $model.recipe.filmFormat) {
-                ForEach(FilmFormat.allCases) { Text($0.rawValue).tag($0) }
+            if let film = model.filmPack, film.isInstantPrint {
+                let frame = film.frame(model.recipe.filmFormat)
+                Text(String(format: "A 4x5 instant print, %.0f x %.0f mm: the film is the print.", frame.long, frame.short))
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let processing = film.processing {
+                    HStack(spacing: 6) {
+                        Text("Processing").font(.system(size: 11)).foregroundStyle(.secondary)
+                        Picker("Processing", selection: processingTemperature(processing)) {
+                            ForEach(processing.temperaturesC, id: \.self) { t in
+                                Text(String(format: "%.0f °F", t * 9 / 5 + 32)).tag(t)
+                            }
+                        }
+                        .pickerStyle(.segmented).labelsHidden().controlSize(.small).font(.system(size: 11))
+                    }
+                    .help("The temperature the print develops at, in the camera or the holder: the three Polaroid's sheet plots it at, 55, 70 and 95 F (13, 21 and 35 C), each its own curves. Its normal is 70 F. The exposure stays as you set it, as a meter's would; the sheet's table opens up for cold processing and stops down for hot.")
+                }
+            } else {
+                Picker("Film format", selection: $model.recipe.filmFormat) {
+                    ForEach(FilmFormat.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented).controlSize(.small).font(.system(size: 11))
+                .help("Sets the frame size, and with it the pixel pitch that scales grain, halation and coupler diffusion: 36 x 24 mm on 35 mm, 84 x 56 mm for a 6x9 on 120. The picture is laid on the frame as large as it fits, so a 4:3 one spans the short side. The same emulsion on 120 shows visibly finer grain than on 35 mm, because the frame is enlarged less.")
             }
-            .pickerStyle(.segmented).controlSize(.small).font(.system(size: 11))
-            .help("Sets the frame size, and with it the pixel pitch that scales grain, halation and coupler diffusion: 36 x 24 mm on 35 mm, 84 x 56 mm for a 6x9 on 120. The picture is laid on the frame as large as it fits, so a 4:3 one spans the short side. The same emulsion on 120 shows visibly finer grain than on 35 mm, because the frame is enlarged less.")
 
             Picker("Sharpness", selection: $model.recipe.keepsCameraSharpness) {
                 Text("Film").tag(false)
@@ -185,8 +215,10 @@ struct InspectorView: View {
             .pickerStyle(.segmented).controlSize(.small).font(.system(size: 11))
             .help("Film: detail as the film renders it. Scattering inside the emulsion softens the finest detail and development's edge effects lift coarser edges, so on 35 mm a high-resolution file's finest detail softens as the film's would. Camera: the camera file's own detail, with the film's colour, tone, halation and grain.")
 
-            ToggleRow(title: "Print on paper", isOn: printsOnPaper,
-                      help: "Off reads the developed film straight off a light table, the way a slide is viewed. Slide stocks default to that: printing a positive onto RA-4 paper inverts it, which is what a lab would really produce and almost never what you want.")
+            if model.filmPack?.isInstantPrint != true {
+                ToggleRow(title: "Print on paper", isOn: printsOnPaper,
+                          help: "Off reads the developed film straight off a light table, the way a slide is viewed. Slide stocks default to that: printing a positive onto RA-4 paper inverts it, which is what a lab would really produce and almost never what you want.")
+            }
 
             if printsOnPaper.wrappedValue {
                 StockPicker(title: "Paper", entries: model.paperEntries, films: false,
@@ -266,7 +298,7 @@ struct InspectorView: View {
         Section("Graduated Exposure",
                 subtitle: "Exposure compensation that fades across the frame, given to the film when the picture is taken.") {
             if model.recipe.gradients.isEmpty {
-                Text("Add a gradient, then drag its handles on the image: the full compensation is at the solid line, none past the dashed one, and the middle handle moves both. Gradients stack, each adding its own exposure where it covers.")
+                Text("Add a gradient or an oval, then drag its handles on the image: the full compensation is at the solid line, none past the dashed one. A gradient's middle handle moves it, as an oval's centre does. They stack, each adding its own exposure where it covers.")
                     .font(.system(size: 10)).foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -287,15 +319,15 @@ struct InspectorView: View {
             }
 
             if model.recipe.gradients.count < Constants.maxExposureGradients {
-                Button {
-                    var gradient = ExposureGradient()
-                    gradient.name = "Gradient \(model.recipe.gradients.count + 1)"
-                    gradient.points = model.framePoints(gradient.points)
-                    model.recipe.gradients.append(gradient)
-                    selectedMask = gradient.id
-                } label: {
-                    Label("Add gradient", systemImage: "square.tophalf.filled")
-                        .font(.system(size: 10))
+                HStack(spacing: 6) {
+                    Button { addGradient(oval: false) } label: {
+                        Label("Add gradient", systemImage: "square.tophalf.filled")
+                            .font(.system(size: 10))
+                    }
+                    Button { addGradient(oval: true) } label: {
+                        Label("Add oval", systemImage: "circle.dashed")
+                            .font(.system(size: 10))
+                    }
                 }
                 .buttonStyle(.bordered).controlSize(.mini)
                 .padding(.top, 4)
@@ -453,6 +485,19 @@ struct InspectorView: View {
             })
     }
 
+    /// A new gradient, or oval, laid on the part of the frame in view.
+    private func addGradient(oval: Bool) {
+        var gradient = ExposureGradient()
+        if oval {
+            gradient.shape = .oval
+            gradient.points = [CGPoint(x: 0.5, y: 0.5), CGPoint(x: 0.75, y: 0.5), CGPoint(x: 0.5, y: 0.75)]
+        }
+        gradient.name = "\(oval ? "Oval" : "Gradient") \(model.recipe.gradients.count + 1)"
+        gradient.points = model.framePoints(gradient.points)
+        model.recipe.gradients.append(gradient)
+        selectedMask = gradient.id
+    }
+
     // MARK: Dodge & burn
 
     private var localSection: some View {
@@ -533,10 +578,10 @@ struct InspectorView: View {
             // own inhibition.
             if model.filmPack?.isMonochrome == true {
                 ToggleRow(title: "Edge effects", isOn: $model.recipe.couplersEnabled,
-                          help: "Development's by-products spread out of dense areas and hold back development beside them, so every edge comes out crisper — the adjacency effect behind silver film's acutance. Matched to Kodak's measured sharpness of Tri-X in D-76.")
+                          help: "Development's by-products spread out of dense areas and hold back development beside them, so every edge comes out crisper — the adjacency effect behind silver film's acutance. Matched to each film's published sharpness, or to Kodak's measured Tri-X in D-76 for a film that publishes none.")
                 ParamSlider(title: "Edge effect", value: $model.recipe.couplersAmount,
                             range: 0...2, defaultValue: 1, decimals: 2,
-                            help: "How strongly development holds back next to dense areas. 1 is D-76; above that leans toward a dilute acutance developer such as Rodinal; 0 is none.")
+                            help: "How strongly development holds back next to dense areas. 1 is the developer the film's sheet measures, D-76 for most; above that leans toward a dilute acutance developer such as Rodinal; 0 is none.")
                 ParamSlider(title: "Edge width", value: $model.recipe.couplersDiffusion,
                             range: 0...3, defaultValue: 1, decimals: 2,
                             help: "How far the by-products spread before they act. Wider reads as local contrast more than as edge sharpness.")
@@ -710,6 +755,14 @@ private struct GradientRow: View {
                 ParamSlider(title: "Exposure", value: $gradient.exposureEV, range: -4...4, defaultValue: 0,
                             decimals: 2, unit: " EV",
                             help: "Exposure on the covered side, like the Exposure slider: positive gives the film more light, negative less. Where gradients overlap, their exposures add.")
+                if gradient.isOval {
+                    ParamSlider(title: "Feather", value: $gradient.featherAmount, range: 0...1,
+                                defaultValue: ExposureGradient.defaultFeather, decimals: 2,
+                                help: "How gradually the compensation fades: full inside the oval shrunk by this share of its size (the solid line), none outside the oval (the dashed one). 0 is a hard edge.")
+                    Toggle("Invert", isOn: $gradient.isInverted)
+                        .font(.system(size: 10)).toggleStyle(.checkbox).controlSize(.mini)
+                        .help("The compensation outside the oval instead of inside it.")
+                }
             }
         }
         .padding(6)

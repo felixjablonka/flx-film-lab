@@ -66,7 +66,11 @@ enum Exporter {
             if let filter = film?.lensFilter(recipe.lensFilter) {
                 parts.append("camera filter: \(filter.designation)")
             }
-            if recipe.scanFilm ?? (film?.isPositive ?? false) {
+            if let film, film.isInstantPrint {
+                // The film is the print: what made it is how warm it developed.
+                parts.append(film.processingFahrenheit(recipe.processingTemperature)
+                    .map { "instant print, processed at \($0) F" } ?? "instant print")
+            } else if film?.isViewedDirectly(scanFilm: recipe.scanFilm) ?? (recipe.scanFilm ?? false) {
                 parts.append("viewed on a light table")
             } else {
                 parts.append("paper: \((try? PackLibrary.shared.pack(recipe.printStock))?.name ?? recipe.printStock)")

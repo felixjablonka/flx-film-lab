@@ -140,8 +140,73 @@ CENTURIA_SUPER_1600 = _log_plot("konica_csuper1600.pdf", 1, (410.4, 216.3, 566.2
                                 ((250.5, 100), (271.5, 50), (321.3, 10), (342.1, 5), (392.4, 1)))
 
 
+# Kodak's ELITE Chrome Extra Color 100 (E-126E page 5) and ELITE Chrome 200
+# (E-148E page 4): R, G and B, drawn as polylines, on rules read off each
+# plot's gridlines (the top rule, 200%, sits off the decades' spacing and is
+# left out). 200's green curve is drawn as a run of small filled slivers
+# rather than a stroke, and is read along their centres.
+ELITE_CHROME_EXTRA_COLOR_100 = _log_plot(
+    "e126e-Elitechrome_100ec.pdf", 4, (362.62, 359.28, 565.13, 512.28),
+    ((362.62, 1), (384.32, 2), (396.98, 3), (406.32, 4), (412.95, 5), (434.35, 10), (456.95, 20), (485.88, 50),
+     (507.57, 100), (528.97, 200)),
+    ((378.53, 100), (389.08, 70), (398.72, 50), (413.48, 30), (425.23, 20), (445.41, 10), (455.65, 7), (465.89, 5),
+     (480.05, 3), (492.70, 2), (512.28, 1)))
+ELITE_CHROME_200 = _log_plot(
+    "e148e-Elite_chrome_200.pdf", 3, (350.62, 51.87, 553.13, 204.87),
+    ((350.62, 1), (372.32, 2), (384.98, 3), (394.32, 4), (400.95, 5), (422.35, 10), (444.95, 20), (473.88, 50),
+     (495.57, 100), (516.97, 200)),
+    ((71.12, 100), (81.66, 70), (91.30, 50), (106.07, 30), (117.81, 20), (138.00, 10), (148.24, 7), (158.48, 5),
+     (172.64, 3), (185.29, 2), (204.87, 1)))
+
+
 def _green_of_three(plot: VectorPlot, polylines: bool) -> np.ndarray:
     return _as_curve(by_order(plot, ("B", "G", "R"), at_x=_L(50), polylines=polylines)["G"])
+
+
+def _at(curve: np.ndarray, x: float) -> float:
+    order = np.argsort(curve[:, 0])
+    return float(np.interp(x, curve[order, 0], curve[order, 1]))
+
+
+def _slivers(plot: VectorPlot) -> np.ndarray:
+    """A curve drawn as a run of small filled slivers, as data: each sliver's centre, left to right."""
+    page = pymupdf.open(plot.pdf)[plot.page]
+    x0, y0, x1, y1 = plot.frame
+    centres = []
+    for path in page.get_drawings():
+        r, fill = path["rect"], path.get("fill")
+        if (path.get("type") != "f" or fill is None or max(fill) > 0.05 or r.width > 8 or r.height > 8
+                or not (x0 <= r.x0 and r.x1 <= x1 and y0 <= r.y0 and r.y1 <= y1)):
+            continue
+        lines = [i for i in path["items"] if i[0] == "l"]
+        if not lines:
+            continue
+        corners = [(p.x, p.y) for p in [i[1] for i in lines] + [lines[-1][2]]]
+        centres.append(np.mean(corners, axis=0))
+    if len(centres) < 20:
+        raise ValueError(f"{plot.pdf} page {plot.page + 1}: {len(centres)} slivers, expected a curve's run")
+    centres = np.array(centres)
+    return _to_data(plot, centres[np.argsort(centres[:, 0])])
+
+
+def elite_chrome_extra_color_100_green() -> np.ndarray:
+    """Extra Color's green-layer curve: the middle one of three at 50 cycles/mm."""
+    curves = joined(ELITE_CHROME_EXTRA_COLOR_100)
+    if len(curves) != 3:
+        raise ValueError(f"E-126E MTF: {len(curves)} curves, expected 3")
+    return _as_curve(sorted(curves, key=lambda c: _at(c, _L(50)))[1])
+
+
+def elite_chrome_200_green() -> np.ndarray:
+    """200's green-layer curve, the slivers, which run between its blue and red strokes."""
+    green = _slivers(ELITE_CHROME_200)
+    strokes = joined(ELITE_CHROME_200)
+    if len(strokes) != 2:
+        raise ValueError(f"E-148E MTF: {len(strokes)} stroked curves, expected 2 (blue and red)")
+    low, high = sorted(_at(c, _L(50)) for c in strokes)
+    if not low < _at(green, _L(50)) < high:
+        raise ValueError("E-148E MTF: the slivers do not run between the blue and red curves")
+    return _as_curve(green)
 
 
 def vericolor_iii() -> np.ndarray:
@@ -217,6 +282,13 @@ SHEET_MTF = {
     "kodak_exr_200t": lambda: _green_of_three(EXR_200T, polylines=False),
     # the BBC's film-only measurement of 5251, one curve for the film
     "kodak_5251_50t": lambda: __import__("kodak_1962_sheets").negative_mtf(),
+    "kodak_elite_chrome_extra_color_100": elite_chrome_extra_color_100_green,
+    "kodak_elite_chrome_200": elite_chrome_200_green,
+    # Polacolor's sheet gives only its resolving power, 9 line pairs/mm at
+    # 1000:1 against Type 553's 12-15: Type 553's MTF moved along frequency as
+    # far as the black-and-white sheets show a print's MTF moves with its
+    # resolving power, an estimate (`polaroid_sheets.polacolor_mtf`).
+    "polaroid_polacolor_559": lambda: __import__("polaroid_sheets").polacolor_mtf(),
 }
 
 
@@ -275,8 +347,16 @@ def fit(stock: str, log_exposure, curves, matrix, halation) -> dict:
         return np.log(np.maximum(model(p), 1e-6)) - np.log(response)
 
     best = None
-    for start in ([0.5, 20, 2, 9, 0.6], [0.2, 60, 1, 5, 0.3], [0.9, 10, 4, 15, 0.8], [0.5, 150, 3, 3, 0.5]):
-        res = least_squares(residual, start, bounds=([0, 3, 0.3, 1, 0], [1, 300, 8, 40, 0.99 / relative.max()]))
+    starts = ([0.5, 20, 2, 9, 0.6], [0.2, 60, 1, 5, 0.3], [0.9, 10, 4, 15, 0.8], [0.5, 150, 3, 3, 0.5])
+    top_core, top_tail = 8, 40
+    if stock in __import__("stock_overrides").INSTANT:
+        # A print's blur, its MTF falling to half by a few cycles/mm: tens of
+        # micrometres where a film's is a few.
+        starts = ([0.0, 20, 40, 30, 0.5], [0.0, 20, 80, 10, 0.2], [0.0, 20, 20, 60, 0.6])
+        top_core, top_tail = 200, 200
+    for start in starts:
+        res = least_squares(residual, start,
+                            bounds=([0, 3, 0.3, 1, 0], [1, 300, top_core, top_tail, 0.99 / relative.max()]))
         if best is None or res.cost < best.cost:
             best = res
     fraction, reach, core, tail, weight = (float(v) for v in best.x)

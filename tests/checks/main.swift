@@ -75,15 +75,127 @@ do {
           String(format: "+1.5 EV moves mid-grey log exposure by %.4f (want %.4f)", shift, 1.5 * log10(2)))
 }
 
+// Kodak's ELITE Chrome sheets (E-126E, E-148E) draw the blue layer reaching a
+// density of 1.0 0.10 (Extra Color) and 0.07 (200) decades before the green, and
+// their spectral sensitivities put it there too in daylight: built as drawn
+// (`build_profiles.Build.as_drawn`), their greys view blue, mid-grey b* -11.3 and
+// -7.7, where a slide's base, white-pointed, is otherwise grey to 3. Polaroid's
+// Polacolor sheet draws its print's green 0.1 to 0.4 denser than its red and
+// blue: as drawn, on the dyes that view it most neutral (no sheet gives its
+// own), its greys run magenta, a* +5.7 at mid-grey (`build_instant_profiles`),
+// the magenta shadows the film is known for.
+let slidesAsDrawn: [String: (a: Float, b: Float)] = [
+    "kodak_elite_chrome_extra_color_100": (3, 12), "kodak_elite_chrome_200": (3, 8.5),
+    "polaroid_polacolor_559": (6.5, 3.5),
+]
+
 print("slides are white-balanced on their base")
 for entry in PackLibrary.shared.filmStocks where entry.type == "positive" {
     let r = try baseRecipe(film: entry.stock)
     let out = try render(renderer, r).map(lab)
     let g = out[mid], w = out[clear]
-    check(abs(g.y) < 3 && abs(g.z) < 3,
+    let limit = slidesAsDrawn[entry.stock] ?? (3, 3)
+    check(abs(g.y) < limit.a && abs(g.z) < limit.b,
           String(format: "%@ mid-grey a* %+.1f b* %+.1f", entry.stock, g.y, g.z))
     check(w.x > 99 && abs(w.y) < 1 && abs(w.z) < 1,
           String(format: "%@ clear base L* %.1f a* %+.1f b* %+.1f", entry.stock, w.x, w.y, w.z))
+}
+
+print("instant prints: processed at their sheets' temperatures, on their own frame, as sharp as their sheets")
+// Polaroid's peel-apart films (tools/bake/build_instant_profiles.py) are the
+// print: a positive seen as it is, never printed on paper, laid on its 4x5
+// frame whatever the recipe's format, and processed at one of the three
+// temperatures its sheet plots, each its own curves and nothing between.
+do {
+    let size = 64
+    var px = [Float](repeating: 1, count: size * size * 4)
+    for i in 0..<(size * size) { for c in 0..<3 { px[i * 4 + c] = RenderSetupBuilder.midgrayValue } }
+    for stock in ["polaroid_553", "polaroid_polapan_pro_100", "polaroid_polacolor_559"] {
+        let pack = try PackLibrary.shared.pack(stock)
+        guard let p = pack.processing else { check(false, "\(stock): no processing curves"); continue }
+        let worst = { (a: [Float], b: [Float]) in zip(a, b).map { abs($0 - $1) }.max() ?? .infinity }
+        check(p.temperaturesC.count == 3 && pack.processed(atC: nil).densityCurves == pack.densityCurves
+              && worst(pack.processed(atC: Double(p.normalC)).densityCurves, pack.densityCurves) < 1e-5
+              && pack.processed(atC: 13).densityCurves == p.densityCurves[0]
+              && pack.processed(atC: 35).densityCurves == p.densityCurves[2]
+              && pack.processed(atC: 27).densityCurves == p.densityCurves[1],
+              String(format: "%@: the sheet's three prints, %.1f, %.1f and %.1f C, and nothing between", stock,
+                     p.temperaturesC[0], p.temperaturesC[1], p.temperaturesC[2]))
+
+        // Rendered: hot and cold processing move the print, and back at normal
+        // it is the normal print again (the film stage is not reused across them).
+        renderer.setImage(px, width: size, height: size)
+        var r = try baseRecipe(film: stock)
+        let normal = try render(renderer, r).map(lab)[0]
+        r.processingTemperature = 35
+        let hot = try render(renderer, r).map(lab)[0]
+        r.processingTemperature = 12.78
+        let cold = try render(renderer, r).map(lab)[0]
+        r.processingTemperature = nil
+        let again = try render(renderer, r).map(lab)[0]
+        r.scanFilm = false
+        let printed = try render(renderer, r).map(lab)[0]
+        check(abs(hot.x - normal.x) > 1 && abs(cold.x - normal.x) > 1 && simd_length(again - normal) < 1e-3
+                  && simd_length(printed - normal) < 1e-3,
+              String(format: "%@: a grey card prints L* %.1f at 70 F, %.1f at 95 F, %.1f at 55 F; never on paper", stock,
+                     normal.x, hot.x, cold.x))
+
+        let frame = pack.frame(.thirtyFiveMM)
+        check(abs(frame.long - 117.5) < 0.01 && abs(frame.short - 88.9) < 0.01
+                  && Renderer.pixelSizeUm(width: 6000, height: 4000, frame: frame) > 19,
+              String(format: "%@: laid on its own %.1f x %.1f mm print, not the recipe's format", stock, frame.long, frame.short))
+    }
+    // The print's MTF, on the print: the green record's density modulation for
+    // a small sinusoidal exposure against a large step of the same size, as
+    // the slides' are measured below, on the print's own frame. Polacolor's
+    // is Type 553's moved along frequency as far as the black-and-white
+    // sheets show a print's MTF moves with resolving power (9 against 13.5
+    // line pairs/mm: to 0.80 times), an estimate.
+    let side = 6048, rows = 8, m = 0.02
+    let printSheets: [(film: String, f: [Double], mtf: [Double])] = [
+        ("polaroid_553", [0.5, 1, 2, 3, 4], [96.9, 89.8, 70.4, 52.1, 36.8]),
+        ("polaroid_polapan_pro_100", [0.5, 1, 2, 3, 4], [97.7, 94.0, 81.4, 65.1, 50.3]),
+        ("polaroid_polacolor_559", [0.5, 1, 2, 3], [95.2, 85.6, 60.8, 40.2]),
+    ]
+    for (film, frequencies, sheet) in printSheets {
+        var r = try baseRecipe(film: film)
+        r.halationEnabled = true          // the scatter lives in the halation stage
+        let pitchMM = Double(Renderer.pixelSizeUm(width: side, height: rows,
+                                                  frame: try PackLibrary.shared.pack(film).frame(r.filmFormat))) / 1000
+        func green(_ pattern: (Int) -> Double) throws -> [Double] {
+            var px = [Float](repeating: 1, count: side * rows * 4)
+            for x in 0..<side {
+                let v = RenderSetupBuilder.midgrayValue * Float(pow(10, pattern(x)))
+                for yy in 0..<rows { let o = (yy * side + x) * 4; px[o] = v; px[o + 1] = v; px[o + 2] = v }
+            }
+            renderer.setImage(px, width: side, height: rows)
+            _ = try render(renderer, r)
+            let density = renderer.readTap("cmy_film")!
+            return (0..<side).map { Double(density[((rows / 2) * side + $0) * 4 + 1]) }
+        }
+        let large = abs(try green { _ in m }[side / 2] - green { _ in -m }[side / 2]) / 2
+        let got = try frequencies.map { f -> Double in
+            let w = 2 * Double.pi * f * pitchMM
+            let l = try green { m * sin(w * (Double($0) + 0.5)) }
+            let span = (side / 5)..<(4 * side / 5)
+            let mean = span.map { l[$0] }.reduce(0, +) / Double(span.count)
+            var sn = 0.0, cs = 0.0, s2 = 0.0, c2 = 0.0
+            for x in span {
+                let a = w * (Double(x) + 0.5)
+                sn += (l[x] - mean) * sin(a); cs += (l[x] - mean) * cos(a); s2 += sin(a) * sin(a); c2 += cos(a) * cos(a)
+            }
+            return 100 * hypot(sn / s2, cs / c2) / large
+        }
+        check(zip(got, sheet).allSatisfy { abs($0 - $1) < 2 },
+              "\(film): \(got.map { String(format: "%.1f", $0) }.joined(separator: ", "))% at \(frequencies.map { String(format: "%g", $0) }.joined(separator: ", ")) cycles/mm on the print (sheet \(sheet.map { String(format: "%.1f", $0) }.joined(separator: ", ")))")
+    }
+    renderer.setImage(greyWedge(stops), width: stops.count, height: 1)
+
+    // A recipe saved before processing existed has no such key.
+    var dict = try JSONSerialization.jsonObject(with: JSONEncoder().encode(Recipe())) as! [String: Any]
+    dict.removeValue(forKey: "processingTemperature")
+    let old = try JSONDecoder().decode(Recipe.self, from: JSONSerialization.data(withJSONObject: dict))
+    check(old.processingTemperature == nil, "a recipe saved without a processing temperature loads at the normal one")
 }
 
 print("graduated exposure changes what the film receives, and only where it covers")
@@ -147,6 +259,35 @@ do {
     }
     check(worstStack < 1e-4, String(format: "two stacked gradients add up: worst pixel off by %.5f", worstStack))
 
+    // An oval, tilted and sheared, inside and inverted: full at its centre
+    // (or none), none in the frame's corners (or full), and what the CPU copy
+    // says everywhere, crossed with a linear gradient.
+    for inverted in [false, true] {
+        var oval = ExposureGradient()
+        oval.shape = .oval
+        oval.points = [CGPoint(x: 0.45, y: 0.5), CGPoint(x: 0.75, y: 0.62), CGPoint(x: 0.38, y: 0.8)]
+        oval.exposureEV = 1.5
+        oval.featherAmount = 0.4
+        oval.isInverted = inverted
+        r.gradients = [oval, fromTop]
+        _ = try render(renderer, r, exposureEV: 0)
+        let graded = renderer.readTap("log_e_film")!
+        var worst: Float = 0
+        for y in 0..<size {
+            for x in 0..<size {
+                let o = (y * size + x) * 4 + 1
+                let want = ExposureGradient.exposureEV(r.gradients, atX: Float(x) + 0.5, y: Float(y) + 0.5,
+                                                       width: Float(size), height: Float(size)) * decade
+                worst = max(worst, abs((graded[o] - plain[o]) - want))
+            }
+        }
+        let alone = oval.exposureEV(atX: 0.45 * Float(size), y: 0.5 * Float(size), width: Float(size), height: Float(size))
+        let corner = oval.exposureEV(atX: 0.5, y: 0.5, width: Float(size), height: Float(size))
+        check(worst < 1e-4 && abs(alone - (inverted ? 0 : 1.5)) < 1e-6 && abs(corner - (inverted ? 1.5 : 0)) < 1e-6,
+              String(format: "an oval%@ crossed with a gradient: centre %+.2f EV, corner %+.2f EV, worst pixel off by %.5f",
+                     inverted ? ", inverted," : "", alone, corner, worst))
+    }
+
     // Saved recipes from before the gradients existed have no such key.
     let encoded = try JSONEncoder().encode(Recipe())
     var dict = try JSONSerialization.jsonObject(with: encoded) as! [String: Any]
@@ -155,6 +296,11 @@ do {
     let roundTrip = try JSONDecoder().decode(Recipe.self, from: JSONEncoder().encode(r))
     check(old.gradients.isEmpty && roundTrip.gradients == r.gradients,
           "a recipe saved without gradients loads, and one with them round-trips")
+    // Gradients saved before ovals existed have no shape, feather or side.
+    var linear = try JSONSerialization.jsonObject(with: JSONEncoder().encode(fromTop)) as! [String: Any]
+    for key in ["shape", "feather", "inverted"] { linear.removeValue(forKey: key) }
+    let older = try JSONDecoder().decode(ExposureGradient.self, from: JSONSerialization.data(withJSONObject: linear))
+    check(older == fromTop && !older.isOval, "a gradient saved before ovals loads as the linear gradient it was")
     renderer.setImage(greyWedge(stops), width: stops.count, height: 1)
 }
 
@@ -574,8 +720,11 @@ do {
 print("black-and-white stocks print in silver")
 do {
     let bw = ["kodak_tri_x_400", "kodak_tri_x_400_push2", "ilford_hp5_plus", "fujifilm_neopan_1600", "agfa_apx_25",
-              "kodak_t_max_100"]
+              "kodak_t_max_100", "kodak_double_x_5222"]
     let paper = "ilford_multigrade_rc_deluxe"
+    // Double-X prints on its own release print film, 2302, a silver film too.
+    let ownPrint = ["kodak_double_x_5222": "kodak_2302"]
+    let ownSheet = ["agfa_apx_25", "kodak_t_max_100", "kodak_double_x_5222"]
 
     // A colourful chart, hue around and exposure across, grain on: on a
     // silver paper every pixel must come out neutral, grain included —
@@ -596,7 +745,7 @@ do {
         r.halationEnabled = true
         let out = try render(renderer, r)
         let worst = out.map { simd_length(SIMD2(lab($0).y, lab($0).z)) }.max() ?? .infinity
-        check(r.printStock == paper && worst < 0.1,
+        check(r.printStock == (ownPrint[film] ?? paper) && worst < 0.1,
               String(format: "%@ on %@: worst pixel chroma %.3f, grain, halation and edge effects on", film, r.printStock, worst))
     }
 
@@ -632,7 +781,7 @@ do {
             return 100 * hypot(s / s2, c / c2) / large
         }
         let kodak: [(f: Double, response: Double)] = [(8, 112.0), (24, 100.6), (50, 54.7)]
-        for film in bw where !["agfa_apx_25", "kodak_t_max_100"].contains(film) {
+        for film in bw where !ownSheet.contains(film) {
             var r = try baseRecipe(film: film)
             r.halationEnabled = true          // the scatter lives in the halation stage
             let got = try kodak.map { try response(r, at: $0.f) }
@@ -670,6 +819,18 @@ do {
                   String(format: "kodak_t_max_100: response %.0f%% at 5, %.0f%% at 20, %.0f%% at 30 cycles/mm (Kodak's 109, 114, 112)",
                          got[0], got[1], got[2]))
         }
+        // Kodak H-1-5222 gives Double-X its own curve (D-96, tungsten): a broad
+        // edge-effect hump, 126% at 5 cycles/mm, falling to 92% at 20 and 68%
+        // at 30, which takes the scatter's tail as well as its core.
+        do {
+            var r = try baseRecipe(film: "kodak_double_x_5222")
+            r.halationEnabled = true
+            let kodak: [(f: Double, response: Double)] = [(5, 126.0), (20, 92.5), (30, 67.8)]
+            let got = try kodak.map { try response(r, at: $0.f) }
+            check(zip(got, kodak).allSatisfy { abs($0 - $1.response) < 5 },
+                  String(format: "kodak_double_x_5222: response %.0f%% at 5, %.0f%% at 20, %.0f%% at 30 cycles/mm (Kodak's 126, 92, 68)",
+                         got[0], got[1], got[2]))
+        }
 
         // Fujifilm measures no edge effect for Provia 400X (AF3-0213E). On
         // 100F's couplers and its own steeper curve it read 200% at 10
@@ -688,12 +849,13 @@ do {
                      down[0], down[1], down[2]))
         renderer.setImage(chart, width: w, height: h)
     }
-    // A colour negative on the silver paper is neutral too.
-    do {
+    // A colour negative on the silver paper is neutral too, and on the silver
+    // print film.
+    for print in [paper, "kodak_2302"] {
         var r = try baseRecipe(film: "kodak_portra_400")
-        r.printStock = paper
+        r.printStock = print
         let worst = try render(renderer, r).map { simd_length(SIMD2(lab($0).y, lab($0).z)) }.max() ?? .infinity
-        check(worst < 0.1, String(format: "Portra 400 on Multigrade: worst pixel chroma %.3f", worst))
+        check(worst < 0.1, String(format: "Portra 400 on %@: worst pixel chroma %.3f", print, worst))
     }
 
     // On colour paper there is no table entry for a silver negative; the
@@ -794,7 +956,8 @@ do {
         r.grainEnabled = true
         _ = try render(renderer, r)
         let negative = renderer.readTap("cmy_film")!
-        let pitch = Renderer.pixelSizeUm(width: side, height: rows, format: r.filmFormat)
+        let pitch = Renderer.pixelSizeUm(width: side, height: rows,
+                                         frame: try PackLibrary.shared.pack(r.filmStock).frame(r.filmFormat))
         let box = max(Int((sqrt(Float.pi) * 24 / pitch).rounded()), 1)
         var variance = 0.0
         var densities = [Double](repeating: 0, count: 3)
@@ -847,8 +1010,10 @@ do {
 
     // On a slide a grey card keeps its lightness while it warms: the 81C a
     // plain amber, the 812 with half the yellow and nearer pink, as the two
-    // look on film.
-    let slides = PackLibrary.shared.filmStocks.filter { $0.type == "positive" }.map(\.stock)
+    // look on film. Not on Polaroid's prints: Polacolor's own green layer
+    // leaves the 812 no pinker than the 81C, and the black-and-white ones take
+    // the black-and-white filters.
+    let slides = PackLibrary.shared.filmStocks.filter { $0.type == "positive" && !$0.isInstantPrint }.map(\.stock)
     let g = RenderSetupBuilder.midgrayValue
     renderer.setImage([g, g, g, 1], width: 1, height: 1)
     func hue(_ c: SIMD3<Float>) -> Float { atan2(c.z, c.y) * 180 / .pi }
@@ -928,7 +1093,9 @@ do {
         ("fujifilm_provia_100f", [115, 113, 92, 70]), ("fujifilm_provia_400x", [101, 92, 74, 61]),
         ("fujifilm_astia_100f", [102, 93, 74, 58]),
         ("fujifilm_velvia_50", [117, 122, 105, 81]), ("fujifilm_velvia_100", [109, 106, 84, 66]),
-        ("kodak_ektachrome_100", [97, 91, 81, 63]), ("kodak_kodachrome_25", [131, 138, 110, 79]),
+        ("kodak_ektachrome_100", [97, 91, 81, 63]),
+        ("kodak_elite_chrome_extra_color_100", [105, 103, 85, 69]), ("kodak_elite_chrome_200", [93, 78, 64, 53]),
+        ("kodak_kodachrome_25", [131, 138, 110, 79]),
         ("kodak_kodachrome_64", [119, 123, 93, 69]), ("kodak_kodachrome_200", [119, 123, 93, 69]),
         ("kodak_vericolor_iii_160", [114, 114, 95, 76]),
         ("kodak_exr_50d", [103, 106, 102, 93]), ("kodak_exr_200t", [106, 109, 109, 92]),
@@ -989,7 +1156,10 @@ do {
     // on its own print film, 5385, its grey runs b* -4.1 a stop over mid-grey
     // as drawn (on 2383 within VISION3 200T's own, |a*| 5.0 and |b*| 6.1
     // against 5.2 and 5.3).
+    // Kodak's ELITE Chrome slides view blue as drawn (`slidesAsDrawn`, above):
+    // Extra Color to b* -11.3, 200 to -7.9, from three stops under to two over.
     let drawn: [String: Float] = ["fujifilm_astia_100f": 3.5, "kodak_5251_50t": 4.5]
+        .merging(slidesAsDrawn.mapValues { max($0.a, $0.b) }) { a, _ in a }
     let sister = ["kodak_exr_50d": "kodak_vision3_50d", "kodak_exr_200t": "kodak_vision3_200t"]
     func worst(_ film: String, on paper: String? = nil) throws -> (a: Float, b: Float) {
         var r = try baseRecipe(film: film)

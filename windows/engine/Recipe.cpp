@@ -101,6 +101,40 @@ QJsonObject glowLookToJson(const GlowLook &g)
 
 } // namespace
 
+std::optional<double> ovalWeight(double px, double py, double ux, double uy, double vx, double vy, double feather,
+                                 bool inverted)
+{
+    const double det = ux * vy - uy * vx;
+    if (std::abs(det) <= 1e-6)
+        return std::nullopt;
+    // the point in the oval's own axes, where the oval is the unit circle
+    const double a = (px * vy - py * vx) / det;
+    const double b = (ux * py - uy * px) / det;
+    const double r = std::sqrt(a * a + b * b);
+    const double inner = 1 - std::clamp(feather, 0.0, 1.0);
+    const double t = std::clamp((r - inner) / std::max(1 - inner, 1e-4), 0.0, 1.0);
+    const double w = 1 - t * t * (3 - 2 * t);
+    return inverted ? 1 - w : w;
+}
+
+double ExposureGradient::exposureAt(double x, double y, double width, double height) const
+{
+    if (!isActive())
+        return 0;
+    const double px = ax * width, py = ay * height;
+    const double dx = bx * width - px, dy = by * height - py;
+    if (isOval()) {
+        const auto w = ovalWeight(x - px, y - py, dx, dy, cx * width - px, cy * height - py, featherAmount(),
+                                  isInverted());
+        return w ? exposureEV * *w : 0;
+    }
+    const double lengthSquared = dx * dx + dy * dy;
+    if (lengthSquared <= 1e-9)
+        return 0;
+    const double t = std::clamp(((x - px) * dx + (y - py) * dy) / lengthSquared, 0.0, 1.0);
+    return exposureEV * (1 - t * t * (3 - 2 * t));
+}
+
 double blurSigmaFraction(double slider)
 {
     return 0.001 * std::pow(50.0, std::clamp(slider, 0.0, 100.0) / 100);
@@ -126,10 +160,23 @@ Recipe recipeFromJson(const QJsonObject &o)
             e.bx = points[1].toArray()[0].toDouble();
             e.by = points[1].toArray()[1].toDouble();
         }
+        if (points.size() >= 3) {
+            e.cx = points[2].toArray()[0].toDouble();
+            e.cy = points[2].toArray()[1].toDouble();
+        }
         read(g, "id", e.id);
         read(g, "name", e.name);
         read(g, "exposureEV", e.exposureEV);
         read(g, "enabled", e.enabled);
+        const QString shape = g.value("shape").toString();
+        if (shape == QLatin1String("oval"))
+            e.shape = GradientShape::Oval;
+        else if (shape == QLatin1String("linear"))
+            e.shape = GradientShape::Linear;
+        if (g.value("feather").isDouble())
+            e.feather = g.value("feather").toDouble();
+        if (g.value("inverted").isBool())
+            e.inverted = g.value("inverted").toBool();
         r.gradients.push_back(e);
     }
     // FrameGeometry is left out of the file at its identity.
@@ -207,6 +254,8 @@ Recipe recipeFromJson(const QJsonObject &o)
     read(o, "outputColorSpace", r.outputColorSpace);
     read(o, "gamutCompress", r.gamutCompress);
     read(o, "filmFormat", r.filmFormat);
+    if (o.value("processingTemperature").isDouble())
+        r.processingTemperature = o.value("processingTemperature").toDouble();
     return r;
 }
 
@@ -315,11 +364,21 @@ QJsonObject recipeToJson(const Recipe &r)
             QJsonArray points;
             if (g.points >= 2)
                 points = {QJsonArray{g.ax, g.ay}, QJsonArray{g.bx, g.by}};
-            gradients.append(QJsonObject{{"id", str(g.id.empty() ? newIdentifier() : g.id)},
-                                         {"name", str(g.name)},
-                                         {"points", points},
-                                         {"exposureEV", g.exposureEV},
-                                         {"enabled", g.enabled}});
+            if (g.points >= 3)
+                points.append(QJsonArray{g.cx, g.cy});
+            QJsonObject o{{"id", str(g.id.empty() ? newIdentifier() : g.id)},
+                          {"name", str(g.name)},
+                          {"points", points},
+                          {"exposureEV", g.exposureEV},
+                          {"enabled", g.enabled}};
+            // the optionals only where they are set, as the Mac's encoder
+            if (g.shape)
+                o.insert("shape", *g.shape == GradientShape::Oval ? "oval" : "linear");
+            if (g.feather)
+                o.insert("feather", *g.feather);
+            if (g.inverted)
+                o.insert("inverted", *g.inverted);
+            gradients.append(o);
         }
         o.insert("exposureGradients", gradients);
     }
@@ -327,6 +386,8 @@ QJsonObject recipeToJson(const Recipe &r)
         o.insert("cameraSharpness", *r.cameraSharpness);
     if (r.scanFilm)
         o.insert("scanFilm", *r.scanFilm);
+    if (r.processingTemperature)
+        o.insert("processingTemperature", *r.processingTemperature);
     // left out at its identity, as the Mac's
     if (!r.geometry.isIdentity())
         o.insert("frameGeometry", frameGeometryToJson(r.geometry));

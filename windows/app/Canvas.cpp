@@ -395,6 +395,28 @@ void Canvas::mouseMoveEvent(QMouseEvent *e)
         for (ExposureGradient &g : r.gradients) {
             if (g.id != id || m_handleOrigin.size() != 3)
                 continue;
+            if (g.isOval()) {
+                // the centre carries the oval; an axis end shapes it
+                PointD c = m_handleOrigin[0], u = m_handleOrigin[1], v = m_handleOrigin[2];
+                if (m_handle == 0) {
+                    const PointD moved = dragged(c);
+                    const double dx = moved.x - c.x, dy = moved.y - c.y;
+                    c = moved;
+                    u = {u.x + dx, u.y + dy};
+                    v = {v.x + dx, v.y + dy};
+                } else if (m_handle == 1) {
+                    u = dragged(u);
+                } else {
+                    v = dragged(v);
+                }
+                g.ax = c.x;
+                g.ay = c.y;
+                g.bx = u.x;
+                g.by = u.y;
+                g.cx = v.x;
+                g.cy = v.y;
+                continue;
+            }
             // the middle handle slides the whole transition
             const PointD a = m_handle == 1 ? m_handleOrigin[0] : dragged(m_handleOrigin[0]);
             const PointD b = m_handle == 0 ? m_handleOrigin[1] : dragged(m_handleOrigin[1]);
@@ -643,7 +665,7 @@ PointD Canvas::fromView(QPointF v) const
 std::vector<PointD> Canvas::selectedHandles(std::vector<int> *kinds) const
 {
     const std::string &id = m_doc.selected();
-    if (id.empty())
+    if (id.empty() || m_doc.maskLinesHidden())
         return {};
     for (const LocalMask &m : m_doc.recipe().masks) {
         if (m.id == id && m.enabled) {
@@ -654,7 +676,13 @@ std::vector<PointD> Canvas::selectedHandles(std::vector<int> *kinds) const
         }
     }
     for (const ExposureGradient &g : m_doc.recipe().gradients) {
-        if (g.id == id && g.enabled && g.points >= 2) {
+        if (g.id == id && g.enabled && g.isOval() && g.points >= 3) {
+            // the centre carries the oval; each axis end shapes it
+            if (kinds)
+                *kinds = {1, 0, 0};
+            return {{g.ax, g.ay}, {g.bx, g.by}, {g.cx, g.cy}};
+        }
+        if (g.id == id && g.enabled && !g.isOval() && g.points >= 2) {
             if (kinds)
                 *kinds = {0, 0, 1};
             return {{g.ax, g.ay}, {g.bx, g.by}, {(g.ax + g.bx) / 2, (g.ay + g.by) / 2}};
@@ -666,7 +694,8 @@ std::vector<PointD> Canvas::selectedHandles(std::vector<int> *kinds) const
 void Canvas::paintMasks(QPainter &p)
 {
     const Recipe &r = m_doc.recipe();
-    if (r.masks.empty() && r.gradients.empty())
+    // hidden, to see the print without them: they still act
+    if ((r.masks.empty() && r.gradients.empty()) || m_doc.maskLinesHidden())
         return;
     const bool light = m_surround == Surround::White;
     const QRect picture = pictureRect();
@@ -731,8 +760,31 @@ void Canvas::paintMasks(QPainter &p)
         stroke(path, m.id == selected, m.stops < 0);
     }
     for (const ExposureGradient &g : r.gradients) {
-        if (!g.enabled || g.points < 2)
+        if (!g.enabled || g.points < (g.isOval() ? 3 : 2))
             continue;
+        if (g.isOval()) {
+            // the oval itself, where its compensation has faded out, and the
+            // oval shrunk by its feather, inside which it is full; swapped when
+            // it acts outside. Each sample through toView, so a turned or
+            // levelled print draws it where the frame's pixels went.
+            auto ellipse = [&](double scale) {
+                QPainterPath path;
+                for (int i = 0; i <= 96; ++i) {
+                    const double t = 2 * kPi * i / 96;
+                    const QPointF q = toView({g.ax + scale * ((g.bx - g.ax) * std::cos(t) + (g.cx - g.ax) * std::sin(t)),
+                                              g.ay + scale * ((g.by - g.ay) * std::cos(t) + (g.cy - g.ay) * std::sin(t))});
+                    if (i == 0)
+                        path.moveTo(q);
+                    else
+                        path.lineTo(q);
+                }
+                return path;
+            };
+            const QPainterPath outer = ellipse(1), inner = ellipse(1 - std::clamp(g.featherAmount(), 0.0, 1.0));
+            stroke(g.isInverted() ? outer : inner, g.id == selected, false);
+            stroke(g.isInverted() ? inner : outer, g.id == selected, true);
+            continue;
+        }
         const QPointF a = toView({g.ax, g.ay}), b = toView({g.bx, g.by});
         // solid where the compensation is full, dashed where it has faded out
         QPainterPath full = across(a, b, a);

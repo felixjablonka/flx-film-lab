@@ -118,6 +118,19 @@ struct StockDefaults: Decodable {
     let grain: GrainDefaults?
 }
 
+/// An instant print's curves at each processing temperature its sheet plots
+/// (tools/bake/build_instant_profiles.py): Polaroid's plot the print at 55, 70
+/// and 95 F, and those three are all there is.
+struct ProcessingCurves: Decodable {
+    /// The sheets' normal temperature, 70 F: the pack's own `densityCurves`.
+    let normalC: Float
+    /// Ascending, in degrees Celsius.
+    let temperaturesC: [Float]
+    /// One (256, 3) row-major set of curves per temperature, in the units of
+    /// `densityCurves` and on the normal print's base.
+    let densityCurves: [[Float]]
+}
+
 struct TcLutRef: Decodable {
     let file: String
     let size: Int
@@ -143,10 +156,12 @@ struct ProfilePack: Decodable {
     let use: String?
 
     let logExposure: [Float]            // (256,)
-    let densityCurves: [Float]          // (256, 3) row-major
+    // Vars, so an instant print processed at another temperature can be a
+    // copy with its own curves (`processed(atC:)`).
+    var densityCurves: [Float]          // (256, 3) row-major
     let densityCurvesLayers: [Float]    // (256, 3, 3)
-    let densityMax: [Float]
-    let densityMin: [Float]
+    var densityMax: [Float]
+    var densityMin: [Float]
 
     let sensitivity: [Float]            // (81, 3) linear, zero where unmeasured
     let channelDensity: [Float]         // (81, 3)
@@ -168,8 +183,58 @@ struct ProfilePack: Decodable {
     /// The grade, ISO R, this film opens at, where it is not R115: Phoenix
     /// 200's, a little softer than its curves print (Felix's pick).
     let gradeDefault: Float?
+    /// An instant print's curves at each processing temperature.
+    let processing: ProcessingCurves?
+    /// The frame an instant print's picture is laid on, long and short side in
+    /// mm, in place of the recipe's film format: the print is the film.
+    let frameMM: [Float]?
 
     var isPositive: Bool { type == "positive" }
+    /// A film that develops straight into its own print (Polaroid's peel-apart
+    /// films): a positive on a paper support, seen by reflection, which the
+    /// engine shows as it shows a slide, white-pointed on its base, the paper.
+    var isInstantPrint: Bool { isFilmStage && support == "paper" }
+
+    /// Whether the film is seen as it is, not printed: a slide off the light
+    /// table unless `scanFilm` says otherwise, an instant print always.
+    func isViewedDirectly(scanFilm: Bool?) -> Bool {
+        isInstantPrint || (scanFilm ?? isPositive)
+    }
+
+    /// The processing temperature its sheet plots nearest `temperatureC` (nil:
+    /// the normal one), in whole degrees Fahrenheit, as the sheets give them;
+    /// nil for a film with no processing curves.
+    func processingFahrenheit(_ temperatureC: Double?) -> Int? {
+        guard let p = processing else { return nil }
+        let t = Float(temperatureC ?? Double(p.normalC))
+        let nearest = p.temperaturesC.min { abs($0 - t) < abs($1 - t) } ?? p.normalC
+        return Int((nearest * 9 / 5 + 32).rounded())
+    }
+
+    /// The print processed at `temperatureC` (nil: the sheets' normal one),
+    /// the nearest of the temperatures its sheet plots: that print's own
+    /// curves, nothing between them. D-min stays the normal print's, so a cold
+    /// or hot print's whites keep what processing gave them when the engine
+    /// takes each curve's minimum off (`normalizedDensityCurves`).
+    func processed(atC temperatureC: Double?) -> ProfilePack {
+        guard let p = processing, let t = temperatureC, !p.temperaturesC.isEmpty,
+              p.densityCurves.count == p.temperaturesC.count else { return self }
+        let nearest = p.temperaturesC.indices.min { abs(p.temperaturesC[$0] - Float(t)) < abs(p.temperaturesC[$1] - Float(t)) }!
+        let curves = p.densityCurves[nearest]
+        guard curves.count == densityCurves.count else { return self }
+        var out = self
+        out.densityCurves = curves
+        out.densityMax = (0..<3).map { c in
+            stride(from: c, to: curves.count, by: 3).map { curves[$0] }.max() ?? densityMax[c]
+        }
+        return out
+    }
+
+    /// The frame a picture is laid on: an instant print's own, or the format's.
+    func frame(_ format: FilmFormat) -> (long: Double, short: Double) {
+        if let f = frameMM, f.count == 2 { return (Double(max(f[0], f[1])), Double(min(f[0], f[1]))) }
+        return format.frameMM
+    }
     var isMotionPicture: Bool { use == "cine" }
     /// `gradeSoftest`, or the grade range's own soft end.
     var softestGrade: Float { gradeSoftest ?? Constants.gradeMax }
@@ -221,6 +286,8 @@ struct PackIndexEntry: Decodable, Identifiable, Hashable {
     var id: String { stock }
     var isMonochrome: Bool { channelModel == "bw" }
     var isMotionPicture: Bool { use == "cine" }
+    /// A film that is its own print (`ProfilePack.isInstantPrint`).
+    var isInstantPrint: Bool { support == "paper" }
 }
 
 extension PackIndexEntry {
@@ -228,15 +295,18 @@ extension PackIndexEntry {
     /// kind (motion picture negatives apart from still ones), papers by
     /// colour, motion picture print film and silver.
     static func groups(_ entries: [PackIndexEntry], films: Bool) -> [(title: String, entries: [PackIndexEntry])] {
-        let monochrome = entries.filter(\.isMonochrome)
-        let colour = entries.filter { !$0.isMonochrome }
+        let instant = films ? entries.filter(\.isInstantPrint) : []
+        let rest = films ? entries.filter { !$0.isInstantPrint } : entries
+        let monochrome = rest.filter(\.isMonochrome)
+        let colour = rest.filter { !$0.isMonochrome }
         let still = colour.filter { !$0.isMotionPicture }
         let cine = colour.filter(\.isMotionPicture)
         let parts: [(String, [PackIndexEntry])] = films
             ? [("Colour negative", still.filter { $0.type != "positive" }),
                ("Motion picture", cine),
                ("Colour slide", still.filter { $0.type == "positive" }),
-               ("Black and white", monochrome)]
+               ("Black and white", monochrome),
+               ("Instant print", instant)]
             : [("Colour", still), ("Motion picture", cine), ("Black and white", monochrome)]
         return parts.filter { !$0.1.isEmpty }.map { (title: $0.0, entries: $0.1) }
     }

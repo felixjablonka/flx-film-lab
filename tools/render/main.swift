@@ -41,6 +41,8 @@ guard args.count >= 2 else {
       --filter NAME            camera filter: on black-and-white film blue, green,
                                yellow, orange or red; on colour film 81c, 812, 85
                                or 85b
+      --processing F           an instant print's processing temperature, one of
+                               its sheet's: 55, 70 (normal) or 95 F
       --list                   print the available stocks and exit
     """)
 }
@@ -102,6 +104,7 @@ if let v = option("--shadows").flatMap(Double.init) { recipe.shadows = v }
 if let v = option("--highlights").flatMap(Double.init) { recipe.highlights = v }
 if let v = option("--toe").flatMap(Double.init) { recipe.toe = v }
 if let v = option("--filter") { recipe.lensFilter = v == "none" ? nil : v }
+if let v = option("--processing").flatMap(Double.init) { recipe.processingTemperature = (v - 32) * 5 / 9 }
 if let v = option("--shoulder").flatMap(Double.init) { recipe.shoulder = v }
 if let v = option("--size").flatMap(Int.init) { maxDimension = v }
 if flag("--no-auto") { recipe.autoExposure = false }

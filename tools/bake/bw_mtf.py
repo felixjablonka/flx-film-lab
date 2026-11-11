@@ -17,7 +17,9 @@ fitted here, to the Modulation Transfer Function on page 8 of Kodak's F-4017
 - scatter (`encodeHalation`): a Gaussian core and, for agx's exponential tail
   of decay constant lambda, its dominant Gaussian, sigma = 1.5236 lambda.
   Fitted freely, core and tail come out the same width, so the fit uses the
-  core alone: Kodak's curve is one Gaussian of about 4 um under the hump;
+  core alone: Kodak's curve is one Gaussian of about 4 um under the hump.
+  Where the core alone misses a sheet's curve by more than 5% (Double-X's,
+  a broad 126% hump and a steep fall), the tail is fitted too;
 - halation: the stock's back-reflection, unchanged;
 - adjacency, as one layer's own DIR inhibition (`couplers_amount`,
   `film_develop_couplers`): the first development's density, times g and
@@ -130,7 +132,14 @@ def kodak_t_max_100_mtf() -> np.ndarray:
 # to Agfa's 91 the worst error was 17%, to 50 it is 3%); the others take
 # Kodak's Tri-X curve.
 SHEET_MTF = {"agfa_apx_25": lambda: (lambda c: c[c[:, 0] <= 50])(agfa_apx25_mtf()),
-             "kodak_t_max_100": lambda: (lambda c: c[c[:, 0] <= 50])(kodak_t_max_100_mtf())}
+             "kodak_t_max_100": lambda: (lambda c: c[c[:, 0] <= 50])(kodak_t_max_100_mtf()),
+             # Kodak H-1-5222 (2003), tungsten, D-96 to the control gamma; the
+             # 2022 edition's bitmap repeats it (`kodak_bw_cine_sheets`).
+             "kodak_double_x_5222": lambda: (lambda c: c[c[:, 0] <= 50])(
+                 __import__("kodak_bw_cine_sheets").double_x_mtf()),
+             # Polaroid's prints, to 4 cycles/mm on the 4x5 print (`polaroid_sheets`)
+             "polaroid_553": lambda: __import__("polaroid_sheets").type_553_mtf(),
+             "polaroid_polapan_pro_100": lambda: __import__("polaroid_sheets").polapan_100_mtf()}
 
 
 def _gauss(sigma_um, f_cmm):
@@ -148,21 +157,53 @@ def engine_mtf(f, core_um, tail_um, tail_weight, b, diffusion_um):
     return scatter * halation * adjacency
 
 
-def fit(data: np.ndarray | None = None) -> dict:
+def fit(data: np.ndarray | None = None, edge: bool = True) -> dict:
     """Scatter and adjacency that reproduce a measured MTF in the engine:
-    `data` as (cycles/mm, fraction), Kodak's Tri-X curve by default."""
+    `data` as (cycles/mm, fraction), Kodak's Tri-X curve by default. Without
+    `edge` there is no adjacency (b = 0): a print whose MTF falls from the
+    start, as Polaroid's do."""
     data = kodak_tri_x_mtf() if data is None else data
     f, response = data[:, 0], data[:, 1]
+    b_top = 0.5 if edge else 1e-9
 
     def residual(p):
         core, b, diffusion = p
         return np.log(engine_mtf(f, core, 0.0, 0.0, b, diffusion)) - np.log(response)
 
-    p = least_squares(residual, [2.0, 0.15, 60.0], bounds=([0.3, 0.0, 10.0], [8.0, 0.5, 250.0])).x
+    p = least_squares(residual, [2.0, 0.15 if edge else 0.0, 60.0],
+                      bounds=([0.3, 0.0, 10.0], [80.0 if not edge else 8.0, b_top, 250.0])).x
     core, b, diffusion = (float(v) for v in p)
-    return {"scatterCoreUm": core, "scatterTailUm": 0.0, "scatterTailWeight": 0.0,
+    worst = float(np.max(np.abs(residual(p))))
+    # A print (no edge) is fitted with its scatter's tail always: its MTF is
+    # the whole of its sharpness, and one Gaussian misses Polapan's by 3%.
+    if edge and worst <= np.log(1 + CORE_ONLY_TOLERANCE):
+        return {"scatterCoreUm": core, "scatterTailUm": 0.0, "scatterTailWeight": 0.0,
+                "inhibition": b, "diffusionSizeUm": diffusion, "worstLogError": worst, "points": data}
+
+    # The core alone cannot follow this curve: Double-X's rises to 126% at 5-8
+    # cycles/mm and falls to 44% by 46, which one Gaussian under the hump
+    # misses by 16%. The engine's scatter tail (agx's exponential, as its
+    # dominant Gaussian) is fitted too, from a few starts.
+    def residual_tail(q):
+        return np.log(engine_mtf(f, *q)) - np.log(response)
+
+    bounds = ([0.3, 0.3, 0.0, 0.0, 10.0], [80.0 if not edge else 8.0, 300.0 if not edge else 30.0, 0.9, b_top, 250.0])
+    starts = ([3.0, 6.0, 0.3, 0.2, 80.0], [2.0, 10.0, 0.5, 0.25, 100.0],
+              [4.0, 3.0, 0.2, 0.2, 60.0], [1.0, 8.0, 0.6, 0.3, 120.0])
+    if not edge:
+        # a print's blur, tens of micrometres
+        starts = ([20.0, 30.0, 0.3, 0.0, 80.0], [10.0, 60.0, 0.5, 0.0, 80.0], [40.0, 20.0, 0.2, 0.0, 80.0])
+    best = min((least_squares(residual_tail, start, bounds=bounds) for start in starts),
+               key=lambda r: r.cost)
+    core, tail, weight, b, diffusion = (float(v) for v in best.x)
+    return {"scatterCoreUm": core, "scatterTailUm": tail, "scatterTailWeight": weight,
             "inhibition": b, "diffusionSizeUm": diffusion,
-            "worstLogError": float(np.max(np.abs(residual(p)))), "points": data}
+            "worstLogError": float(np.max(np.abs(residual_tail(best.x)))), "points": data}
+
+
+# How far the scatter's core alone may miss a sheet's MTF before its tail is
+# fitted too. Tri-X, T-Max 100 and APX 25 fit within 3% on the core alone.
+CORE_ONLY_TOLERANCE = 0.05
 
 
 def inhibition_gamma(inhibition: float, curve_slope: float) -> float:

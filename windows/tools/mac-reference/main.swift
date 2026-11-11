@@ -170,9 +170,13 @@ do {
 
     // What film_expose gets, as Renderer.render makes it.
     let tc = try PackLibrary.shared.tcLut(for: setup.film, lensFilter: setup.lensFilter)
+    // As ExposureGradientUniform: a, b, c (an oval's; zero for a linear one),
+    // ev, kind, feather, inverted.
     let gradients = setup.exposureGradients.map { g -> [Float] in
-        [Float(g.points[0].x) * Float(width), Float(g.points[0].y) * Float(height),
-         Float(g.points[1].x) * Float(width), Float(g.points[1].y) * Float(height), Float(g.exposureEV)]
+        let c = g.isOval ? [Float(g.points[2].x) * Float(width), Float(g.points[2].y) * Float(height)] : [0, 0]
+        return [Float(g.points[0].x) * Float(width), Float(g.points[0].y) * Float(height),
+                Float(g.points[1].x) * Float(width), Float(g.points[1].y) * Float(height)] + c
+            + [Float(g.exposureEV), g.isOval ? 1 : 0, Float(g.featherAmount), g.isInverted ? 1 : 0]
     }
     let d = setup.developUniforms, p = setup.printUniforms
     let halationOn = resolved.halationEnabled && (setup.film.defaults.halation?.active ?? false)
@@ -181,7 +185,9 @@ do {
 
     // The sigmas Renderer.render blurs with, worked out as it does
     // (encodeHalation, couplerDiffusionPixels, step 3b).
-    let pitch = Renderer.pixelSizeUm(width: width, height: height, format: resolved.filmFormat)
+    // an instant print's own frame, or the format's (ProfilePack.frame)
+    let frame = setup.film.frame(resolved.filmFormat)
+    let pitch = Renderer.pixelSizeUm(width: width, height: height, frame: frame)
     var sigmas: [Float] = []
     if halationOn, let h = setup.film.defaults.halation {
         let scatterAmount = resolved.keepsCameraSharpness ? 0 : Float(resolved.scatterAmount)
@@ -219,7 +225,6 @@ do {
         stock["grain"] = ["tableDensityMax": g.tableDensityMax, "cloudUm": g.cloudUm, "tableSamples": g.tableSamples]
         try write("selwyn.f32", width: 3, height: 3 * g.tableSamples, channels: 1, floats: g.selwynUm2)
     }
-    let frame = resolved.filmFormat.frameMM
     let json: [String: Any] = [
         "recipe": [
             "halationAmount": resolved.halationAmount, "halationScale": resolved.halationScale,

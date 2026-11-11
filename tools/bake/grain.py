@@ -130,6 +130,11 @@ SHEET_RMS: dict[str, tuple[float, str, str]] = {
     "fujifilm_velvia_100": (8.0, "visual", "Fujifilm Velvia 100 sheet"),
     "fujifilm_astia_100f": (7.0, "visual", "Fujifilm Astia 100F sheet"),
     "kodak_ektachrome_100": (8.0, "visual-gross", "Kodak E100 sheet"),
+    "kodak_elite_chrome_extra_color_100": (11.0, "visual-gross", "Kodak ELITE Chrome Extra Color 100 sheet"),
+    "kodak_elite_chrome_200": (12.0, "visual-gross", "Kodak ELITE Chrome 200 sheet"),
+    # Polaroid's colour print: no figure, and next to no grain at its own size
+    "polaroid_polacolor_559": (4.0, "visual-gross", "none published; a print's dye image at its own size, "
+                                                    "an estimate as Polapan Pro 100's"),
     "kodak_kodachrome_25": (9.0, "visual-gross", "Kodak Kodachrome sheet"),
     "kodak_kodachrome_64": (10.0, "visual-gross", "Kodak Kodachrome sheet"),
     "kodak_kodachrome_200": (16.0, "visual-gross", "Kodak Kodachrome sheet"),

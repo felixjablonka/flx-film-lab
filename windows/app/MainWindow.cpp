@@ -194,6 +194,12 @@ MainWindow::MainWindow(Document &document, MotionDocument &motion, QWidget *pare
                                        "the print. While it is open the picture is held at full size."));
     m_crop->setToolTip(QStringLiteral("Crop, turn and level the print (Ctrl+R): the whole frame shows with the crop on "
                                       "it. Return keeps the crop, Escape goes back."));
+    m_hideMaskLines = menuAction(edit, QStringLiteral("&Hide Mask Lines"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_H),
+                                 this, [this] { m_doc.setMaskLinesHidden(!m_doc.maskLinesHidden()); });
+    m_hideMaskLines->setCheckable(true);
+    m_hideMaskLines->setToolTip(QStringLiteral("Hide the lines of the masks and gradients (Ctrl+Shift+H), to see the "
+                                               "print without them: they still act. Choosing one to edit shows them "
+                                               "again."));
     m_turnLeft = menuAction(edit, QStringLiteral("Turn &Left"), QKeySequence(Qt::CTRL | Qt::Key_BracketLeft), this,
                             [this] { m_doc.turn(false); });
     m_turnRight = menuAction(edit, QStringLiteral("Turn R&ight"), QKeySequence(Qt::CTRL | Qt::Key_BracketRight), this,
@@ -297,8 +303,9 @@ MainWindow::MainWindow(Document &document, MotionDocument &motion, QWidget *pare
     m_presetsButton->setToolTip(QStringLiteral(
         "Presets: settings saved by name, to put on any image later, in this session or another. A preset holds what "
         "Copy Settings copies; the image it is put on keeps its own masks, gradients and crop."));
-    m_stillsItems = {m_copy, m_paste, bar->addWidget(m_presetsButton), m_crop, m_loupe};
+    m_stillsItems = {m_copy, m_paste, bar->addWidget(m_presetsButton), m_crop, m_hideMaskLines, m_loupe};
     bar->addAction(m_crop);
+    bar->addAction(m_hideMaskLines);
     bar->addAction(m_loupe);
 
     bar->addAction(m_logFootage);
@@ -407,6 +414,8 @@ void MainWindow::refresh()
     m_crop->setChecked(m_doc.isCropping());
     m_loupe->setEnabled(!motion && m_doc.hasImage());
     m_loupe->setChecked(m_doc.loupeOn());
+    m_hideMaskLines->setEnabled(!motion && m_doc.hasImage());
+    m_hideMaskLines->setChecked(m_doc.maskLinesHidden());
     const bool canExport = motion ? m_motion.clip().has_value() && !m_motion.isExporting() : m_doc.canExport();
     m_export->setEnabled(canExport);
     m_exportMenu->setEnabled(canExport);
