@@ -478,6 +478,50 @@ carries the one layer three times, each with a third of its density.
   ISO 25's mid-grey lies 0.9 decades from where its own speed point puts it,
   so the speed point places it. Agfa publishes its MTF, which its scatter and
   edge effect are fitted to up to 50 cycles/mm, and its RMS granularity, 7.
+  Read beside APX 100's own sheet, the range sheet's APX 25 curve is APX
+  100's, within 0.011 density from end to end, as the same sheet's APX 400
+  MTF is APX 100's: most likely a repeat. Its 0.9 decades are then APX 100's
+  speed point, ISO 193, against ISO 25, and the profile carries APX 100's
+  curve; APX 25's own sheet would settle it. Its spectral sensitivity and MTF
+  are its own.
+- **Agfa APX 100 and APX 400** (Agfa-Gevaert's own sheet for each, 08/1995;
+  `agfa_bw_sheets.py`): spectral sensitivity (to an equal-energy spectrum, at
+  density 1.0 above minimum, as the range sheet says of all its films'
+  plots), the density curve and the MTF, vector plots calibrated on their own
+  rules and labels. The 1998 range sheet plots the same, read and laid over:
+  the editions agree within 0.009 density on the curves and 0.05 decades on
+  the sensitivities (at the red edge), but its APX 400 MTF repeats its APX 100
+  curve to the third decimal (0.77 at 30 cycles/mm, where APX 400's own sheet
+  has 0.65), so each film's MTF is its own sheet's. The curves name no
+  developer. APX 400's measures gamma 0.655, the 0.65 the sheet's gamma-time
+  plot gives every development the film is rated in (REFINAL 6 minutes, ISO
+  400), and its ISO speed point is ISO 440 on Agfa's lux-second axis. APX
+  100's measures 0.73, further than its ratings' developments (REFINAL 6
+  minutes ISO 125, RODINAL 1+25 8 minutes ISO 100, both 0.65 on its plot), and
+  its speed point is ISO 193. Each is taken as plotted and placed by its own
+  speed point, as APX 25 is. Their MTFs are fitted up to 50 cycles/mm, within
+  2.2% and 1.3%; their RMS granularity is 9 and 14 (REFINAL, 6 minutes).
+  Through Kodak's Wratten filters their sensitivities give APX 100 yellow 2.2x,
+  orange 4.7x (No. 22) and red 9.5x, APX 400 2.4x, 5.4x and 10.7x; the sheets
+  give no factors.
+- **Fujifilm Neopan 100 Acros II** (AF3-0258E, 02/2020;
+  `fujifilm_bw_sheets.py`): the spectrogram to daylight (5400K) and the curve
+  for Microfine at 10 minutes, Fujifilm's time for EI 100 in its own
+  developer, in which the sheet also measures its RMS granularity (7) and
+  resolving power, bitmaps traced on their own grids. Its ISO speed point is
+  ISO 95 on Fujifilm's lux-second axis and its G-bar 0.53, where the sheet's
+  time-G plot reads 0.545; the sheet's D-76 curves, at its EI 100 time of
+  7 1/4 minutes, would put the speed point at ISO 137. The spectrogram is
+  read as Neopan 1600's, divided by CIE daylight at 5400 K: through Kodak's
+  Wratten filters it gives yellow 1.6x, orange 2.6x (No. 22) and red 4.2x,
+  where the sheet's table says 2, 4 (No. 21) and 8, as Fujifilm's Neopan 1600
+  sheet does too; the film is built from the plot. "Orthopanchromatic": it
+  sees red up to 650 nm about as strongly as green, and nothing past 660, so
+  a deep red prints lighter than a grey of its luminance. Fujifilm publishes
+  no MTF; its resolving power, 200 lines/mm at 1000:1 and 60 at 1.6:1, is
+  T-Max 100's (200 and 63), so it takes T-Max 100's measured MTF, an
+  estimate. No reciprocity correction below 120 seconds, the sheet says; the
+  app models none.
 - **Ilford Multigrade RC Deluxe**: spectral sensitivity and the curves for each
   filter grade, traced off bitmaps. Traced, the grades read ISO R155, 130, 107
   and 94 for 00 to 2, against Ilford's 160, 130, 110 and 90.
@@ -531,8 +575,12 @@ Camera filters come from `tools/bake/lens_filters.py`, which reads Kodak's
 Wratten 2 transmission sheets (see `docs/datasheets.md`): vector plots stored
 rotated a quarter turn, calibrated on their own labels; for colour film, Kodak's
 upright sheets for the 81 and 85 series, each filter the polyline in its own
-colour, and Tiffen's catalogue for the 812. `bake_packs.py` bakes one exposure
-LUT per filter for each film.
+colour, its sheet for the 82 series, stored rotated as the single filters' are,
+whose four curves are all black and told apart by their line (the 82A dotted,
+the 82C dashed, each dot or dash a small filled piece, read at its centre, and
+the legend's sample beside each name saying which line is its), and Tiffen's
+catalogue for the 812. `bake_packs.py` bakes one exposure LUT per filter for
+each film.
 
 Measured through the films, the colour filters do what their curves say. The
 81C and 812 are rated a third of a stop and pass about two thirds of the green,
@@ -553,6 +601,18 @@ as light as the film prints a grey in its own light; through the 85 a* +0.4 b*
 -5.1, a little cool. At the film's layers daylight exposes blue 0.96 stops over
 green against the film's balance, 0.25 through the 85, and through the 85B
 0.24 under, with red 0.25 over.
+
+The 82A and 82C, rated a third and two thirds, open up about half a stop and
+three quarters. Kodak's sheet for them states no rating: Tiffen rates its 82A
+3000 K to 3200 K (-21 mired), and Fujifilm's data guide pairs the 82A and 82C
+with its LBB-2 and LBB-4 (-20 and -40 mired). Kodak's curves, through the CIE
+observer, shift a lamp -19 and -48 mired, taking 3000 K to about 3180 K and
+2800 K to about 3240 K: the 82A as rated, the 82C a little past Fujifilm's
+pairing. On Provia 100F a grey card moves a* -2.0 b* -5.7 through the 82A and
+a* -5.1 b* -12.4 through the 82C, where the 81C moves it b* +10.6. On VISION3
+500T a grey under a 3000 K lamp prints a* +1.0 b* +5.6 bare and a* -0.7 b*
+-0.5 through the 82A, one under a 2800 K lamp a* +2.4 b* +12.4 bare and a*
+-2.9 b* -2.2 through the 82C.
 
 Ilford gives its spectral data as a "wedge spectrogram to tungsten light" on an
 unlabelled scale. Read literally as tungsten-weighted, HP5 Plus would need a

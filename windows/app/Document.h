@@ -3,6 +3,8 @@
 #include "Packs.h"
 #include "Presets.h"
 #include "EditHistory.h"
+#include "FolderBrowser.h"
+#include "ImageLibrary.h"
 #include "Recipe.h"
 #include "RenderEngine.h"
 
@@ -10,13 +12,17 @@
 #include <QPointF>
 #include <QSize>
 #include <QObject>
+#include <QPointer>
 #include <QThread>
+#include <QTimer>
 
 #include <atomic>
 #include <functional>
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
+#include <vector>
 
 // The open image, its edits, and the loop that keeps the canvas in step with
 // the controls (DocumentModel.swift).
@@ -29,14 +35,19 @@
 // Opening another image:
 // - The image on screen keeps everything until the new one has decoded, so
 //   a file that fails to open changes nothing.
-// - Each image's edits are remembered for the session.
+// - Each image's edits are remembered for the session, and its own settings
+//   and flag between sessions, in the library (ImageLibrary).
 // - An image opened for the first time keeps the look (film, paper, film
 //   character, output) while everything dialled for one frame starts fresh.
+//
+// The sidebar lists the folder of the image opened (FolderBrowser); the
+// pictures either side of the one on screen are decoded ahead, so stepping
+// to one shows it at once.
 class Document : public QObject
 {
     Q_OBJECT
 public:
-    explicit Document(const AppData &data, QObject *parent = nullptr);
+    Document(const AppData &data, ImageLibrary &library, QObject *parent = nullptr);
     ~Document() override;
 
     const Recipe &recipe() const { return m_edits.recipe; }
@@ -48,15 +59,30 @@ public:
     void setCustomTemperature(double kelvin);
     void setCustomTint(double tint);
 
+    // the print in sRGB, and as the screen is given it (DisplayColour)
     const QImage &displayImage() const { return m_display; }
+    const QImage &shownImage() const { return m_shown; }
+    // the monitor's colour has changed: the print and the loupe made again for it
+    void screenChanged();
     // the print's histogram as it is on screen, and before its curves
     const PrintHistogram &histogram() const { return m_histogram; }
     QString status() const { return m_status; }
+    // the picture on screen, as the photograph's settings say it (the status
+    // between other notes): camera, focal length, shutter speed, ISO
+    QString statusLine() const;
     QString errorMessage() const { return m_error; }
     void clearError();
     QString filePath() const { return m_file; }
     bool isRendering() const { return m_renderInFlight; }
     bool isDecoding() const { return m_isDecoding; }
+    // A decode or an open that has taken long enough to show, 0.3 s: what the
+    // toolbar, the status line and the white balance's note wait for, so that
+    // stepping through pictures decoded ahead, a few ms each, does not flash
+    // them. Export and Copy Settings still refuse for as long as one is under
+    // way (canExport, canCopySettings).
+    bool isBusy() const { return m_isBusy; }
+    // A render under way for 0.3 s or more, for the status line.
+    bool isRenderingSlowly() const { return m_renderInFlight && m_renderSlow; }
     bool isExporting() const { return m_isExporting; }
     double lastRenderMilliseconds() const { return m_lastMilliseconds; }
     QString lastRenderBreakdown() const { return m_lastBreakdown; }
@@ -166,6 +192,19 @@ public:
     // gesture, each image with its own history for the session.
     EditHistory<Look> &history() { return *m_history; }
 
+    // Original (\): the picture before film and paper, as Apple renders the
+    // RAW by default (AppleRendering), as the Mac app's Original shows it: in
+    // the print's place, turned, levelled and cropped as the print is. Decoded
+    // the first time it is asked for, with the camera's white balance, for the
+    // picture on screen alone, and placed again when the print's shape
+    // changes; nothing at all until then.
+    bool showOriginal() const { return m_showOriginal; }
+    void setShowOriginal(bool on);
+    // The original in the print's place as the screen is given it; null while
+    // it is on its way (the print shows meanwhile).
+    const QImage &originalShown() const { return m_originalShown; }
+    const QImage &original() const { return m_original; }
+
     // The loupe (Ctrl+L): the print at 100%, one pixel of the export to one
     // of the screen, under a square dragged over the print. While it is open
     // the picture is held at full size, decoded as the export decodes it,
@@ -182,6 +221,38 @@ public:
     // reading the picture or printing the loupe's part: for the tests
     bool loupeBusy() const { return m_loupeLoading || m_loupeInFlight || m_loupeAgain; }
 
+    // MARK: the folder, flags and batches
+    FolderBrowser &browser() { return m_browser; }
+    ImageLibrary &library() { return m_library; }
+    // A folder's pictures in the sidebar, and the first of them on screen,
+    // unless the picture on screen is one of them.
+    void openFolder(const QString &folder);
+    // Flag the selection, or the picture on screen when nothing is selected:
+    // P, X and U in the sidebar.
+    void flagSelection(std::optional<ImageLibrary::Flag> flag);
+    // those pictures alone, the selection as it is (a row's button)
+    void flagPaths(const std::vector<QString> &paths, std::optional<ImageLibrary::Flag> flag);
+    // Step to the picture `offset` places along the sidebar.
+    void showNeighbour(int offset);
+    // The copied settings onto every picture selected but the rejects, as
+    // Paste Settings puts them on the one on screen: each keeps its own masks,
+    // gradients and crop, and has the paste as a step of its own history.
+    void pasteSettingsToSelected();
+    // Every picture selected but the rejects printed at full size into
+    // `folder`, one after another, each with its own settings, or, never
+    // opened, the look on screen with its autos as opening it would give it.
+    void exportSelected(const QString &folder, ExportFormat format);
+    void cancelBatch();
+    bool isBatchExporting() const { return m_browser.batch().has_value(); }
+    // The edits on screen into the library, and the library onto the disk.
+    void prepareToQuit();
+    // For the tests: the pictures decoded ahead, and the undo histories kept.
+    std::set<QString> prefetchedPictures() const;
+    int historiesHeld() const { return int(m_historyByImage.size()); }
+    // Only the last 30 pictures visited keep their undo history, so a session
+    // through hundreds of pictures does not hold hundreds of histories.
+    static constexpr int historiesKept = 30;
+
 signals:
     // Anything the controls, the toolbar or the status show.
     void changed();
@@ -196,12 +267,13 @@ private:
         int sourceID = 0;
         int width = 0, height = 0;
         QString camera;
+        float focalLength = 0, shutter = 0, iso = 0;    // mm, seconds, ISO; 0 where the file has none
     };
 
     Look edits(const QString &path);
     DecodeKey decodeKey(const QString &path);
     void syncSource();
-    void finishDecode(std::shared_ptr<DecodedPicture> picture, const QString &error, const DecodeKey &key,
+    void finishDecode(std::shared_ptr<const DecodedPicture> picture, const QString &error, const DecodeKey &key,
                       int generation);
     void adopt(const RenderEngine::Source &source, const DecodeKey &key);
     void put(const Look &look);
@@ -216,7 +288,26 @@ private:
     void requestLoupe();
     void closeLoupe();
     void finishRender(std::optional<RenderEngine::Output> output, const QString &error, int sourceID);
-    QString statusLine() const;
+    // MARK: the folder
+    void showFolder(const QString &path);
+    void list(const QString &folder);
+    // A picture's own settings, if it has any: none for one that would open
+    // with the look on screen.
+    std::optional<Look> ownEdits(const QString &path);
+    // The edits on screen go into the library once they have settled, if they
+    // are its own: changed since it opened, or already kept.
+    void scheduleRecord();
+    void recordCurrent();
+    // The print on screen, shrunk, as the sidebar's picture of a picture with
+    // settings of its own.
+    void keepPrint(const QString &path);
+    // Decode the pictures either side of the one on screen at the preview's
+    // size, on an engine of their own, once it has had its first frame; keep
+    // no other decodes.
+    void prefetchNeighbours();
+    void prefetchNext(std::vector<DecodeKey> keys, int generation);
+    void updateBusy();
+    void finishBatch(const QStringList &failures, int total, bool cancelled, const QString &folder);
     // Runs `work` on the engine's thread.
     template<typename F>
     void onEngine(F &&work);
@@ -228,7 +319,7 @@ private:
     QObject *m_engineContext = nullptr;        // lives on m_thread
 
     Look m_edits;
-    QImage m_display;
+    QImage m_display, m_shown;
     PrintHistogram m_histogram;
     QString m_status = QStringLiteral("Open a RAW file to begin");
     QString m_error;
@@ -266,6 +357,40 @@ private:
     bool m_isCropping = false, m_isLevelling = false;
     std::optional<FrameGeometry> m_shapeBeforeCropping;    // what the meters read meanwhile, and Cancel's
     std::optional<GeometryMap> m_displayMap;
+    // the original (showOriginal): the picture's, whole, at the preview's
+    // size, sRGB; and placed on the print's shape
+    void requestOriginal();
+    void placeOriginal();
+    bool m_showOriginal = false;
+    struct OriginalFrame {
+        QString path;
+        int previewSize = 0;
+        QImage image;
+    };
+    std::optional<OriginalFrame> m_originalFrame;
+    std::optional<GeometryMap> m_originalMap;   // what m_original was placed on
+    QImage m_original, m_originalShown;
+    int m_originalGeneration = 0;
+    QString m_originalDecoding;                 // the path whose original is on its way
     std::string m_selected;
     bool m_maskLinesHidden = false;
+
+    ImageLibrary &m_library;
+    FolderBrowser m_browser;
+    // What each picture opened with this session: one whose edits still equal
+    // these has nothing of its own to keep in the library.
+    std::map<QString, Look> m_openedWith;
+    // The picture on screen and the two either side of it in the sidebar,
+    // decoded at the preview's size.
+    std::vector<std::pair<DecodeKey, std::shared_ptr<const DecodedPicture>>> m_decoded;
+    std::atomic<int> m_prefetchGeneration{0};
+    QThread m_prefetchThread;
+    QObject *m_prefetchContext = nullptr;
+    std::unique_ptr<RenderEngine> m_prefetchEngine;     // used on m_prefetchThread alone
+    // the pictures visited, the most recent last (historiesKept)
+    std::vector<QString> m_visited;
+    QTimer m_recordTimer, m_printTimer, m_busyTimer, m_renderSlowTimer;
+    bool m_isBusy = false, m_renderSlow = false;
+    std::shared_ptr<std::atomic<bool>> m_batchCancel;
+    QPointer<QThread> m_batchThread;
 };

@@ -96,6 +96,10 @@ enum RawLoader {
         var isRaw: Bool
         var cameraMake: String?
         var cameraModel: String?
+        /// As the file's EXIF says: mm, seconds, ISO.
+        var focalLength: Double? = nil
+        var exposureTime: Double? = nil
+        var iso: Double? = nil
     }
 
     enum LoadError: Error, LocalizedError {
@@ -159,11 +163,72 @@ enum RawLoader {
                            colorSpace: workingColorSpace)
         }
 
-        let tiff = metadata(of: url)?[kCGImagePropertyTIFFDictionary] as? [CFString: Any]
+        let properties = metadata(of: url)
+        let tiff = properties?[kCGImagePropertyTIFFDictionary] as? [CFString: Any]
+        let exif = properties?[kCGImagePropertyExifDictionary] as? [CFString: Any]
 
         return Decoded(pixels: pixels, width: width, height: height, isRaw: isRaw,
                        cameraMake: tiff?[kCGImagePropertyTIFFMake] as? String,
-                       cameraModel: tiff?[kCGImagePropertyTIFFModel] as? String)
+                       cameraModel: tiff?[kCGImagePropertyTIFFModel] as? String,
+                       focalLength: (exif?[kCGImagePropertyExifFocalLength] as? NSNumber)?.doubleValue,
+                       exposureTime: (exif?[kCGImagePropertyExifExposureTime] as? NSNumber)?.doubleValue,
+                       iso: ((exif?[kCGImagePropertyExifISOSpeedRatings] as? [NSNumber])?.first)?.doubleValue)
+    }
+
+    // MARK: - The original
+
+    private static let displayContext = CIContext(options: [.cacheIntermediates: false])
+    private static let displaySpace = CGColorSpace(name: CGColorSpace.displayP3) ?? CGColorSpace(name: CGColorSpace.sRGB)!
+
+    /// The picture before film and paper (Original, \): the RAW as macOS
+    /// renders it by default, as Preview and Photos show it, as shot, its long
+    /// side `longEdge`. A picture already rendered is itself. Its lens is
+    /// corrected, as the film's decode corrects it, so the two frames match.
+    /// About 0.07-0.4 s at 2560 px on an M4 Pro.
+    static func original(url: URL, longEdge: Int) -> CGImage? {
+        var image: CIImage
+        if isRawFile(url), let filter = CIRAWFilter(imageURL: url) {
+            filter.isLensCorrectionEnabled = true
+            let native = max(filter.nativeSize.width, filter.nativeSize.height)
+            if native > 0 { filter.scaleFactor = Float(min(1, CGFloat(longEdge) / native)) }
+            guard let output = filter.outputImage else { return nil }
+            image = output
+        } else if let loaded = CIImage(contentsOf: url, options: [.applyOrientationProperty: true]) {
+            image = loaded
+        } else {
+            return nil
+        }
+        let long = max(image.extent.width, image.extent.height)
+        if long > CGFloat(longEdge) {
+            let scale = CGFloat(longEdge) / long
+            image = image.applyingFilter("CILanczosScaleTransform",
+                                         parameters: [kCIInputScaleKey: scale, kCIInputAspectRatioKey: 1])
+        }
+        let extent = image.extent.integral
+        return displayContext.createCGImage(image, from: extent, format: .RGBA8, colorSpace: displaySpace)
+    }
+
+    /// `original` in the print's place: scaled to the decode the print was
+    /// made from, then turned, mirrored, levelled and cropped as the print is
+    /// (`map`), so a toggle between the two moves nothing.
+    static func placed(_ original: CGImage, on map: GeometryMap) -> CGImage? {
+        let source = CIImage(cgImage: original)
+        let w = map.sourceSize.width, h = map.sourceSize.height
+        let fit = CGAffineTransform(scaleX: w / source.extent.width, y: h / source.extent.height)
+        // the map's pixels run down from the top, Core Image's up from the bottom
+        let downSource = CGAffineTransform(a: 1, b: 0, c: 0, d: -1, tx: 0, ty: h)
+        let upOutput = CGAffineTransform(a: 1, b: 0, c: 0, d: -1, tx: 0, ty: CGFloat(map.outputHeight))
+        let transform = fit.concatenating(downSource).concatenating(map.sourceToOutput).concatenating(upOutput)
+        let out = CGRect(x: 0, y: 0, width: map.outputWidth, height: map.outputHeight)
+        let placed = source.clampedToExtent().transformed(by: transform).cropped(to: out)
+        // where levelling leaves the corners of the whole frame empty, they are empty
+        let frame = CIImage(color: .white).cropped(to: source.extent).transformed(by: transform)
+        let masked = placed.applyingFilter("CIBlendWithMask", parameters: [
+            kCIInputBackgroundImageKey: CIImage(color: .clear).cropped(to: out),
+            kCIInputMaskImageKey: frame.cropped(to: out),
+        ])
+        return displayContext.createCGImage(map.isIdentity ? placed : masked, from: out, format: .RGBA8,
+                                            colorSpace: original.colorSpace ?? displaySpace)
     }
 
     /// What the file says about the photograph, as ImageIO reads it: EXIF,
@@ -173,7 +238,40 @@ enum RawLoader {
             .flatMap { CGImageSourceCopyPropertiesAtIndex($0, 0, nil) as? [CFString: Any] }
     }
 
-    private static func configure(_ filter: CIRAWFilter, options: Options) {
+    // MARK: - Core Image's RAW decoder version
+
+    /// The version of Core Image's RAW decoder the film decode stays on.
+    /// macOS 27 brings a version 9 for some cameras (so far the Ricoh GR IIIx's
+    /// and Leica M's DNGs and the Fujifilm X-T3's RAFs), but Core Image still
+    /// picks 8 for them. Set up as the film decode is, 9 decoded those files
+    /// cyan: red at a quarter of 8's or below zero, a median ΔE of 17-22 from
+    /// 8. At Apple's own defaults the two look alike. The Windows app's colour
+    /// is measured from 8's decode as well. So where Core Image's default is
+    /// newer, the decode asks for 8 if the file offers it; a camera that only
+    /// a newer version reads keeps that. Moving on is a step taken on purpose:
+    /// the checks fail the day Core Image's default for a sample raw passes 8.
+    /// The Original (`original`) stays on Core Image's default: it shows what
+    /// macOS shows.
+    static let filmDecoderVersion = 8
+
+    /// A decoder version's number: "8" and "8.dng" are both 8.
+    static func number(of version: CIRAWDecoderVersion) -> Int? {
+        Int(version.rawValue.prefix(while: \.isNumber))
+    }
+
+    /// Keeps `filter` on `filmDecoderVersion` where Core Image's default is newer.
+    static func keepDecoderVersion(_ filter: CIRAWFilter) {
+        guard let current = number(of: filter.decoderVersion), current > filmDecoderVersion,
+              let kept = filter.supportedDecoderVersions.first(where: { number(of: $0) == filmDecoderVersion })
+        else { return }
+        filter.decoderVersion = kept
+    }
+
+    static func configure(_ filter: CIRAWFilter, options: Options) {
+        // The version first: choosing one puts its shadow boost and shadow bias
+        // back to their defaults (0.9 and 5.0 on a Ricoh or Leica DNG), so the
+        // settings below come after it.
+        keepDecoderVersion(filter)
         // Scene-referred and linear: the film model wants the light the sensor
         // actually recorded, not a rendered picture.
         filter.boostAmount = 0                 // no default tone curve
@@ -234,5 +332,52 @@ enum RawLoader {
             .cropped(to: CGRect(x: 0, y: 0,
                                 width: (image.extent.width * scale).rounded(.down),
                                 height: (image.extent.height * scale).rounded(.down)))
+    }
+}
+
+/// The photograph in one line, as the status under the print shows it: the
+/// camera, its focal length, the shutter speed and the ISO, "Nikon Z f  ·
+/// 35 mm  ·  1/250 s  ·  ISO 400", leaving out what the file does not say.
+/// The Windows app's `photoLine` writes the same.
+enum PhotoLine {
+    static func text(camera: String, focalLength: Double?, shutter: Double?, iso: Double?) -> String {
+        var parts: [String] = []
+        if !camera.isEmpty { parts.append(camera) }
+        if let f = focalLength, f > 0 {
+            parts.append(f < 10 ? String(format: "%.1f mm", f) : "\(Int(f.rounded())) mm")
+        }
+        if let t = shutter, t > 0 { parts.append(shutterSpeed(t)) }
+        if let iso, iso > 0 { parts.append("ISO \(Int(iso.rounded()))") }
+        return parts.joined(separator: "  ·  ")
+    }
+
+    /// As cameras show it: 1/250 s, 1/2 s, 0.6 s, 2 s, 1.3 s.
+    static func shutterSpeed(_ t: Double) -> String {
+        if t < 1 {
+            let under = (1 / t).rounded()
+            if under >= 1, abs(1 / under - t) / t < 0.05 { return "1/\(Int(under)) s" }
+            return String(format: "%.1f s", t)
+        }
+        if abs(t - t.rounded()) < 0.05 { return "\(Int(t.rounded())) s" }
+        return String(format: "%.1f s", t)
+    }
+
+    /// The camera as people name it: its maker's name as a brand, not the
+    /// company's (NIKON CORPORATION is Nikon), and the model without the
+    /// maker's name again in front (NIKON Z 7 is Z 7).
+    static func camera(make: String?, model: String?) -> String {
+        let brands = [("NIKON", "Nikon"), ("CANON", "Canon"), ("SONY", "Sony"), ("FUJIFILM", "Fujifilm"),
+                      ("RICOH", "Ricoh"), ("PENTAX", "Pentax"), ("LEICA", "Leica"), ("OLYMPUS", "Olympus"),
+                      ("OM DIGITAL", "OM System"), ("PANASONIC", "Panasonic"), ("HASSELBLAD", "Hasselblad"),
+                      ("SIGMA", "Sigma"), ("APPLE", "Apple"), ("GOOGLE", "Google"), ("SAMSUNG", "Samsung"),
+                      ("PHASE ONE", "Phase One"), ("DJI", "DJI")]
+        let maker = (make ?? "").trimmingCharacters(in: .whitespaces)
+        var name = (model ?? "").trimmingCharacters(in: .whitespaces)
+        let brand = brands.first { maker.uppercased().hasPrefix($0.0) }?.1 ?? maker
+        for (key, _) in brands where name.uppercased().hasPrefix(key + " ") {
+            name = String(name.dropFirst(key.count + 1))
+            break
+        }
+        return [brand, name].filter { !$0.isEmpty }.joined(separator: " ")
     }
 }

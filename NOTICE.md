@@ -168,9 +168,10 @@ FLX Film Lab is *not* a faithful reproduction:
    as item 11's black-and-white negatives on colour paper do. The Status A and
    M responsivities in `tools/bake/data/densitometer/` are agx's digitisation
    of ISO 5-3, after Giorgianni & Madden (2009). Colour films can be shot
-   through Kodak's Wratten 81C warming filter and 85 and 85B conversion
-   filters, their transmittance read off Kodak's Wratten 2 sheets for the 81
-   and 85 series, and Tiffen's own 812, read off Tiffen's *Filter
+   through Kodak's Wratten 81C warming filter, 82A and 82C cooling filters
+   and 85 and 85B conversion filters, their transmittance read off Kodak's
+   Wratten 2 sheets for the 81, 82 and 85 series, and Tiffen's own 812, read
+   off Tiffen's *Filter
    Specifications* catalogue (p. 16), each multiplied into the film's
    spectral sensitivities, with the exposure opened up by each filter's
    factor for the green-sensitive layer, taken in daylight for the 85 and 85B,
@@ -239,7 +240,9 @@ FLX Film Lab is *not* a faithful reproduction:
    Tri-X 400 (Kodak F-4017), Kodak T-Max 100 (Kodak Alaris F-4016), Ilford HP5
    Plus, Delta 100, Delta 400, FP4 Plus, Pan F Plus, Ortho Plus and Ilford
    Multigrade RC Deluxe (HARMAN technology technical information), Fujifilm Neopan 1600
-   (Fujifilm AF3-608E), Agfa APX 25 (Agfa's Professional range sheet), and
+   (Fujifilm AF3-608E), Fujifilm Neopan 100 Acros II (Fujifilm AF3-0258E), Agfa APX 25
+   (Agfa's Professional range sheet), Agfa APX 100 and APX 400 (Agfa-Gevaert's
+   technical data for each, 1995, read beside the range sheet), and
    Kodak Double-X 5222 (Kodak H-1-5222, editions of 2003 and 2022) and its
    release print film Kodak 2302 (Kodak H-1-2302), in
    `profiles/` by
@@ -267,7 +270,15 @@ FLX Film Lab is *not* a faithful reproduction:
    is fitted to Kodak's published MTF for Tri-X in D-76 (F-4017) rather than
    taken from agx's colour defaults — Ilford's films and Neopan 1600, with no
    published MTF, take the same, and APX 25 is fitted to Agfa's own curve (to
-   50 cycles/mm) with Agfa's RMS 7. Neopan 1600, whose EI 1600 rating sits a push
+   50 cycles/mm) with Agfa's RMS 7. APX 100 and 400 are fitted to their own
+   sheets' curves, with RMS 9 and 14; the range sheet repeats APX 100's MTF
+   for APX 400, and APX 100's density curve for APX 25, whose profile so most
+   likely carries APX 100's curve. APX 100's curve, gamma 0.73, is developed
+   further than its ratings (0.65). Neopan 100 Acros II is Fujifilm's Microfine
+   curve for EI 100 with its RMS 7; with no published MTF it takes T-Max 100's,
+   whose resolving power it shares; its daylight spectrogram, divided by CIE
+   daylight at 5400 K, gives filter factors of 1.6, 2.6 and 4.2 against its
+   table's 2, 4 and 8. Neopan 1600, whose EI 1600 rating sits a push
    above its curve's own ISO speed point (721), has its mid-grey where a meter
    set to EI 1600 puts it on Fujifilm's absolute axis; its daylight
    spectrogram is divided by CIE daylight at 5400 K; and, with no published

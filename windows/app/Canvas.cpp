@@ -1,4 +1,5 @@
 #include "Canvas.h"
+#include "DisplayColour.h"
 
 #include "Document.h"
 #include "Theme.h"
@@ -32,18 +33,29 @@ QColor surroundColour(Surround s)
 }
 
 // A pill of text, as the Mac's capsules.
-void capsule(QPainter &p, const QPointF &centreBottom, const QString &text, const QFont &font, const QColor &fill,
-             const QColor &ink)
+// Text on a rounded capsule, centred above `centreBottom`; wrapped onto more
+// lines where it is wider than `maxWidth` (0: one line however long). Returns
+// its height.
+qreal capsule(QPainter &p, const QPointF &centreBottom, const QString &text, const QFont &font, const QColor &fill,
+              const QColor &ink, qreal maxWidth = 0)
 {
     p.setFont(font);
     const QFontMetricsF m(font);
-    const QRectF r(0, 0, m.horizontalAdvance(text) + 24, m.height() + 10);
+    QRectF r(0, 0, m.horizontalAdvance(text) + 24, m.height() + 10);
+    int flags = Qt::AlignCenter;
+    if (maxWidth > 0 && r.width() > maxWidth) {
+        flags |= Qt::TextWordWrap;
+        const QRectF wrapped = m.boundingRect(QRectF(0, 0, maxWidth - 24, 1e6), flags, text);
+        r = QRectF(0, 0, wrapped.width() + 24, wrapped.height() + 10);
+    }
     const QRectF placed = r.translated(centreBottom.x() - r.width() / 2, centreBottom.y() - r.height());
+    const qreal radius = std::min(placed.height(), m.height() + 10) / 2;
     QPainterPath path;
-    path.addRoundedRect(placed, placed.height() / 2, placed.height() / 2);
+    path.addRoundedRect(placed, radius, radius);
     p.fillPath(path, fill);
     p.setPen(ink);
-    p.drawText(placed, Qt::AlignCenter, text);
+    p.drawText(placed.adjusted(12, 0, -12, 0), flags, text);
+    return placed.height();
 }
 
 } // namespace
@@ -97,10 +109,13 @@ Canvas::Canvas(Document &document, QWidget *parent)
     connect(m_levelButton, &QPushButton::clicked, this, [this](bool on) { m_doc.setLevelling(on); });
     connect(cancel, &QPushButton::clicked, this, [this] { m_doc.endCropping(false); });
     connect(done, &QPushButton::clicked, this, [this] { m_doc.endCropping(true); });
-    connect(&m_doc, &Document::imageChanged, this, [this] { update(); });
+    connect(&m_doc, &Document::imageChanged, this, [this] {
+        m_cropBar->setVisible(m_doc.isCropping() && !originalShowing());
+        update();
+    });
     connect(&m_doc, &Document::changed, this, [this] {
         m_open->setVisible(m_doc.displayImage().isNull());
-        m_cropBar->setVisible(m_doc.isCropping());
+        m_cropBar->setVisible(m_doc.isCropping() && !originalShowing());
         m_levelButton->setChecked(m_doc.isLevelling());
         m_cropHint->setText(m_doc.isLevelling()
                                 ? QStringLiteral("Draw a line along something that should be level or upright")
@@ -114,6 +129,11 @@ void Canvas::setSurround(Surround surround)
 {
     m_surround = surround;
     update();
+}
+
+bool Canvas::originalShowing() const
+{
+    return m_doc.showOriginal() && !m_doc.originalShown().isNull();
 }
 
 QRect Canvas::pictureRect() const
@@ -150,10 +170,13 @@ void Canvas::layoutPlaceholder()
 void Canvas::paintEvent(QPaintEvent *)
 {
     QPainter p(this);
-    p.fillRect(rect(), surroundColour(m_surround));
+    p.fillRect(rect(), displaycolour::toScreen(surroundColour(m_surround)));
     p.setRenderHint(QPainter::Antialiasing);
     const bool light = m_surround == Surround::White;
-    const QImage &image = m_doc.displayImage();
+    // as the screen is given it (DisplayColour): the print, or its original
+    // in its place while that shows
+    const bool original = originalShowing();
+    const QImage &image = original ? m_doc.originalShown() : m_doc.shownImage();
 
     if (!image.isNull()) {
         const QRect target = pictureRect();
@@ -177,11 +200,19 @@ void Canvas::paintEvent(QPaintEvent *)
             m_scaledSize = pixels;
         }
         p.drawPixmap(target.topLeft(), m_scaled);
-        if (m_doc.isCropping())
+        if (original) {
+            // what is shown, where the crop's bar is while cropping
+            QFont font = theme::small();
+            font.setWeight(QFont::DemiBold);
+            capsule(p, QPointF(width() / 2.0, 8 + QFontMetricsF(font).height() + 10), QStringLiteral("Original"), font,
+                    light ? QColor(235, 235, 235, 230) : QColor(40, 40, 40, 220),
+                    light ? QColor(40, 40, 40) : QColor(230, 230, 230));
+        } else if (m_doc.isCropping()) {
             paintCrop(p);
-        else
+        } else {
             paintMasks(p);
-        if (m_doc.loupeOn() && !m_doc.isCropping())
+        }
+        if (m_doc.loupeOn() && !m_doc.isCropping() && !original)
             paintLoupe(p);
     } else {
         // the placeholder
@@ -211,18 +242,18 @@ void Canvas::paintEvent(QPaintEvent *)
     // an error above the status, then the status
     double bottom = height() - 10;
     QStringList parts{m_doc.status()};
-    if (m_doc.lastRenderMilliseconds() > 0 && !image.isNull())
-        parts << QStringLiteral("%1 ms").arg(m_doc.lastRenderMilliseconds(), 0, 'f', 0);
-    if (m_doc.isDecoding())
+    // only once they have taken a while, so stepping through pictures does
+    // not make the line jump
+    if (m_doc.isBusy() && m_doc.isDecoding())
         parts << QStringLiteral("decoding…");
-    else if (m_doc.isRendering())
+    else if (m_doc.isRenderingSlowly())
         parts << QStringLiteral("rendering…");
     capsule(p, QPointF(width() / 2.0, bottom), parts.join(QStringLiteral("   ")), theme::mono(11),
             light ? QColor(235, 235, 235, 230) : QColor(40, 40, 40, 220), light ? QColor(70, 70, 70) : theme::secondary());
     bottom -= 34;
     if (!m_doc.errorMessage().isEmpty())
         capsule(p, QPointF(width() / 2.0, bottom), m_doc.errorMessage(), theme::small(), QColor(215, 45, 45, 217),
-                Qt::white);
+                Qt::white, std::min(width() - 80.0, 760.0));
 }
 
 // MARK: - The crop (CropOverlay)
@@ -329,6 +360,9 @@ void Canvas::paintCrop(QPainter &p)
 
 void Canvas::mousePressEvent(QMouseEvent *e)
 {
+    // the original is only looked at
+    if (originalShowing())
+        return QWidget::mousePressEvent(e);
     // the loupe, over everything else on the print: held where it was taken,
     // so it moves with the pointer instead of jumping to centre on it
     if (m_doc.loupeOn() && !m_doc.isCropping() && e->button() == Qt::LeftButton
@@ -366,6 +400,10 @@ void Canvas::mousePressEvent(QMouseEvent *e)
 
 void Canvas::mouseMoveEvent(QMouseEvent *e)
 {
+    if (originalShowing() && !m_loupeGrab && m_handle < 0 && m_drag.part == Part::None) {
+        unsetCursor();
+        return;
+    }
     if (m_loupeGrab) {
         const QRect target = pictureRect();
         const QPointF at = e->position() - *m_loupeGrab;

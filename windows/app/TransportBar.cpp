@@ -103,6 +103,7 @@ TransportBar::TransportBar(MotionDocument &document, QWidget *parent)
     m_time = label(Qt::AlignRight, theme::secondary());
     m_duration = label(Qt::AlignLeft, theme::tertiary());
     m_scrub = new ValueSlider;
+    m_scrub->setScale(1);     // under the canvas: Text size leaves it alone
     connect(m_scrub, &ValueSlider::moved, this, [this](double t) { m_doc.seek(t); });
 
     layout->addWidget(m_back);

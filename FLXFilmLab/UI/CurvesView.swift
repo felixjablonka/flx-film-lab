@@ -33,7 +33,7 @@ private func histogramPeak(_ bins: [UInt32], channels: [Int]) -> UInt32 {
 /// a channel clipped there, in that channel's colour.
 struct HistogramView: View {
     let bins: [UInt32]?
-    var height: CGFloat = 56
+    var height: CGFloat = pt(56)
 
     /// Pixels at 0 or 255, as a share of the print, per channel.
     private func clipped(_ bins: [UInt32], at bin: Int) -> [Double] {
@@ -94,7 +94,7 @@ struct HistogramView: View {
 struct CurvesEditor: View {
     @Binding var curves: PrintCurves?
     let histogram: PrintHistogram?
-    var height: CGFloat = 176
+    var height: CGFloat = pt(176)
 
     @State private var channel: PrintCurves.Channel = .rgb
     /// The point being dragged, by its place in its channel's points.
@@ -124,9 +124,9 @@ struct CurvesEditor: View {
                     Text("Green").tag(PrintCurves.Channel.green)
                     Text("Blue").tag(PrintCurves.Channel.blue)
                 }
-                .pickerStyle(.segmented).labelsHidden().controlSize(.small)
+                .pickerStyle(.segmented).labelsHidden().controlSize(.panel(.small))
                 Button { straighten(channel) } label: { Image(systemName: "arrow.counterclockwise") }
-                    .buttonStyle(.borderless).controlSize(.small)
+                    .buttonStyle(.borderless).controlSize(.panel(.small))
                     .disabled(PrintCurves.isStraight(value[channel]))
                     .help("Straighten this curve again.")
             }
@@ -163,7 +163,7 @@ struct CurvesEditor: View {
         if let i = dragging, i < points.count {
             Text(removing ? "Let go to remove"
                  : String(format: "%.0f → %.0f", points[i].x * 255, points[i].y * 255))
-                .font(.system(size: 9, design: .monospaced))
+                .font(.panel(9, design: .monospaced))
                 .foregroundStyle(removing ? Color.orange : Color.secondary)
                 .padding(5)
         }

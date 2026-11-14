@@ -182,6 +182,17 @@ final class EditHistory<State: Equatable>: ObservableObject {
     }
 
     /// Where the history stands, to rewind to.
+    /// `stacks` with a step added on top, as if it had been taken while they
+    /// were on screen: an image's share of Paste Settings to Selected, kept in
+    /// its own history while another image is on screen.
+    static func adding(_ name: String, before: State, after: State, to stacks: Stacks) -> Stacks {
+        var s = stacks
+        s.undo.append(Step(name: name, before: before, after: after))
+        if s.undo.count > 200 { s.undo.removeFirst(s.undo.count - 200) }
+        s.redo = []
+        return s
+    }
+
     struct Mark {
         fileprivate let count: Int
         fileprivate let top: UUID?

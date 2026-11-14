@@ -1,6 +1,57 @@
 import SwiftUI
 import AppKit
 
+/// How large the side panels are drawn: Settings' Text size. The inspectors
+/// and the sidebar are laid out in panel points, `factor` screen points each
+/// (text, controls, spacing and the panels' widths alike), so a larger size
+/// makes them larger as a whole rather than crowding bigger text into the
+/// same space. The toolbar keeps the system's size.
+enum PanelScale: String, CaseIterable, Identifiable {
+    case standard = "Standard"
+    case larger = "Larger"
+    case largest = "Largest"
+
+    var id: String { rawValue }
+    static let key = "textSize"
+
+    var factor: CGFloat {
+        switch self {
+        case .standard: return 1
+        case .larger: return 1.15
+        case .largest: return 1.3
+        }
+    }
+
+    /// The setting as it stands. The panels read it as they are drawn, and
+    /// are made again when it changes (an `.id` where the window places them).
+    static var current: PanelScale {
+        UserDefaults.standard.string(forKey: key).flatMap(PanelScale.init) ?? .standard
+    }
+}
+
+/// `points` panel points in screen points: a width, a height, a gap.
+func pt(_ points: CGFloat) -> CGFloat { points * PanelScale.current.factor }
+
+extension Font {
+    /// A side panel's type: `size` points at the Standard text size.
+    static func panel(_ size: CGFloat, weight: Font.Weight = .regular, design: Font.Design = .default) -> Font {
+        .system(size: size * PanelScale.current.factor, weight: weight, design: design)
+    }
+}
+
+extension ControlSize {
+    /// A side panel's control: `base` at the Standard text size, a size up
+    /// at the larger ones, so a control keeps up with its label.
+    static func panel(_ base: ControlSize) -> ControlSize {
+        guard PanelScale.current != .standard else { return base }
+        switch base {
+        case .mini: return .small
+        case .small: return .regular
+        default: return base
+        }
+    }
+}
+
 /// A labelled slider with a numeric readout, a tick at its default, and
 /// double-click-to-reset. Every tone control in the inspector is one of these,
 /// so "back to neutral" is always one gesture away.
@@ -21,7 +72,7 @@ struct ParamSlider: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 4) {
                 Text(title)
-                    .font(.system(size: 11))
+                    .font(.panel(11))
                     .foregroundStyle(isModified ? Color.primary : Color.secondary)
                 if isModified {
                     Circle().frame(width: 3, height: 3).foregroundStyle(Color.accentColor)
@@ -29,14 +80,14 @@ struct ParamSlider: View {
                 Spacer(minLength: 4)
                 // + 0 turns the -0 of a flipped scale (0 / -0.4) into 0.
                 Text(String(format: "%@%.\(decimals)f%@", value > 0 && defaultValue == 0 ? "+" : "", value + 0, unit))
-                    .font(.system(size: 10, design: .monospaced))
+                    .font(.panel(10, design: .monospaced))
                     .foregroundStyle(.secondary)
                     .contentTransition(.numericText())
             }
             ResettingSlider(value: $value, range: range) {
                 withAnimation(.easeOut(duration: 0.15)) { value = defaultValue }
             }
-            .controlSize(.mini)
+            .controlSize(.panel(.mini))
         }
         .help(help.isEmpty ? "Double-click the slider to reset" : help + "\n\nDouble-click the slider to reset.")
         .padding(.vertical, 1)
@@ -65,11 +116,11 @@ struct Section<Content: View>: View {
             } label: {
                 HStack(spacing: 5) {
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 8, weight: .bold))
+                        .font(.panel(8, weight: .bold))
                         .rotationEffect(.degrees(expanded ? 90 : 0))
                         .foregroundStyle(.tertiary)
                     Text(title.uppercased())
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(.panel(10, weight: .semibold))
                         .tracking(0.6)
                         .foregroundStyle(.secondary)
                     Spacer()
@@ -77,20 +128,20 @@ struct Section<Content: View>: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .padding(.top, 10)
-            .padding(.bottom, expanded ? 6 : 2)
+            .padding(.top, pt(10))
+            .padding(.bottom, pt(expanded ? 6 : 2))
 
             if expanded {
                 if let subtitle {
                     Text(subtitle)
-                        .font(.system(size: 10))
+                        .font(.panel(10))
                         .foregroundStyle(.tertiary)
-                        .padding(.bottom, 6)
+                        .padding(.bottom, pt(6))
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                VStack(alignment: .leading, spacing: 5) { content() }
+                VStack(alignment: .leading, spacing: pt(5)) { content() }
             }
-            Divider().opacity(0.4).padding(.top, 8)
+            Divider().opacity(0.4).padding(.top, pt(8))
         }
     }
 }
@@ -108,7 +159,7 @@ struct ChannelTrimRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(title)
-                .font(.system(size: 11))
+                .font(.panel(11))
                 .foregroundStyle(trim.isZero ? Color.secondary : Color.primary)
             HStack(spacing: 6) {
                 ForEach(0..<3, id: \.self) { i in
@@ -116,10 +167,10 @@ struct ChannelTrimRow: View {
                         ResettingSlider(value: Binding(get: { trim[i] }, set: { trim[i] = $0 }), range: range) {
                             trim[i] = 0
                         }
-                        .controlSize(.mini)
+                        .controlSize(.panel(.mini))
                         .tint(tints[i])
                         Text(names[i])
-                            .font(.system(size: 8, design: .monospaced))
+                            .font(.panel(8, design: .monospaced))
                             .foregroundStyle(.tertiary)
                     }
                 }
@@ -139,7 +190,7 @@ struct CMYRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(title)
-                .font(.system(size: 11))
+                .font(.panel(11))
                 .foregroundStyle(offset.isZero ? Color.secondary : Color.primary)
             HStack(spacing: 6) {
                 trim("C", .cyan, Binding(get: { offset.cyan }, set: { offset.cyan = $0 }))
@@ -154,8 +205,8 @@ struct CMYRow: View {
     private func trim(_ label: String, _ tint: Color, _ binding: Binding<Double>) -> some View {
         VStack(spacing: 1) {
             ResettingSlider(value: binding, range: range) { binding.wrappedValue = 0 }
-                .controlSize(.mini).tint(tint)
-            Text(label).font(.system(size: 8, design: .monospaced)).foregroundStyle(.tertiary)
+                .controlSize(.panel(.mini)).tint(tint)
+            Text(label).font(.panel(8, design: .monospaced)).foregroundStyle(.tertiary)
         }
     }
 }
@@ -256,10 +307,10 @@ struct ToggleRow: View {
 
     var body: some View {
         Toggle(isOn: $isOn) {
-            Text(title).font(.system(size: 11))
+            Text(title).font(.panel(11))
         }
         .toggleStyle(.switch)
-        .controlSize(.mini)
+        .controlSize(.panel(.mini))
         .help(help)
     }
 }
@@ -304,16 +355,16 @@ struct StockPicker: View {
                     }
                 }
             }
-            .labelsHidden().controlSize(.small)
+            .labelsHidden().controlSize(.panel(.small))
         } label: {
-            Text(title).font(.system(size: 11)).foregroundStyle(.secondary)
+            Text(title).font(.panel(11)).foregroundStyle(.secondary)
         }
     }
 }
 
 /// The camera filters a stock carries (`ProfilePack.lensFilters`): Kodak's
-/// Wratten filters on a black-and-white film, warming and conversion filters
-/// on a colour one. Each shows how far it holds back a mid-grey.
+/// Wratten filters on a black-and-white film, warming, cooling and conversion
+/// filters on a colour one. Each shows how far it holds back a mid-grey.
 struct LensFilterPicker: View {
     let filters: [LensFilterRef]
     @Binding var selection: String?
@@ -326,10 +377,10 @@ struct LensFilterPicker: View {
                     .tag(String?.some(filter.id))
             }
         }
-        .controlSize(.small).font(.system(size: 11))
+        .controlSize(.panel(.small)).font(.panel(11))
         .help(filters.contains { $0.wratten != nil }
               ? "A coloured filter on the lens, measured from Kodak's Wratten data. It passes its own colour and holds back the rest: yellow, orange and red darken a blue sky progressively; red lightens skin and darkens foliage; green does the opposite; blue lightens skies and haze and deepens reds. Exposure is opened up by the filter factor shown, as a photographer would, so a grey card prints the same."
-              : "A warming or conversion filter on the lens, measured from its maker's transmission curves (Kodak's Wratten 81C, 85 and 85B, Tiffen's 812): the film sees the scene through it, wavelength by wavelength, with its own sensitivities. The 81C holds back blue and some green, a plain amber warmth; the 812 holds back violet and a little blue and lets blue and green through alike, so its warmth leans pink: both for daylight film's cool shade, overcast light and flash. The 85 and 85B hold back blue and much of the green and pass the red: they convert daylight for tungsten film, rated 5500 K to 3400 K and to 3200 K. Measured, both go further than rated, to about 3300 K and 2800 K, and a tungsten film's own layers see the same: balanced for 3200 K, it takes daylight through the 85 a little cool and through the 85B a little warm. Kodak names the 85 for its tungsten stocks in daylight. On daylight film they warm strongly. Exposure is opened up by the filter factor shown, as a photographer would, so the picture keeps its brightness: for the 85 and 85B the factor in daylight, the light they are made for.")
+              : "A warming, cooling or conversion filter on the lens, measured from its maker's transmission curves (Kodak's Wratten 81C, 82A, 82C, 85 and 85B, Tiffen's 812): the film sees the scene through it, wavelength by wavelength, with its own sensitivities. The 81C holds back blue and some green, a plain amber warmth; the 812 holds back violet and a little blue and lets blue and green through alike, so its warmth leans pink: both for daylight film's cool shade, overcast light and flash. The 82A and 82C hold back red and some green, the 82C about twice as much: they cool warm light, morning and evening sun on daylight film, or lamps warmer than a tungsten film's 3200 K, the 82A taking 3000 K and the 82C 2800 K to about 3200 K. The 85 and 85B hold back blue and much of the green and pass the red: they convert daylight for tungsten film, rated 5500 K to 3400 K and to 3200 K. Measured, both go further than rated, to about 3300 K and 2800 K, and a tungsten film's own layers see the same: balanced for 3200 K, it takes daylight through the 85 a little cool and through the 85B a little warm. Kodak names the 85 for its tungsten stocks in daylight. On daylight film they warm strongly. Exposure is opened up by the filter factor shown, as a photographer would, so the picture keeps its brightness: for the 85 and 85B the factor in daylight, the light they are made for.")
     }
 
     /// "8.2×, 3.0 stops": how much the filter holds back from a mid-grey.

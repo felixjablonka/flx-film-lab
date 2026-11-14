@@ -59,7 +59,7 @@ struct HalationDefaults: Decodable {
 /// A camera filter a film can be shot through, with its own exposure LUT
 /// baked from the filter's transmittance (tools/bake/lens_filters.py): Kodak's
 /// Wratten filters for black and white; for colour film Kodak's Wratten 81C,
-/// 85 and 85B and Tiffen's 812.
+/// 82A, 82C, 85 and 85B and Tiffen's 812.
 struct LensFilterRef: Decodable, Hashable, Identifiable {
     let id: String
     let name: String
@@ -172,8 +172,8 @@ struct ProfilePack: Decodable {
     let defaults: StockDefaults
     let rgbToXYZ: [Float]?              // filming stocks only, (3, 3) row-major
     let tcLut: TcLutRef?
-    /// Kodak's Wratten filters for a black-and-white film; warming and
-    /// conversion filters, Wratten and Tiffen, for a colour one.
+    /// Kodak's Wratten filters for a black-and-white film; warming, cooling
+    /// and conversion filters, Wratten and Tiffen, for a colour one.
     let lensFilters: [LensFilterRef]?
     /// The softest paper grade, ISO R, that Contrast and Auto Contrast may
     /// reach with this film: absent for all but a film far harder than a
@@ -309,6 +309,30 @@ extension PackIndexEntry {
                ("Instant print", instant)]
             : [("Colour", still), ("Motion picture", cine), ("Black and white", monochrome)]
         return parts.filter { !$0.1.isEmpty }.map { (title: $0.0, entries: $0.1) }
+    }
+}
+
+/// The films the Film menu leaves out (Settings, Films), in Stills and Motion
+/// alike: kept as the ones hidden, so a film a later version adds shows.
+enum FilmMenu {
+    /// The setting: the hidden films' stock names, comma-separated.
+    static let hiddenKey = "hiddenFilms"
+
+    static func hidden(_ stored: String) -> Set<String> {
+        Set(stored.split(separator: ",").map(String.init))
+    }
+
+    static func stored(_ hidden: Set<String>) -> String {
+        hidden.sorted().joined(separator: ",")
+    }
+
+    /// What the Film menu lists: every film but the hidden ones, and the one
+    /// in use whatever the setting, so the menu shows what a picture, clip or
+    /// preset uses.
+    static func shown(_ entries: [PackIndexEntry], hidden stored: String, inUse: String) -> [PackIndexEntry] {
+        let hidden = hidden(stored)
+        guard !hidden.isEmpty else { return entries }
+        return entries.filter { !hidden.contains($0.stock) || $0.stock == inUse }
     }
 }
 

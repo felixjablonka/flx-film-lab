@@ -504,6 +504,25 @@ final class FramePipeline {
         _ = try ciContext.startTask(toRender: CIImage(color: color).cropped(to: canvas), to: target)
     }
 
+    /// The graded frame at `width` x `height` as an 8-bit sRGB picture, turned
+    /// `quarterTurns` clockwise as the track is played: a sidebar's thumbnail.
+    func thumbnail(_ source: CVPixelBuffer, width: Int, height: Int, effects: GlowLook,
+                   settings: InputSettings, quarterTurns: Int) throws -> CGImage? {
+        guard let cb = queue.makeCommandBuffer() else { throw PipelineError.texture }
+        var image = try self.image(source, width: width, height: height, effects: effects,
+                                   settings: settings, mode: .graded, commandBuffer: cb)
+        cb.commit()
+        cb.waitUntilCompleted()
+        // Row 0 is y = 0 here, and a picture's top row is its highest y in
+        // Core Image's own frame: flipped first, then turned as an EXIF
+        // orientation turns a photo upright.
+        image = image.oriented(.downMirrored)
+        let turns: [CGImagePropertyOrientation] = [.up, .right, .down, .left]
+        image = image.oriented(turns[((quarterTurns % 4) + 4) % 4])
+        return ciContext.createCGImage(image, from: image.extent, format: .RGBA8,
+                                       colorSpace: CGColorSpace(name: CGColorSpace.sRGB))
+    }
+
     /// Display light at `width` x `height`, read back to the CPU: RGBA floats,
     /// row 0 at the top. For checks.
     func renderLinear(_ source: CVPixelBuffer, width: Int, height: Int, effects: GlowLook,

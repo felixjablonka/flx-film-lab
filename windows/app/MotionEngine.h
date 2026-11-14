@@ -40,10 +40,12 @@ public:
         GlowLook effects;           // as this film and paper print them
         FramePipeline::Mode mode = FramePipeline::Mode::Graded;
         QSize size;                 // the graded frame's, the clip's way up
+        int screen = 0;             // the monitor's colour, by DisplayColour's generation
     };
     struct Output {
         int clip = 0;
         QImage image;               // sRGB, the clip's way up; null when nothing changed
+        QImage shown;               // the same for the screen (DisplayColour)
         std::shared_ptr<const VideoFrame> frame;
         FrameReading reading;
         double milliseconds = 0;

@@ -85,11 +85,35 @@ void readMetadataWithLibRaw(const std::string &path, RawMosaic &m)
         readMetadata(*raw, m);
 }
 
+// Formats LibRaw identifies that none of the decoders here read, refused
+// before unpacking with what to do instead: Nikon's High Efficiency RAW (HE,
+// HE*), coded in JPEG XS, which no open decoder reads yet (its compression,
+// 13 or 14, rather than LibRaw's list of models, so newer cameras count
+// too); and Sony's lossless compressed RAW at M and S size, which the camera
+// stores as YCbCr colour, not as the sensor's mosaic.
+void refuseUnreadable(LibRaw &raw)
+{
+    libraw_decoder_info_t info{};
+    raw.get_decoder_info(&info);
+    const std::string decoder = info.decoder_name ? info.decoder_name : "";
+    const unsigned nef = raw.imgdata.makernotes.nikon.NEFCompression;
+    if (decoder == "nikon_he_load_raw()" || nef == 13 || nef == 14)
+        throw UnreadableFormat(
+            "The Windows app cannot read Nikon's High Efficiency RAW (HE or HE*) yet: none of its decoders "
+            "reads that format. Shoot Lossless compressed RAW, or convert the file to DNG with Adobe DNG Converter "
+            "(free), which the app opens.");
+    if (decoder == "sony_ycbcr_load_raw()")
+        throw UnreadableFormat(
+            "The Windows app cannot read Sony's lossless compressed RAW at M or S size: the camera stores those as "
+            "colour pixels, not as the sensor's mosaic. The L size opens, as do uncompressed and compressed RAW.");
+}
+
 RawMosaic unpackWithLibRaw(const std::string &path)
 {
     auto raw = std::make_unique<LibRaw>();
     if (const int e = raw->open_file(path.c_str()); e != LIBRAW_SUCCESS)
         fail(path, libraw_strerror(e));
+    refuseUnreadable(*raw);
     if (const int e = raw->unpack(); e != LIBRAW_SUCCESS)
         fail(path, libraw_strerror(e));
     const libraw_data_t &d = raw->imgdata;

@@ -4,6 +4,8 @@ struct InspectorView: View {
     @ObservedObject var model: DocumentModel
     @Binding var selectedMask: UUID?
     @AppStorage("vocabulary") private var vocabularyRaw = Vocabulary.photographic.rawValue
+    /// The films left out of the Film menu (Settings, Films).
+    @AppStorage(FilmMenu.hiddenKey) private var hiddenFilms = ""
 
     private var vocabulary: Vocabulary { Vocabulary(rawValue: vocabularyRaw) ?? .photographic }
 
@@ -19,11 +21,12 @@ struct InspectorView: View {
                     cropSection
                 }
                 Redrawn(Inputs(r.filmStock, r.printStock, r.filmFormat, r.cameraSharpness, r.scanFilm,
-                               r.processingTemperature)) {
+                               r.processingTemperature, hiddenFilms)) {
                     stockSection
                 }
                 Redrawn(Inputs(r.filmStock, r.exposureEV, r.autoExposure, model.meteredExposureEV, r.lensFilter,
-                               model.whiteBalance, model.customTemperature, model.customTint, model.isDecoding)) {
+                               model.whiteBalance, model.customTemperature, model.customTint, model.isDecoding,
+                               model.isBusy)) {
                     exposureSection
                 }
                 Redrawn(Inputs(r.exposureGradients, selectedMask)) { gradientSection }
@@ -49,14 +52,14 @@ struct InspectorView: View {
                                r.glareAmount, r.densityCurveGamma)) {
                     filmCharacterSection
                 }
-                Redrawn(Inputs(r.outputColorSpace, r.gamutCompress, v, model.proxyMaxDimension)) {
+                Redrawn(Inputs(r.outputColorSpace, r.gamutCompress)) {
                     outputSection
                 }
             }
-            .padding(.horizontal, 12)
+            .padding(.horizontal, pt(12))
             .padding(.bottom, 24)
         }
-        .frame(width: 296)
+        .frame(width: pt(296))
         // Not under the toolbar: there the material lightened the bar over the
         // inspector only, a break between Paste and Presets.
         .background(.ultraThinMaterial, ignoresSafeAreaEdges: [])
@@ -119,17 +122,17 @@ struct InspectorView: View {
         Section("Crop & Straighten",
                 subtitle: "The print's shape. The film is exposed and developed whole; the meters read only what the crop keeps.") {
             HStack(spacing: 6) {
-                Toggle(isOn: $model.isCropping) { Label("Crop", systemImage: "crop").font(.system(size: 11)) }
-                    .toggleStyle(.button).controlSize(.small)
+                Toggle(isOn: $model.isCropping) { Label("Crop", systemImage: "crop").font(.panel(11)) }
+                    .toggleStyle(.button).controlSize(.panel(.small))
                     .disabled(!model.hasImage)
                     .help("Show the whole frame with the crop on it, to drag its corners and edges (⌘R).")
                 Picker("", selection: cropAspect) {
                     ForEach(CropAspect.allCases) { Text($0.rawValue).tag($0) }
                 }
-                .labelsHidden().controlSize(.small).frame(maxWidth: 104)
+                .labelsHidden().controlSize(.panel(.small)).frame(maxWidth: pt(104))
                 .help("The crop's proportions. Original keeps the frame's own; Free has none.")
                 Button { model.swapCropOrientation() } label: { Image(systemName: "rectangle.portrait.rotate") }
-                    .buttonStyle(.borderless).controlSize(.small)
+                    .buttonStyle(.borderless).controlSize(.panel(.small))
                     .disabled(geometry.aspect == .free || !model.hasImage)
                     .help("Stand the crop up, or lay it down.")
             }
@@ -137,13 +140,13 @@ struct InspectorView: View {
             if geometry.aspect == .custom {
                 HStack(spacing: 4) {
                     TextField("Width", value: customSide(\.customWidth), format: .number)
-                        .frame(width: 52)
+                        .frame(width: pt(52))
                     Text(":").foregroundStyle(.secondary)
                     TextField("Height", value: customSide(\.customHeight), format: .number)
-                        .frame(width: 52)
+                        .frame(width: pt(52))
                     Spacer()
                 }
-                .textFieldStyle(.roundedBorder).controlSize(.small).font(.system(size: 11))
+                .textFieldStyle(.roundedBorder).controlSize(.panel(.small)).font(.panel(11))
             }
 
             HStack(spacing: 12) {
@@ -160,8 +163,8 @@ struct InspectorView: View {
                 }
                 .help("Mirror top to bottom.")
                 Spacer()
-                Toggle(isOn: $model.isLevelling) { Label("Level", systemImage: "level").font(.system(size: 11)) }
-                    .toggleStyle(.button).controlSize(.small)
+                Toggle(isOn: $model.isLevelling) { Label("Level", systemImage: "level").font(.panel(11)) }
+                    .toggleStyle(.button).controlSize(.panel(.small))
                     .help("Draw a line on the picture along a horizon, or along an upright, and the picture is levelled to it.")
             }
             .buttonStyle(.borderless)
@@ -172,7 +175,7 @@ struct InspectorView: View {
                         help: "Levels the picture, turning it clockwise for positive values. The crop shrinks as far as it must to stay inside the picture, and grows back when you level the other way.")
 
             Button("Reset crop") { model.resetGeometry() }
-                .buttonStyle(.link).font(.system(size: 10)).padding(.top, 2)
+                .buttonStyle(.link).font(.panel(10)).padding(.top, 2)
                 .disabled(model.recipe.frameGeometry == nil)
         }
     }
@@ -181,22 +184,24 @@ struct InspectorView: View {
 
     private var stockSection: some View {
         Section("Film & Paper", subtitle: "Spectral profiles derived from manufacturer datasheets.") {
-            StockPicker(title: "Film", entries: model.filmEntries, selection: filmStock)
+            StockPicker(title: "Film",
+                        entries: FilmMenu.shown(model.filmEntries, hidden: hiddenFilms, inUse: model.recipe.filmStock),
+                        selection: filmStock)
 
             if let film = model.filmPack, film.isInstantPrint {
                 let frame = film.frame(model.recipe.filmFormat)
                 Text(String(format: "A 4x5 instant print, %.0f x %.0f mm: the film is the print.", frame.long, frame.short))
-                    .font(.system(size: 10)).foregroundStyle(.secondary)
+                    .font(.panel(10)).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 if let processing = film.processing {
                     HStack(spacing: 6) {
-                        Text("Processing").font(.system(size: 11)).foregroundStyle(.secondary)
+                        Text("Processing").font(.panel(11)).foregroundStyle(.secondary)
                         Picker("Processing", selection: processingTemperature(processing)) {
                             ForEach(processing.temperaturesC, id: \.self) { t in
                                 Text(String(format: "%.0f °F", t * 9 / 5 + 32)).tag(t)
                             }
                         }
-                        .pickerStyle(.segmented).labelsHidden().controlSize(.small).font(.system(size: 11))
+                        .pickerStyle(.segmented).labelsHidden().controlSize(.panel(.small)).font(.panel(11))
                     }
                     .help("The temperature the print develops at, in the camera or the holder: the three Polaroid's sheet plots it at, 55, 70 and 95 F (13, 21 and 35 C), each its own curves. Its normal is 70 F. The exposure stays as you set it, as a meter's would; the sheet's table opens up for cold processing and stops down for hot.")
                 }
@@ -204,7 +209,7 @@ struct InspectorView: View {
                 Picker("Film format", selection: $model.recipe.filmFormat) {
                     ForEach(FilmFormat.allCases) { Text($0.rawValue).tag($0) }
                 }
-                .pickerStyle(.segmented).controlSize(.small).font(.system(size: 11))
+                .pickerStyle(.segmented).controlSize(.panel(.small)).font(.panel(11))
                 .help("Sets the frame size, and with it the pixel pitch that scales grain, halation and coupler diffusion: 36 x 24 mm on 35 mm, 84 x 56 mm for a 6x9 on 120. The picture is laid on the frame as large as it fits, so a 4:3 one spans the short side. The same emulsion on 120 shows visibly finer grain than on 35 mm, because the frame is enlarged less.")
             }
 
@@ -212,7 +217,7 @@ struct InspectorView: View {
                 Text("Film").tag(false)
                 Text("Camera").tag(true)
             }
-            .pickerStyle(.segmented).controlSize(.small).font(.system(size: 11))
+            .pickerStyle(.segmented).controlSize(.panel(.small)).font(.panel(11))
             .help("Film: detail as the film renders it. Scattering inside the emulsion softens the finest detail and development's edge effects lift coarser edges, so on 35 mm a high-resolution file's finest detail softens as the film's would. Camera: the camera file's own detail, with the film's colour, tone, halation and grain.")
 
             if model.filmPack?.isInstantPrint != true {
@@ -232,7 +237,7 @@ struct InspectorView: View {
                     model.recipe.printStock = suggested
                 } label: {
                     Label("Use this film's reference paper", systemImage: "wand.and.stars")
-                        .font(.system(size: 10))
+                        .font(.panel(10))
                 }
                 .buttonStyle(.link)
             }
@@ -260,12 +265,12 @@ struct InspectorView: View {
             Picker("White balance", selection: $model.whiteBalance) {
                 ForEach(RawLoader.WhiteBalance.allCases) { Text($0.label).tag($0) }
             }
-            .controlSize(.small).font(.system(size: 11))
+            .controlSize(.panel(.small)).font(.panel(11))
             .help("The RAW is decoded for this illuminant, so the film sees the light the way it would have on set. Film reference uses whatever the loaded stock is balanced for.")
 
             Text(model.whiteBalanceSummary)
-                .font(.system(size: 9, design: .monospaced))
-                .foregroundStyle(model.isDecoding ? AnyShapeStyle(Color.orange) : AnyShapeStyle(.tertiary))
+                .font(.panel(9, design: .monospaced))
+                .foregroundStyle(model.isBusy && model.isDecoding ? AnyShapeStyle(Color.orange) : AnyShapeStyle(.tertiary))
 
             if model.whiteBalance == .custom {
                 ParamSlider(title: "Temperature", value: $model.customTemperature,
@@ -275,7 +280,7 @@ struct InspectorView: View {
             }
 
             Button("Reset exposure") { model.resetExposure() }
-                .buttonStyle(.link).font(.system(size: 10)).padding(.top, 2)
+                .buttonStyle(.link).font(.panel(10)).padding(.top, 2)
         }
     }
 
@@ -299,7 +304,7 @@ struct InspectorView: View {
                 subtitle: "Exposure compensation that fades across the frame, given to the film when the picture is taken.") {
             if model.recipe.gradients.isEmpty {
                 Text("Add a gradient or an oval, then drag its handles on the image: the full compensation is at the solid line, none past the dashed one. A gradient's middle handle moves it, as an oval's centre does. They stack, each adding its own exposure where it covers.")
-                    .font(.system(size: 10)).foregroundStyle(.tertiary)
+                    .font(.panel(10)).foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
@@ -318,20 +323,22 @@ struct InspectorView: View {
                 }
             }
 
-            if model.recipe.gradients.count < Constants.maxExposureGradients {
-                HStack(spacing: 6) {
+            HStack(spacing: 6) {
+                if model.recipe.gradients.count < Constants.maxExposureGradients {
                     Button { addGradient(oval: false) } label: {
                         Label("Add gradient", systemImage: "square.tophalf.filled")
-                            .font(.system(size: 10))
+                            .font(.panel(10))
                     }
                     Button { addGradient(oval: true) } label: {
                         Label("Add oval", systemImage: "circle.dashed")
-                            .font(.system(size: 10))
+                            .font(.panel(10))
                     }
                 }
-                .buttonStyle(.bordered).controlSize(.mini)
-                .padding(.top, 4)
+                Spacer(minLength: 0)
+                if !model.recipe.gradients.isEmpty { MaskLinesToggle() }
             }
+            .buttonStyle(.bordered).controlSize(.panel(.mini))
+            .padding(.top, 4)
         }
     }
 
@@ -396,7 +403,7 @@ struct InspectorView: View {
                        vocabulary: vocabulary, defaultPhysical: model.recipe.defaultGrade)
 
             Text(vocabulary == .photographic ? "Split contrast" : "Split grade")
-                .font(.system(size: 10, weight: .medium)).foregroundStyle(.tertiary).padding(.top, 3)
+                .font(.panel(10, weight: .medium)).foregroundStyle(.tertiary).padding(.top, 3)
             SpecSlider(spec: Controls.shadowContrast, physical: $model.recipe.shadowGrade,
                        vocabulary: vocabulary)
             SpecSlider(spec: Controls.highlightContrast, physical: $model.recipe.highlightGrade,
@@ -428,7 +435,7 @@ struct InspectorView: View {
             if !printsInSilver {
             DisclosureGroup {
                 Text("Each dye layer has its own curve. A filter can only shift a whole layer in parallel, so it cannot fix crossover — shadows casting one colour and highlights the complement. These can.")
-                    .font(.system(size: 9)).foregroundStyle(.tertiary)
+                    .font(.panel(9)).foregroundStyle(.tertiary)
                     .padding(.vertical, 4).fixedSize(horizontal: false, vertical: true)
                 ChannelTrimRow(title: vocabulary == .photographic ? "Contrast" : "Grade trim",
                                trim: $model.recipe.gradeTrim, range: -30...30)
@@ -439,13 +446,13 @@ struct InspectorView: View {
                 ChannelTrimRow(title: vocabulary == .photographic ? "Midtones" : "Snap trim",
                                trim: $model.recipe.snapTrim, range: -0.5...0.5)
             } label: {
-                Text("Colour crossover").font(.system(size: 10, weight: .medium)).foregroundStyle(.tertiary)
+                Text("Colour crossover").font(.panel(10, weight: .medium)).foregroundStyle(.tertiary)
             }
             .padding(.top, 3)
             }
 
             Button("Reset tone") { model.resetTone() }
-                .buttonStyle(.link).font(.system(size: 10)).padding(.top, 2)
+                .buttonStyle(.link).font(.panel(10)).padding(.top, 2)
         }
     }
 
@@ -470,7 +477,7 @@ struct InspectorView: View {
                        vocabulary: vocabulary)
 
             Button("Reset colour") { model.resetColour() }
-                .buttonStyle(.link).font(.system(size: 10)).padding(.top, 2)
+                .buttonStyle(.link).font(.panel(10)).padding(.top, 2)
         }
     }
 
@@ -505,7 +512,7 @@ struct InspectorView: View {
                 subtitle: "Masks change print exposure, so they roll into paper black the way a real burn does.") {
             if model.recipe.masks.isEmpty {
                 Text("Add a mask, then drag on the image to place its points.")
-                    .font(.system(size: 10)).foregroundStyle(.tertiary)
+                    .font(.panel(10)).foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
@@ -540,10 +547,12 @@ struct InspectorView: View {
                         selectedMask = mask.id
                     } label: {
                         Label(shape.rawValue.capitalized, systemImage: icon(for: shape))
-                            .font(.system(size: 10))
+                            .font(.panel(10))
                     }
-                    .buttonStyle(.bordered).controlSize(.mini)
+                    .buttonStyle(.bordered).controlSize(.panel(.mini))
                 }
+                Spacer(minLength: 0)
+                if !model.recipe.masks.isEmpty { MaskLinesToggle() }
             }
             .padding(.top, 4)
         }
@@ -637,7 +646,7 @@ struct InspectorView: View {
                         help: "Development contrast of the negative itself — push and pull processing.")
 
             Button("Reset film character") { model.resetFilmCharacter() }
-                .buttonStyle(.link).font(.system(size: 10)).padding(.top, 2)
+                .buttonStyle(.link).font(.panel(10)).padding(.top, 2)
         }
     }
 
@@ -669,12 +678,12 @@ struct InspectorView: View {
                         Picker("Blend", selection: effects.bloom.blend) {
                             ForEach(BloomBlend.allCases, id: \.self) { Text($0.title).tag($0) }
                         }
-                        .controlSize(.small).font(.system(size: 11))
+                        .controlSize(.panel(.small)).font(.panel(11))
                         ParamSlider(title: "Haze", value: effects.bloom.haze, range: 0...100, defaultValue: 0,
                                     decimals: 0, help: "A wide veil over the whole frame, like a physical mist filter: it lifts the shadows and lowers contrast.")
                     }
                 }
-                .font(.system(size: 11))
+                .font(.panel(11))
             }
 
             ToggleRow(title: "Glow", isOn: effects.glow.enabled,
@@ -687,7 +696,7 @@ struct InspectorView: View {
             }
 
             Button("Reset bloom & glow") { model.recipe.effects = nil }
-                .buttonStyle(.link).font(.system(size: 10)).padding(.top, 2)
+                .buttonStyle(.link).font(.panel(10)).padding(.top, 2)
         }
     }
 
@@ -698,20 +707,9 @@ struct InspectorView: View {
             Picker("Colour space", selection: $model.recipe.outputColorSpace) {
                 ForEach(PackLibrary.shared.shared_.outputColorSpaces, id: \.self) { Text($0).tag($0) }
             }
-            .controlSize(.small).font(.system(size: 11))
+            .controlSize(.panel(.small)).font(.panel(11))
             ToggleRow(title: "Gamut compression", isOn: $model.recipe.gamutCompress,
                       help: "Pulls colours the film reached that the output space cannot show back inside it, moving chroma rather than clipping channels.")
-            Picker("Control names", selection: $vocabularyRaw) {
-                ForEach(Vocabulary.allCases) { Text($0.rawValue).tag($0.rawValue) }
-            }
-            .controlSize(.small).font(.system(size: 11))
-            .help("Photographic uses the names Capture One and Lightroom use, where positive always means brighter. Darkroom shows the underlying print controls. Either way the tooltip names the other.")
-
-            Picker("Preview size", selection: $model.proxyMaxDimension) {
-                ForEach(DocumentModel.previewSizes, id: \.self) { Text("\($0) px").tag($0) }
-            }
-            .controlSize(.small).font(.system(size: 11))
-            .help("The preview's long side. Larger is sharper on screen and slower to redraw: on an M4 Pro a print control redraws 2560 px in about 29 ms and 4096 px in about 73. A file smaller than this is shown at its own size, never enlarged, and export is always at full size. Kept between launches.")
         }
     }
 }
@@ -740,12 +738,12 @@ private struct GradientRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 5) {
-                Toggle("", isOn: $gradient.enabled).labelsHidden().toggleStyle(.checkbox).controlSize(.mini)
-                Text(gradient.name).font(.system(size: 11, weight: isSelected ? .semibold : .regular))
+                Toggle("", isOn: $gradient.enabled).labelsHidden().toggleStyle(.checkbox).controlSize(.panel(.mini))
+                Text(gradient.name).font(.panel(11, weight: isSelected ? .semibold : .regular))
                 Spacer()
                 Text(String(format: "%+.2f EV", gradient.exposureEV + 0))
-                    .font(.system(size: 9, design: .monospaced)).foregroundStyle(.tertiary)
-                Button { delete() } label: { Image(systemName: "trash").font(.system(size: 9)) }
+                    .font(.panel(9, design: .monospaced)).foregroundStyle(.tertiary)
+                Button { delete() } label: { Image(systemName: "trash").font(.panel(9)) }
                     .buttonStyle(.plain).foregroundStyle(.tertiary)
             }
             .contentShape(Rectangle())
@@ -760,7 +758,7 @@ private struct GradientRow: View {
                                 defaultValue: ExposureGradient.defaultFeather, decimals: 2,
                                 help: "How gradually the compensation fades: full inside the oval shrunk by this share of its size (the solid line), none outside the oval (the dashed one). 0 is a hard edge.")
                     Toggle("Invert", isOn: $gradient.isInverted)
-                        .font(.system(size: 10)).toggleStyle(.checkbox).controlSize(.mini)
+                        .font(.panel(10)).toggleStyle(.checkbox).controlSize(.panel(.mini))
                         .help("The compensation outside the oval instead of inside it.")
                 }
             }
@@ -781,10 +779,10 @@ private struct MaskRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 5) {
-                Toggle("", isOn: $mask.enabled).labelsHidden().toggleStyle(.checkbox).controlSize(.mini)
-                Text(mask.name).font(.system(size: 11, weight: isSelected ? .semibold : .regular))
+                Toggle("", isOn: $mask.enabled).labelsHidden().toggleStyle(.checkbox).controlSize(.panel(.mini))
+                Text(mask.name).font(.panel(11, weight: isSelected ? .semibold : .regular))
                 Spacer()
-                Button { delete() } label: { Image(systemName: "trash").font(.system(size: 9)) }
+                Button { delete() } label: { Image(systemName: "trash").font(.panel(9)) }
                     .buttonStyle(.plain).foregroundStyle(.tertiary)
             }
             .contentShape(Rectangle())
@@ -796,11 +794,32 @@ private struct MaskRow: View {
                             decimals: 3)
                 SpecSlider(spec: Controls.maskContrast, physical: $mask.grade, vocabulary: vocabulary)
                 Toggle("Invert", isOn: $mask.inverted)
-                    .font(.system(size: 10)).toggleStyle(.checkbox).controlSize(.mini)
+                    .font(.panel(10)).toggleStyle(.checkbox).controlSize(.panel(.mini))
             }
         }
         .padding(6)
         .background(isSelected ? Color.accentColor.opacity(0.1) : Color.clear)
         .clipShape(RoundedRectangle(cornerRadius: 4))
+    }
+}
+
+/// Hide the lines of the masks and gradients on the picture (⇧⌘H), to see
+/// the print without them: they still act, and choosing one to edit shows them
+/// again. In both sections that draw lines, Graduated Exposure and Dodge &
+/// Burn, one setting for both. Its own view, so it follows the setting
+/// whatever its section redraws for.
+private struct MaskLinesToggle: View {
+    @AppStorage("hideMaskLines") private var hidden = false
+
+    var body: some View {
+        Toggle(isOn: $hidden) {
+            Image(systemName: hidden ? "eye.slash" : "eye")
+                .font(.panel(10))
+        }
+        .toggleStyle(.button)
+        .buttonStyle(.bordered).controlSize(.panel(.mini))
+        .accessibilityLabel(hidden ? "Show mask lines" : "Hide mask lines")
+        .help(hidden ? "Show the lines of the masks and gradients on the picture again (⇧⌘H)."
+                     : "Hide the lines of the masks and gradients on the picture (⇧⌘H), to see the print without them: they still act. Choosing one to edit shows them again.")
     }
 }

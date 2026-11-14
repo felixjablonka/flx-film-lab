@@ -12,7 +12,10 @@
 #include <string>
 #include <vector>
 
-class QComboBox;
+#include <QComboBox>
+
+#include <utility>
+
 class QVBoxLayout;
 class QButtonGroup;
 
@@ -30,8 +33,11 @@ public:
     void setValue(double value);    // no signal
     double value() const { return m_value; }
     void setTint(const QColor &tint);
-    QSize sizeHint() const override { return {120, 16}; }
-    QSize minimumSizeHint() const override { return {40, 16}; }
+    // Its size: the panels' text size when it was made (Theme), or `scale`
+    // where it is not in a panel.
+    void setScale(double scale);
+    QSize sizeHint() const override;
+    QSize minimumSizeHint() const override;
 
 signals:
     void moved(double value);       // by the user
@@ -52,6 +58,7 @@ private:
     double valueAt(double x) const;
     void moveTo(double value);
     double m_low = 0, m_high = 1, m_value = 0;
+    double m_scale;
     QColor m_tint;
     bool m_dragging = false;
 };
@@ -89,10 +96,13 @@ class Switch : public QAbstractButton
     Q_OBJECT
 public:
     explicit Switch(QWidget *parent = nullptr);
-    QSize sizeHint() const override { return {28, 16}; }
+    QSize sizeHint() const override;
 
 protected:
     void paintEvent(QPaintEvent *) override;
+
+private:
+    double m_scale;     // the panels' text size when it was made (Theme)
 };
 
 class ToggleRow : public QWidget
@@ -122,6 +132,7 @@ public:
     Section(const QString &title, const QString &subtitle = {}, bool expanded = true, QWidget *parent = nullptr);
     QVBoxLayout *body() const { return m_bodyLayout; }
     void setTitle(const QString &title);
+    QString title() const;
     void setSubtitle(const QString &subtitle);
     void setExpanded(bool expanded);
     bool isExpanded() const { return m_expanded; }
@@ -157,6 +168,27 @@ private:
 };
 
 // A labelled pop-up of choices, each with its value.
+// A menu's button: the chosen item's name without the indent it has in the
+// open menu under its group's name, and with "…" where the button is too
+// narrow for it, never cut through a letter.
+// A menu's button: the choice on a light capsule, a chevron up over one
+// down at its end, as the Mac's pop-up buttons.
+class MenuButton : public QComboBox
+{
+public:
+    explicit MenuButton(QWidget *parent = nullptr);
+    // the width the chosen name has on the button
+    int textRoom() const;
+    // The choices as a menu, as the Mac's pop-up buttons show them: groups
+    // under their names, the one chosen ticked and over the button.
+    void showPopup() override;
+
+protected:
+    void paintEvent(QPaintEvent *) override;
+    // the wheel scrolls the panel, never the choice
+    void wheelEvent(QWheelEvent *e) override;
+};
+
 class Choice : public QWidget
 {
     Q_OBJECT
@@ -170,14 +202,17 @@ public:
     void setCurrent(const QVariant &value);         // no signal
     QVariant current() const;
     void setHelp(const QString &help);
-    QComboBox *combo() const { return m_combo; }
+    MenuButton *combo() const { return m_combo; }
+    // How far the longest name runs past the room the button has for it, in
+    // pixels, and which name: 0 or less when every one fits.
+    std::pair<int, QString> overflow() const;
 
 signals:
     void chosen(const QVariant &value);
 
 private:
     QLabel *m_title;
-    QComboBox *m_combo;
+    MenuButton *m_combo;
     bool m_quiet = false;
 };
 
@@ -187,6 +222,14 @@ class StockPicker : public Choice
     Q_OBJECT
 public:
     StockPicker(const QString &title, const std::vector<StockGroup> &groups, QWidget *parent = nullptr);
+    // These groups' stocks in place of the ones listed, if they differ (the
+    // films Settings leaves in the Film menu), with no signal: set the
+    // current one after.
+    void setGroups(const std::vector<StockGroup> &groups);
+    std::vector<std::string> listed() const { return m_listed; }
+
+private:
+    std::vector<std::string> m_listed;
 };
 
 // Side by side choices, one of them on (a segmented Picker).

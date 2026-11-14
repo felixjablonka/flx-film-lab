@@ -7,6 +7,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -182,6 +183,19 @@ struct StockGroup {
     std::vector<PackIndexEntry> entries;
 };
 std::vector<StockGroup> stockGroups(const std::vector<PackIndexEntry> &entries, bool films);
+
+// The films the Film menu lists, as Settings' Films tab leaves them
+// (FilmMenu). The setting keeps the hidden films' stock names,
+// comma-separated, so the films a later version adds show.
+namespace filmmenu {
+inline constexpr const char *kHiddenKey = "hiddenFilms";
+std::set<std::string> hidden(const std::string &stored);
+std::string stored(const std::set<std::string> &hidden);
+// Every film but the hidden ones, and the one in use whatever the setting,
+// so the menu shows what a picture, clip or preset uses.
+std::vector<PackIndexEntry> shown(const std::vector<PackIndexEntry> &entries, const std::string &stored,
+                                  const std::string &inUse);
+} // namespace filmmenu
 
 // The packs directory: index.json, shared.json, one <stock>.json each, and
 // the tcLut binaries. Packs are read once and kept.

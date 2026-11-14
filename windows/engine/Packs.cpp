@@ -398,3 +398,41 @@ std::vector<StockGroup> stockGroups(const std::vector<PackIndexEntry> &entries, 
             out.push_back(std::move(g));
     return out;
 }
+
+namespace filmmenu {
+
+std::set<std::string> hidden(const std::string &stored)
+{
+    std::set<std::string> out;
+    size_t start = 0;
+    while (start <= stored.size()) {
+        const size_t end = std::min(stored.find(',', start), stored.size());
+        if (end > start)
+            out.insert(stored.substr(start, end - start));
+        start = end + 1;
+    }
+    return out;
+}
+
+std::string stored(const std::set<std::string> &hidden)
+{
+    std::string out;
+    for (const std::string &stock : hidden)       // a set is sorted, as the Mac's sorted()
+        out += (out.empty() ? "" : ",") + stock;
+    return out;
+}
+
+std::vector<PackIndexEntry> shown(const std::vector<PackIndexEntry> &entries, const std::string &stored,
+                                  const std::string &inUse)
+{
+    const std::set<std::string> left = hidden(stored);
+    if (left.empty())
+        return entries;
+    std::vector<PackIndexEntry> out;
+    for (const PackIndexEntry &e : entries)
+        if (!left.count(e.stock) || e.stock == inUse)
+            out.push_back(e);
+    return out;
+}
+
+} // namespace filmmenu

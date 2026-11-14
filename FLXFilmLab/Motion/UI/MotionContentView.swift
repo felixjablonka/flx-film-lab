@@ -4,20 +4,37 @@ import UniformTypeIdentifiers
 
 struct MotionContentView: View {
     @ObservedObject var model: ClipModel
+    /// The folder's clips down the left (⌃⌘S), as the Stills mode's pictures.
+    @AppStorage("showSidebar") private var showSidebar = true
+    /// Settings' Text size: the side panels are made again when it changes.
+    @AppStorage(PanelScale.key) private var textSize = PanelScale.standard.rawValue
 
     var body: some View {
         HStack(spacing: 0) {
+            if showSidebar {
+                FolderSidebar(browser: model.browser,
+                              open: { model.open($0) },
+                              openFolder: { MotionPanels.openFolder(model) },
+                              flag: { model.flagSelection($0) },
+                              flagOne: { model.flag($1, for: [$0]) },
+                              pasteToSelected: { model.pasteLookToSelected() },
+                              exportSelected: { MotionPanels.exportSelected(model) },
+                              cancelBatch: { model.cancelExport() })
+                    .equatable()
+                    .id(textSize)
+                Divider()
+            }
             VStack(spacing: 0) {
                 canvas
                 TransportBar(playback: model.playback)
             }
             Divider()
             MotionInspector(model: model, onExport: chooseExport, onExportLUT: chooseLUTExport)
+                .id(textSize)
         }
         .frame(minWidth: 1080, minHeight: 680)
         .background(Color(nsColor: .windowBackgroundColor))
-        .navigationTitle(model.clip?.url.lastPathComponent ?? "FLX Film Lab")
-        .toolbar { toolbarContent }
+        .background { HalfTitle(model.clip?.url.lastPathComponent ?? "FLX Film Lab") }
         .background { shortcuts }
     }
 
@@ -96,41 +113,12 @@ struct MotionContentView: View {
         .colorScheme(.dark)
     }
 
-    // MARK: Toolbar and keys
-
-    @ToolbarContentBuilder
-    private var toolbarContent: some ToolbarContent {
-        // Laid out as the Stills toolbar is: the surround beside Open, the
-        // export format beside Export.
-        ToolbarItem(placement: .navigation) {
-            Button(action: chooseClip) { Label("Open", systemImage: "folder") }
-                .help("Open a log clip (⌘O)")
-        }
-        ToolbarItem(placement: .navigation) {
-            Picker("", selection: $model.surround) {
-                ForEach(Surround.allCases) { Image(systemName: $0.symbol).tag($0) }
-            }
-            .pickerStyle(.segmented).labelsHidden().frame(width: 108)
-            .help("Surround: dark, middle grey or white. ⌘B cycles.")
-        }
-        ToolbarItem {
-            Toggle(isOn: $model.showLog) { Label("Log footage", systemImage: "square.split.2x1") }
-                .help("Show the untouched log footage, as QuickTime shows it (\\)")
-        }
-        ToolbarItem {
-            ToolbarChoice(selection: $model.look.export.codec)
-                .help("The clip's format: ProRes 422 HQ for editing and grading further, HEVC 10-bit for sharing.")
-        }
-        ToolbarItem {
-            Button(action: chooseExport) { Label("Export", systemImage: "square.and.arrow.up") }
-                .disabled(model.clip == nil || model.isExporting)
-                .help("Write the graded clip (⌘E)")
-        }
-    }
+    // MARK: Keys
 
     /// Keyboard shortcuts with no menu item of their own.
     private var shortcuts: some View {
-        ZStack {
+        // off while Stills, with a \ and a ⌘B of its own, is on screen
+        HalfKeys {
             Button("") { model.playback.togglePlay() }.keyboardShortcut(.space, modifiers: [])
             Button("") { model.playback.step(-1) }.keyboardShortcut(.leftArrow, modifiers: [])
             Button("") { model.playback.step(1) }.keyboardShortcut(.rightArrow, modifiers: [])
@@ -145,7 +133,23 @@ struct MotionContentView: View {
 
     // MARK: Panels
 
-    private func chooseClip() {
+    private func chooseClip() { MotionPanels.chooseClip(model) }
+
+    private func chooseExport() { MotionPanels.chooseExport(model) }
+
+    private func chooseLUTExport() {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [UTType(filenameExtension: "cube") ?? .data]
+        panel.nameFieldStringValue = "\(model.printDescription.title).cube"
+        if panel.runModal() == .OK, let url = panel.url { model.exportLUT(to: url) }
+    }
+}
+
+/// The Motion mode's panels: Open and Export, from the toolbar, the keys and
+/// the canvas, and the folder choosers of Open Folder and Export Selected.
+@MainActor
+enum MotionPanels {
+    static func chooseClip(_ model: ClipModel) {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.movie]
         panel.allowsMultipleSelection = false
@@ -153,7 +157,7 @@ struct MotionContentView: View {
         if panel.runModal() == .OK, let url = panel.url { model.open(url) }
     }
 
-    private func chooseExport() {
+    static func chooseExport(_ model: ClipModel) {
         guard model.clip != nil, !model.isExporting else { return }
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.quickTimeMovie]
@@ -162,10 +166,70 @@ struct MotionContentView: View {
         if panel.runModal() == .OK, let url = panel.url { model.export(to: url) }
     }
 
-    private func chooseLUTExport() {
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [UTType(filenameExtension: "cube") ?? .data]
-        panel.nameFieldStringValue = "\(model.printDescription.title).cube"
-        if panel.runModal() == .OK, let url = panel.url { model.exportLUT(to: url) }
+    static func openFolder(_ model: ClipModel) {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.prompt = "Open Folder"
+        panel.message = "Choose a folder of clips"
+        if panel.runModal() == .OK, let url = panel.url { model.openFolder(url) }
+    }
+
+    static func exportSelected(_ model: ClipModel) {
+        let count = model.browser.selectedForBatch.count
+        guard count > 0, model.browser.batch == nil, !model.isExporting else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Export Here"
+        panel.message = "Choose where the \(count) clip\(count == 1 ? "" : "s") go, as \(exportCodecName(model.look.export.codec))"
+        if panel.runModal() == .OK, let url = panel.url { model.exportSelected(to: url) }
+    }
+
+    private static func exportCodecName(_ codec: ExportCodec) -> String { codec.rawValue }
+}
+
+// MARK: - The toolbar's Motion items
+
+/// What the window's toolbar (`WindowToolbar`, FLXFilmLabApp.swift) shows for
+/// Motion, item by item, in the places Stills' own (`StillsBar`) take in
+/// Stills. Each watches only what it shows.
+enum MotionBar {
+    struct OpenItem: View {
+        let model: ClipModel
+        var body: some View {
+            Button { MotionPanels.chooseClip(model) } label: { Label("Open", systemImage: "folder") }
+                .help("Open a log clip (⌘O); the sidebar shows the clips of its folder. Open Folder (⇧⌘O) opens a folder.")
+        }
+    }
+
+    /// Log footage, where Stills has the presets, Crop, Original and Loupe; in
+    /// a stack, as they are.
+    struct ViewItem: View {
+        @ObservedObject var model: ClipModel
+        var body: some View {
+            HStack(spacing: 0) {
+                Toggle(isOn: $model.showLog) { Label("Log footage", systemImage: "square.split.2x1") }
+                    .help("Show the untouched log footage, as QuickTime shows it (\\)")
+            }
+        }
+    }
+
+    struct CodecItem: View {
+        @ObservedObject var model: ClipModel
+        var body: some View {
+            ToolbarChoice(selection: $model.look.export.codec)
+                .help("The clip's format: ProRes 422 HQ for editing and grading further, HEVC 10-bit for sharing.")
+        }
+    }
+
+    struct ExportItem: View {
+        @ObservedObject var model: ClipModel
+        var body: some View {
+            Button { MotionPanels.chooseExport(model) } label: { Label("Export", systemImage: "square.and.arrow.up") }
+                .disabled(model.clip == nil || model.isExporting)
+                .help("Write the graded clip (⌘E)")
+        }
     }
 }

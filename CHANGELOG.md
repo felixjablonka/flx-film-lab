@@ -1,5 +1,84 @@
 # Changelog
 
+## 2.0.0 (2026-11-14)
+
+Version 2.0 adds a multi-image workflow: a folder sidebar to cull, edit and
+batch-export pictures and clips, on the Mac and on Windows.
+
+### A multi-image workflow
+- **Folder sidebar:** Open Folder (⇧⌘O) lists a folder's pictures beside the
+  print; opening one picture lists its folder too. Step through them with ↑
+  and ↓ (⌘↑ and ⌘↓ anywhere); the next picture is decoded ahead, so it is on
+  screen at once.
+- **Culling:** pick (P), reject (X) or unflag (U) pictures, from the keyboard,
+  the right-click menu or the flag and cross on the row under the pointer, and
+  show all, only the picks, or all but the rejects. Rejects are left out of
+  batch actions and never deleted.
+- **Batch editing:** Paste Settings to Selected puts the copied settings on
+  every picture selected (⌘-click, ⇧-click, ⌘A), each keeping its own masks,
+  gradients and crop.
+- **Batch export:** Export Selected (⇧⌘E) prints every picture selected at
+  full size, each with its own settings; a picture never opened gets the look
+  on screen, metered for itself.
+- **Settings kept between launches:** each picture's settings and flag stay in
+  the app's library. With Save settings beside images (in Settings) they also
+  go into a small `.flx` file beside the picture, which travels with the
+  folder and opens in both the Mac and the Windows app.
+- **The same in Motion:** a folder of log clips, each shown graded with its
+  own look; Copy Look and Paste Look (⇧⌘C, ⇧⌘V), also to a selection; and
+  Export Selected, which renders each clip with its own look.
+
+### Other UI improvements
+- **A Settings window (⌘,)** for how the app looks and works, the same for
+  every picture and clip:
+  - **Text size:** Standard, Larger or Largest, for the inspector and the
+    sidebar, their text, controls and width together.
+  - **Control names:** Photographic, the names Lightroom and Capture One use,
+    or Darkroom, the print controls underneath; each tooltip names the other.
+  - **Preview size:** how large the Stills preview is drawn, sharper or
+    quicker to redraw; export is always at full size.
+  - **Save settings beside images:** each picture's settings also in a small
+    `.flx` file beside it, which travels with the folder.
+  - **Films:** which films the Film menu lists. One left out still opens with
+    a picture, clip or preset that uses it.
+- **Before / After:** Original (`\`, in the toolbar) shows the RAW as macOS
+  renders it, in the print's place.
+- **Capture data in the status line:** camera, focal length, shutter speed and
+  ISO.
+- **Hide Mask Lines** is now an eye in Graduated Exposure and Dodge & Burn
+  (⇧⌘H, in the View menu); Before / After takes its place in the toolbar.
+- **Switching between Stills and Motion is immediate:** both halves stay open,
+  so the window no longer pauses and the toolbar no longer fades. The presets
+  now sit with Crop, Before / After and Loupe.
+
+### FLX Film Lab for Windows: a visual overhaul
+The Windows app is redrawn to look more in line with the Mac app.
+- **A toolbar in icons** of the app's own design, each with its name and
+  shortcut in its tooltip.
+- **Pop-up menus:** the current choice ticked, long lists in one scrolling
+  column, and the mouse wheel scrolls the panel instead of changing a setting.
+- **The inspector:** the selected option in the accent colour, and icons on
+  the crop, gradient and mask buttons.
+- **The sidebar and the window:** pick and reject buttons on the row under the
+  pointer, thin scroll bars, rounded menus and tooltips, and dark window
+  frames.
+
+### More for Windows
+- **Everything new in 2.0,** with Ctrl in place of ⌘.
+- **Clear messages for RAW files it cannot read:** Nikon's High Efficiency RAW
+  (HE and HE★) and Sony's lossless compressed RAW at M and S size, with what
+  to do instead.
+- **Previews in the monitor's colour** on wide-gamut and calibrated monitors,
+  as on the Mac; exports are unchanged.
+
+### New films and filters
+- **Fujifilm Neopan 100 Acros II, Agfa APX 100 and Agfa APX 400:** three
+  black-and-white films, each built from its maker's own datasheet; the V-Log
+  LUT pack has them too. 58 film stocks in all.
+- **Kodak Wratten 82A and 82C cooling filters** on every colour film, from
+  Kodak's own data: for warm morning and evening light, and for lamps warmer
+  than a tungsten film's 3200 K.
+
 ## 1.5.0 (2026-11-11)
 
 Kodak's black-and-white motion picture pair, two Elite Chrome slides,

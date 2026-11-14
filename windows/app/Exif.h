@@ -26,6 +26,14 @@ struct ExportMetadata {
     bool hasPosition() const;
 };
 
+// The photograph in one line, as the canvas's status shows it, as the Mac's
+// PhotoLine: the camera, its focal length, the shutter speed and the ISO,
+// "Nikon Z f  ·  35 mm  ·  1/250 s  ·  ISO 400", leaving out what the file
+// does not say (0 or empty).
+QString photoLine(const QString &camera, double focalLength, double shutter, double iso);
+// A shutter speed as cameras show it: 1/250 s, 1/2 s, 0.6 s, 2 s, 1.3 s.
+QString shutterSpeed(double seconds);
+
 // TIFF's directories, little-endian: an entry's tag, type, count and value;
 // an entry with `directory` >= 0 holds that directory's offset (a LONG).
 struct TiffEntry {

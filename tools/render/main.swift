@@ -39,8 +39,8 @@ guard args.count >= 2 else {
       --wb MODE                "Film reference" (default), "As shot", "Daylight D55",
                                Daylight (D65), "Tungsten 3200 K", Tungsten (2850 K)
       --filter NAME            camera filter: on black-and-white film blue, green,
-                               yellow, orange or red; on colour film 81c, 812, 85
-                               or 85b
+                               yellow, orange or red; on colour film 81c, 812,
+                               82a, 82c, 85 or 85b
       --processing F           an instant print's processing temperature, one of
                                its sheet's: 55, 70 (normal) or 95 F
       --list                   print the available stocks and exit

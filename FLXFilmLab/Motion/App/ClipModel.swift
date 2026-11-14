@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import Combine
 import CoreVideo
 
@@ -21,6 +22,7 @@ final class ClipModel: ObservableObject {
         didSet {
             history.note { Self.grade(oldValue) }
             lookDidChange(from: oldValue)
+            scheduleRecord()
         }
     }
     @Published private(set) var clip: ClipInfo?
@@ -70,9 +72,29 @@ final class ClipModel: ObservableObject {
     private var highlights: [URL: (input: InputSettings, luminance: Float?)] = [:]
     private var meterTask: Task<Void, Never>?
 
+    /// Each clip's look and flag, kept between launches: the library the
+    /// Stills mode keeps its pictures' settings in, the same one.
+    let library: ImageLibrary
+    /// The folder in the sidebar: its clips, the selection and the flags.
+    let browser = FolderBrowser(kind: .clips)
+    /// The grade each clip opened with this session: one whose grade still
+    /// equals it has nothing of its own to keep.
+    private var openedWith: [URL: MotionLook] = [:]
+    private var recordTask: Task<Void, Never>?
+    private var batchCancel: BatchCancel?
+    /// The export of the clip a batch is on.
+    private var batchExporter: ClipExporter?
+    /// A grade copied to paste onto other clips, with the clip it came from.
+    @Published private(set) var copiedLook: (grade: MotionLook, source: String)? {
+        didSet { browser.hasCopiedSettings = copiedLook != nil }
+    }
+
     static let lookDefaultsKey = "look"
 
-    init() {
+    init(library: ImageLibrary? = nil) {
+        self.library = library ?? ImageLibrary()
+        browser.library = self.library
+        browser.pasteName = "Paste Look"
         let stored = UserDefaults.standard.data(forKey: Self.lookDefaultsKey)
             .flatMap { try? JSONDecoder().decode(MotionLook.self, from: $0) }
         look = (stored ?? .initial).upgraded().carryingLook()
@@ -82,6 +104,7 @@ final class ClipModel: ObservableObject {
             fatalError("FLX Film Lab needs Metal: \(error.localizedDescription)")
         }
         playback.onFrame = { [weak self] buffer, info in self?.frameArrived(buffer, info) }
+        browser.ownGrade = { [weak self] url in self?.ownGrade(url) }
         preview.onDraw = { [weak self] ms, error in
             guard let self else { return }
             if let error { self.errorMessage = error.localizedDescription }
@@ -100,6 +123,14 @@ final class ClipModel: ObservableObject {
         }
         pushLookToPreview()
         scheduleBake()
+        NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil,
+                                               queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.recordCurrent()
+                self?.library.save(wait: true)
+                self?.library.finishWriting()
+            }
+        }
     }
 
     /// The recipe as it prints: with Auto exposure on, the meter's reading
@@ -292,24 +323,31 @@ final class ClipModel: ObservableObject {
     // MARK: Clips
 
     /// Safe during an export: that holds its own copy of the clip and the look.
-    func open(_ url: URL) {
+    /// The sidebar lists the clip's folder.
+    func open(_ given: URL) {
+        let url = FolderBrowser.canonical(given)
+        showFolder(of: url)
+        browser.current = url
         isOpening = true
         Task {
             defer { isOpening = false }
             do {
                 let info = try await ClipInfo.load(url)
                 if clip?.url != url {
+                    recordCurrent()
                     // What was done before the first clip came is not any clip's.
                     let steps = history.swap(for: histories.removeValue(forKey: url) ?? .init())
                     if let clip { histories[clip.url] = steps }
                 }
                 if let clip { edits[clip.url] = look }
-                // The clip first: assigning the look files it under the clip
-                // on screen, which has to be the new one by then.
+                // Its look, chosen while the clip on screen is still the one
+                // before, then the clip: assigning the look files it under the
+                // clip on screen, which has to be the new one by then.
+                var next = lookToOpen(url)
                 clip = info
-                var next = edits[url] ?? look.carryingLook()
                 // How files are written is a preference, not part of a grade.
                 next.export = look.export
+                if openedWith[url] == nil { openedWith[url] = Self.grade(next) }
                 history.unrecorded { look = next }
                 reading = nil
                 meteredExposure = nil
@@ -325,8 +363,255 @@ final class ClipModel: ObservableObject {
                 }
             } catch {
                 errorMessage = error.localizedDescription
+                browser.current = clip?.url
             }
         }
+    }
+
+    /// The look a clip opens with: its own from this session, or kept from
+    /// another, or the look on screen with exposure, tone and colour fresh.
+    private func lookToOpen(_ url: URL) -> MotionLook {
+        if url == clip?.url { return look }
+        if let own = edits[url] { return own }
+        if let kept = library.record(for: url)?.look { return kept.upgraded() }
+        return look.carryingLook()
+    }
+
+    // MARK: The folder
+
+    /// Open a folder: its clips in the sidebar, and the first on screen,
+    /// unless the clip on screen is one of them.
+    func openFolder(_ given: URL) {
+        let folder = FolderBrowser.canonical(given)
+        errorMessage = nil
+        list(folder)
+        guard let first = browser.shown.first?.url ?? browser.items.first?.url else {
+            status = "No clips in \(folder.lastPathComponent)"
+            return
+        }
+        if let current = clip?.url, browser.items.contains(where: { $0.url == current }) {
+            browser.selection = [current]
+            return
+        }
+        browser.selection = [first]
+        open(first)
+    }
+
+    private func showFolder(of url: URL) {
+        let folder = url.deletingLastPathComponent()
+        if browser.folder?.standardizedFileURL != folder.standardizedFileURL { list(folder) }
+        if !browser.selection.contains(url) { browser.selection = [url] }
+    }
+
+    private func list(_ folder: URL) {
+        let items = FolderBrowser.listing(folder, kind: .clips)
+        browser.show(folder, items: items, records: library.load(folder, files: items.map { ($0.url, $0.size) }))
+    }
+
+    /// The grade of the clip on screen goes into the library once it has
+    /// settled, if it is its own: changed since it opened, or already kept.
+    private func scheduleRecord() {
+        recordTask?.cancel()
+        recordTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(800))
+            guard !Task.isCancelled else { return }
+            self?.recordCurrent()
+        }
+    }
+
+    private func recordCurrent() {
+        recordTask?.cancel()
+        recordTask = nil
+        guard let url = clip?.url else { return }
+        let grade = Self.grade(look)
+        if let kept = library.record(for: url)?.look {
+            guard kept.upgraded() != grade else { return }
+        } else {
+            guard let opened = openedWith[url], opened != grade else { return }
+        }
+        library.update(url) { $0.look = grade }
+        browser.markEdited(url)
+        browser.thumbnails.refreshClips([(url, grade)])
+    }
+
+    /// A clip's own grade, if it has one, for its graded thumbnail: none for
+    /// one that would open with the look on screen.
+    private func ownGrade(_ url: URL) -> MotionLook? {
+        guard browser.edited.contains(url) else { return nil }
+        if url == clip?.url { return Self.grade(look) }
+        return (edits[url] ?? library.record(for: url)?.look?.upgraded()).map(Self.grade)
+    }
+
+    /// Flag the selection, or the clip on screen when nothing is selected.
+    func flagSelection(_ flag: ImageLibrary.Flag?) {
+        var targets = browser.items.map(\.url).filter { browser.selection.contains($0) }
+        if targets.isEmpty, let current = clip?.url { targets = [current] }
+        self.flag(flag, for: targets)
+    }
+
+    /// Flag those clips alone, the selection as it is: a row's button.
+    func flag(_ flag: ImageLibrary.Flag?, for urls: [URL]) {
+        for url in urls {
+            library.update(url) { $0.flag = flag }
+            browser.setFlag(flag, for: url)
+        }
+    }
+
+    /// Step to the clip `offset` places along the sidebar.
+    func showNeighbour(_ offset: Int) {
+        guard let from = clip?.url ?? browser.shown.first?.url,
+              let next = browser.neighbour(of: from, offset: offset), next != clip?.url else { return }
+        browser.selection = [next]
+        open(next)
+    }
+
+    // MARK: Copy and paste a look
+
+    var canCopyLook: Bool { clip != nil }
+
+    /// Copy the grade of the clip on screen, to paste onto others.
+    func copyLook() {
+        guard let clip else { return }
+        copiedLook = (Self.grade(look), clip.url.lastPathComponent)
+    }
+
+    /// The copied grade on the clip on screen, which keeps how its own footage
+    /// is read.
+    func pasteLook() {
+        guard let copied = copiedLook?.grade, clip != nil else { return }
+        history.named("Paste Look") { look = pasting(copied, onto: look) }
+    }
+
+    /// The copied grade on every clip selected but the rejects, each keeping
+    /// how its own footage is read, with the paste a step of its own history.
+    func pasteLookToSelected() {
+        guard let copied = copiedLook?.grade else { return }
+        var changed: [(url: URL, grade: MotionLook)] = []
+        for url in browser.selectedForBatch {
+            if url == clip?.url {
+                pasteLook()
+                continue
+            }
+            let before = lookToOpen(url)
+            let pasted = pasting(copied, onto: before)
+            guard Self.grade(pasted) != Self.grade(before) else { continue }
+            edits[url] = pasted
+            histories[url] = EditHistory<MotionLook>.adding("Paste Look", before: Self.grade(before),
+                                                            after: Self.grade(pasted), to: histories[url] ?? .init())
+            if openedWith[url] == nil { openedWith[url] = Self.grade(before) }
+            library.update(url) { $0.look = Self.grade(pasted) }
+            browser.markEdited(url)
+            changed.append((url, Self.grade(pasted)))
+        }
+        browser.thumbnails.refreshClips(changed)
+    }
+
+    private func pasting(_ grade: MotionLook, onto target: MotionLook) -> MotionLook {
+        var next = grade
+        next.input = target.input
+        next.export = target.export
+        return next
+    }
+
+    // MARK: Exporting the selection
+
+    /// Write every clip selected but the rejects into `folder`, one after
+    /// another, each graded with its own look, or, never opened, the look on
+    /// screen as opening it would give it; each metered for itself, as on
+    /// screen, in the format and for the displays the toolbar has chosen.
+    func exportSelected(to folder: URL) {
+        guard browser.batch == nil, !isExporting else { return }
+        recordCurrent()
+        let urls = browser.selectedForBatch
+        guard !urls.isEmpty else { return }
+        playback.pause()
+        let onScreen = look
+        var taken = Set<String>()
+        let jobs: [(url: URL, look: MotionLook, target: URL)] = urls.map { url in
+            var clipLook = lookToOpen(url)
+            clipLook.export = onScreen.export
+            let film = (try? PackLibrary.shared.pack(clipLook.recipe.filmStock))?.name ?? clipLook.recipe.filmStock
+            let short = ["Kodak ", "Fujifilm ", "Ilford "].reduce(film) { $0.replacingOccurrences(of: $1, with: "") }
+            let stem = url.deletingPathExtension().lastPathComponent + " " + short
+            var name = stem + ".mov"
+            var n = 2
+            while taken.contains(name.lowercased())
+                    || FileManager.default.fileExists(atPath: folder.appendingPathComponent(name).path) {
+                name = "\(stem) \(n).mov"
+                n += 1
+            }
+            taken.insert(name.lowercased())
+            return (url, clipLook, folder.appendingPathComponent(name))
+        }
+        let cancel = BatchCancel()
+        batchCancel = cancel
+        browser.batch = .init(done: 0, total: jobs.count, current: jobs[0].url.lastPathComponent, folder: folder)
+        exportProgress = 0
+        Task {
+            var failures: [String] = []
+            for (i, job) in jobs.enumerated() {
+                if cancel.isCancelled { break }
+                browser.batch?.done = i
+                browser.batch?.current = job.url.lastPathComponent
+                status = "Exporting \(i + 1) of \(jobs.count): \(job.url.lastPathComponent)"
+                exportProgress = 0
+                do {
+                    try await exportClip(job.url, look: job.look, to: job.target, cancel: cancel)
+                } catch ClipExporter.ExportError.cancelled {
+                    break
+                } catch {
+                    failures.append("\(job.url.lastPathComponent): \(error.localizedDescription)")
+                }
+            }
+            let done = browser.batch?.done ?? 0
+            browser.batch = nil
+            batchCancel = nil
+            exportProgress = nil
+            if cancel.isCancelled {
+                status = "Export stopped after \(done) of \(jobs.count)"
+            } else if failures.isEmpty {
+                status = "Exported \(jobs.count) clip\(jobs.count == 1 ? "" : "s") to \(folder.lastPathComponent)"
+            } else {
+                errorMessage = "Exported \(jobs.count - failures.count) of \(jobs.count); not exported: "
+                    + failures.prefix(5).joined(separator: "; ") + (failures.count > 5 ? "; …" : "")
+            }
+        }
+    }
+
+    /// One clip of a batch, as Export writes the one on screen: read in its
+    /// own format, metered for its stock, its look baked and every frame
+    /// graded at full size.
+    private func exportClip(_ url: URL, look given: MotionLook, to target: URL, cancel: BatchCancel) async throws {
+        let info = try await ClipInfo.load(url)
+        var look = given
+        var settings = look.input
+        settings.format = look.input.format ?? info.detectedFormat
+        if look.recipe.autoExposure, let film = try? PackLibrary.shared.pack(look.recipe.filmStock) {
+            let known = highlights[url].flatMap { $0.input == settings ? $0.luminance : nil }
+            var luminance = known
+            if luminance == nil {
+                luminance = try await ClipMeter.highlight(of: info, settings: settings)
+                highlights[url] = (settings, luminance)
+            }
+            if let luminance { look.recipe.exposureEV = Double(ClipMeter.exposure(highlight: luminance, film: film)) }
+        }
+        look.effects = look.effectsAsPrinted
+        look.input = settings
+        let lut = try await bakeEngine.bake(look.recipe, input: (settings.format ?? .nlog).lutInput)
+        if cancel.isCancelled { throw ClipExporter.ExportError.cancelled }
+        let exporter = ClipExporter()
+        batchExporter = exporter
+        defer { batchExporter = nil }
+        try await exporter.export(
+            source: url, to: target, look: look, lut: lut,
+            options: .init(codec: look.export.codec, display: look.export.display, timeRange: nil),
+            progress: { p in
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        if self.exportProgress != nil { self.exportProgress = p }
+                    }
+                }
+            })
     }
 
     private func frameArrived(_ buffer: CVPixelBuffer, _ info: ClipInfo) {
@@ -405,7 +690,12 @@ final class ClipModel: ObservableObject {
         }
     }
 
-    func cancelExport() { exporter?.cancel() }
+    /// Stop the export under way: a batch stops with the clip it is on.
+    func cancelExport() {
+        exporter?.cancel()
+        batchCancel?.cancel()
+        batchExporter?.cancel()
+    }
 
     /// The print as a .cube for DaVinci Resolve and other editors, Rec.709
     /// BT.1886 out. The clip's log goes in the way Resolve reads it

@@ -19,7 +19,9 @@ class MotionInspector : public QScrollArea
 {
     Q_OBJECT
 public:
-    explicit MotionInspector(MotionDocument &document, Vocabulary vocabulary, QWidget *parent = nullptr);
+    explicit MotionInspector(MotionDocument &document, QWidget *parent = nullptr);
+    // The films Settings leaves in the Film menu changed: listed again.
+    void listFilms() { refresh(); }
 
 signals:
     void exportRequested();
@@ -49,7 +51,8 @@ private:
     void buildExport();
 
     MotionDocument &m_doc;
-    Vocabulary m_vocabulary;
+    // the photographic names always, as on the Mac: Control names is the Stills sliders'
+    const Vocabulary m_vocabulary = Vocabulary::Photographic;
     QWidget *m_content;
     std::vector<SpecBinding> m_specs;
     std::vector<std::function<void()>> m_refreshers;

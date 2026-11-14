@@ -127,12 +127,29 @@ def kodak_t_max_100_mtf() -> np.ndarray:
     return curve[np.concatenate([[True], np.diff(curve[:, 0]) > 1e-6])]
 
 
+def agfa_apx_mtf(film: int) -> np.ndarray:
+    """Agfa's APX 100 or 400 MTF (daylight, visual filter) as (cycles/mm,
+    fraction), off the film's own 1995 sheet (`agfa_bw_sheets`). The 1998
+    range sheet's APX 400 MTF repeats its APX 100 curve to the third decimal;
+    the film's own sheet has one of its own, 0.65 at 30 cycles/mm against
+    APX 100's 0.79."""
+    import agfa_bw_sheets as agfa
+    return agfa.edition(film, "1995")["mtf"]
+
+
 # A stock whose own sheet publishes its MTF is fitted to that, up to 50
 # cycles/mm (finer, a 6000 px frame stops resolving the scatter's core: fitted
 # to Agfa's 91 the worst error was 17%, to 50 it is 3%); the others take
 # Kodak's Tri-X curve.
 SHEET_MTF = {"agfa_apx_25": lambda: (lambda c: c[c[:, 0] <= 50])(agfa_apx25_mtf()),
              "kodak_t_max_100": lambda: (lambda c: c[c[:, 0] <= 50])(kodak_t_max_100_mtf()),
+             "agfa_apx_100": lambda: (lambda c: c[c[:, 0] <= 50])(agfa_apx_mtf(100)),
+             "agfa_apx_400": lambda: (lambda c: c[c[:, 0] <= 50])(agfa_apx_mtf(400)),
+             # Fujifilm publishes no MTF for Acros II; its resolving power, 200
+             # lines/mm at 1000:1 and 60 at 1.6:1 (Microfine), is T-Max 100's
+             # (200 and 63, F-4016, D-76), and its RMS 7 against T-Max's 8:
+             # it takes T-Max 100's measured curve, an estimate.
+             "fujifilm_neopan_100_acros_ii": lambda: (lambda c: c[c[:, 0] <= 50])(kodak_t_max_100_mtf()),
              # Kodak H-1-5222 (2003), tungsten, D-96 to the control gamma; the
              # 2022 edition's bitmap repeats it (`kodak_bw_cine_sheets`).
              "kodak_double_x_5222": lambda: (lambda c: c[c[:, 0] <= 50])(

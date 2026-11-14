@@ -4,6 +4,7 @@
 #include "LensCorrection.h"
 #include "RawUnpack.h"
 
+#include <limits>
 #include <string>
 
 // The port's RAW decode: a raw file to the engine's input, linear Rec.2020
@@ -22,7 +23,9 @@ struct DecodeOptions {
     // Apple's crop of the mosaic: the image area inside it, when known. All
     // zero: the decoder's own.
     int cropLeft = 0, cropTop = 0, cropWidth = 0, cropHeight = 0;
-    float exposureEV = 0;           // without a profile: Apple's baseline exposure, for comparing
+    // Without a profile, the exposure to apply, EV; NaN (the default): the
+    // DNG's own baseline exposure, as Apple applies it, else none
+    float exposureEV = std::numeric_limits<float>::quiet_NaN();
     // Apple's camera profiles (AppleColour): their colour, crop and exposure
     // for every camera measured; the camera's daylight matrix for the rest
     std::string appleColour;
@@ -52,6 +55,13 @@ struct DecodedPicture {
     int cropLeft = 0, cropTop = 0, cropWidth = 0, cropHeight = 0;   // of the mosaic, as decoded
     Mat3 cameraToRec2020;           // white-balanced camera RGB -> linear Rec.2020
     bool profiled = false;          // with Apple's profile for the camera
+    // The exposure Apple gives the file, EV, as far as it is known: its
+    // profile's (measured on another file of the camera), else the DNG's own,
+    // else the options'; the one the decode put in the pixels (the profile's,
+    // else the options'); and whether it is a DNG: what Apple's default
+    // rendering of it needs (AppleRendering)
+    float baselineExposure = 0, decodedExposure = 0;
+    bool dng = false;
     float temperature = 0, tint = 0;    // the white balance as Apple reads it, where profiled
     Distortion distortion;          // the lens's, as corrected: None where it was not
     double noise[4] = {};           // the detail steps' noise, a Y + b: a and b at full size, then at half

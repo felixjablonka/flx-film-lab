@@ -4,10 +4,11 @@
 # follows: the same source files the app's own tools compile (ENGINE_SOURCES
 # in its build.sh), so the reference is the app's engine.
 # And flxdecode (decode.swift), Apple's RAW decoder as RawLoader sets it up,
-# flxmeasure (tools/calibrate/measure.swift), which measures its colour, and
+# flxmeasure (tools/calibrate/measure.swift), which measures its colour,
+# flxbaseline (tools/calibrate/baseline.swift), its baseline exposure per file, and
 # flxlut, the Mac's own LUT baker (tools/lut there), for the port's to match.
 #
-#   tools/mac-reference/build.sh          -> build/mac-reference/flxref, flxdecode, flxmeasure, flxlut
+#   tools/mac-reference/build.sh          -> build/mac-reference/flxref, flxdecode, flxmeasure, flxbaseline, flxlut
 #   tools/mac-reference/run.sh ...        -> builds if needed, runs it from the Mac's tree
 
 set -euo pipefail
@@ -36,6 +37,11 @@ fi
 if [[ ! -x "$out/flxmeasure" || tools/calibrate/measure.swift -nt "$out/flxmeasure" ]]; then
   echo "==> building flxmeasure"
   swiftc -O -target "arm64-apple-macosx${target:-26.0}" -o "$out/flxmeasure" tools/calibrate/measure.swift
+fi
+# flxbaseline: Apple's baseline exposure per file, for tools/calibrate/iso_exposure.py
+if [[ ! -x "$out/flxbaseline" || tools/calibrate/baseline.swift -nt "$out/flxbaseline" ]]; then
+  echo "==> building flxbaseline"
+  swiftc -O -target "arm64-apple-macosx${target:-26.0}" -o "$out/flxbaseline" tools/calibrate/baseline.swift
 fi
 # flxlut runs from the Mac's tree, where its packs and shaders are
 # (tools/mac-reference/lut.sh). It imports the engine as the module FLXCore, as

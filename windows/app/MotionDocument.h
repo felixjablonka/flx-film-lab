@@ -2,6 +2,8 @@
 
 #include "AudioPlayback.h"
 #include "EditHistory.h"
+#include "FolderBrowser.h"
+#include "ImageLibrary.h"
 #include "MotionEngine.h"
 #include "RenderEngine.h"
 #include "SetupBuilder.h"
@@ -40,12 +42,14 @@ QString movieFilter();
 // clip on screen stays until the new one has loaded, each clip's grade is
 // remembered for the session, and a clip opened for the first time keeps the
 // look (film, paper, film character, effects, how footage is read and
-// written) while exposure, tone and colour start fresh.
+// written) while exposure, tone and colour start fresh. A clip's look of its
+// own and its flag are kept between sessions, in the library, and the
+// sidebar lists the clips of its folder (FolderBrowser).
 class MotionDocument : public QObject
 {
     Q_OBJECT
 public:
-    explicit MotionDocument(const AppData &data, QObject *parent = nullptr);
+    MotionDocument(const AppData &data, ImageLibrary &library, QObject *parent = nullptr);
     ~MotionDocument() override;
 
     const MotionLook &look() const { return m_look; }
@@ -71,6 +75,10 @@ public:
 
     // The graded frame, the clip's way up, and how far the track turns it.
     const QImage &image() const { return m_image; }
+    // as the screen is given it (DisplayColour)
+    const QImage &shownImage() const { return m_shown; }
+    // the monitor's colour has changed: the frame made again for it
+    void screenChanged() { scheduleRender(); }
     int quarterTurns() const { return m_clip ? m_clip->quarterTurns : 0; }
     // The size the canvas shows the frame at, in device pixels, the clip's
     // way up: the preview is graded at that size, never above the clip's own.
@@ -126,6 +134,35 @@ public:
     void setMuted(bool muted) { m_audio.setMuted(muted); }
     double soundHanded() const { return m_audio.handedSeconds(); }
 
+    // MARK: the folder, flags and batches (ClipModel)
+    FolderBrowser &browser() { return m_browser; }
+    // A folder's clips in the sidebar, and the first on screen, unless the
+    // clip on screen is one of them.
+    void openFolder(const QString &folder);
+    // Flag the selection, or the clip on screen when nothing is selected.
+    void flagSelection(std::optional<ImageLibrary::Flag> flag);
+    // those clips alone, the selection as it is (a row's button)
+    void flagPaths(const std::vector<QString> &paths, std::optional<ImageLibrary::Flag> flag);
+    // Step to the clip `offset` places along the sidebar.
+    void showNeighbour(int offset);
+    // Copy the grade of the clip on screen, to paste onto others.
+    void copyLook();
+    bool canCopyLook() const { return m_clip.has_value(); }
+    bool hasCopiedLook() const { return m_copiedLook.has_value(); }
+    QString copiedLookSource() const { return m_copiedLook ? m_copiedLook->second : QString(); }
+    // The copied grade on the clip on screen, which keeps how its own
+    // footage is read.
+    void pasteLook();
+    // The copied grade on every clip selected but the rejects, each keeping
+    // how its own footage is read, with the paste a step of its own history.
+    void pasteLookToSelected();
+    // Every clip selected but the rejects written into `folder`, one after
+    // another, as Export writes the one on screen; a clip never opened gets
+    // the look on screen, metered for itself.
+    void exportSelected(const QString &folder);
+    // The look on screen into the library, and the library onto the disk.
+    void prepareToQuit();
+
     QString suggestedExportName();
     void exportTo(const QString &path);
     void cancelExport();
@@ -149,6 +186,18 @@ signals:
 private:
     void lookDidChange(const MotionLook &old);
     void store();
+    // MARK: the folder
+    void showFolder(const QString &path);
+    void list(const QString &folder);
+    // The look a clip opens with: its own from this session, or kept from
+    // another, or the look on screen with exposure, tone and colour fresh.
+    MotionLook lookToOpen(const QString &path);
+    // A clip's own grade, if it has one, for its graded thumbnail.
+    std::optional<MotionLook> ownGrade(const QString &path);
+    // The grade on screen goes into the library once it has settled, if it
+    // is its own: changed since it opened, or already kept.
+    void recordCurrent();
+    void finishBatch(const QStringList &failures, int done, int total, bool cancelled, const QString &folder);
     void adopt(const ClipInfo &info, const QString &path, int id);
     void scheduleRender();
     void finishRender(std::optional<MotionEngine::Output> output, const QString &error);
@@ -184,19 +233,19 @@ private:
     // every other clip's undo history; the one on screen's is m_history's
     std::map<QString, EditHistory<MotionLook>::Stacks> m_histories;
     // a look without how its files are written, which is a preference
-    MotionLook grade() const
+    static MotionLook gradeOf(MotionLook look)
     {
-        MotionLook g = m_look;
-        g.exportSettings = {};
-        return g;
+        look.exportSettings = {};
+        return look;
     }
+    MotionLook grade() const { return gradeOf(m_look); }
     // each clip's metered highlight, by how it was read: decoding frames for
     // it is the slow part, the exposure for a stock is arithmetic
     std::map<QString, std::pair<InputSettings, std::optional<double>>> m_highlights;
     int m_meterGeneration = 0;
     std::vector<QPointer<QThread>> m_workers;  // meters and the export, waited for on the way out
 
-    QImage m_image;
+    QImage m_image, m_shown;
     std::shared_ptr<const VideoFrame> m_frame;
     QSize m_viewSize;
     bool m_renderInFlight = false, m_renderAgain = false;
@@ -211,4 +260,13 @@ private:
 
     std::optional<double> m_exportProgress;
     std::atomic<bool> m_cancelExport{false};
+
+    ImageLibrary &m_library;
+    FolderBrowser m_browser;
+    // what each clip opened with this session (a grade): one whose grade
+    // still equals it has nothing of its own to keep in the library
+    std::map<QString, MotionLook> m_openedWith;
+    QTimer m_recordTimer;
+    // a grade copied to paste onto other clips, with the clip it came from
+    std::optional<std::pair<MotionLook, QString>> m_copiedLook;
 };

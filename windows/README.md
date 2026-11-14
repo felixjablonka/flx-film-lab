@@ -112,6 +112,16 @@ Double-X's is in its development's edge effects: the same code as Tri-X's,
 but stronger (0.39 against 0.27) and wider, so it carries the float steps
 further.
 
+Followed to the Mac's 2.0.0: Fujifilm Neopan 100 Acros II,
+Agfa APX 100 and 400, and Kodak's Wratten 82A and 82C cooling filters on
+every colour film come with the packs. The port mirrors Settings' Films
+tab (`filmmenu` in `engine/Packs`, the hidden films kept under the Mac's
+key, `hiddenFilms`, and the one in use always listed) and the filters'
+help. From DSC_0871 at 2000 px, the port's own setup matches the Mac's to
+2e-6 of its largest value, and its renders on Metal and Direct3D 12 are
+within ΔE2000 0.023 on Acros II, 0.036 on APX 100 and 0.035 on Provia 100F
+through the 82C, never more than one 8-bit level off.
+
 Past 12 MP the intermediates are half precision, as the Mac's. The shaped
 print (`apply_geometry`), dodge & burn (MaskRasterizer) and Glow's effects
 (Core Image kernels on the Mac) are ported with the app (below), and the RAW
@@ -176,6 +186,95 @@ pixel. Clips are decoded on the GPU's video decoder where there is one
 through Qt Multimedia's audio output, `AudioPlayback`), started, stopped
 and moved with it; the two clocks agree to a few milliseconds.
 
+A folder's pictures, or in Motion its clips, line the left of the window, as
+in the Mac app (`FolderBrowser`, `FolderSidebar`): File > Open Folder
+(Ctrl+Shift+O), a folder dropped or handed over from Explorer (it opens in
+the half that has its kind of file), or opening a picture lists its folder.
+Rows of 84 x 56 prints with the name beside them in small type, the picture
+on screen and the selection outlined in the accent colour; click, Ctrl- and
+Shift-click, Up and Down (Shift extends), Ctrl+A, Ctrl+Up and Ctrl+Down from
+anywhere, View > Sidebar (Ctrl+Shift+S). P picks, X rejects and U unflags,
+as do the flag and the cross a row shows under the pointer (on its picture,
+or the selection it is in); All, Picks or No Rejects; a reject is dimmed and
+left out of batches, never deleted. A row's picture is the camera's own preview, the smallest the RAW
+embeds that fills it (LibRaw's list of them); a picture with settings of its
+own shows its print, taken from the screen when it is left or made on an
+engine of its own in the background, and a clip its frame as a player shows
+log footage, graded with its look once it has one of its own; prints are
+cached on disk by file and settings. The pictures either side of the one on
+screen are decoded ahead on an engine of their own, so stepping to one shows
+it at once, and the toolbar's states, the status line's notes and the white
+balance's "decoding…" wait 0.3 s before showing, so stepping does not flash
+them. Only the last 30 pictures visited keep their undo history.
+
+Each picture's settings and flag, and each clip's look and flag, are kept
+between launches in a library in `%APPDATA%\FLX Film Lab\Library`, one file
+per folder (`ImageLibrary`); a folder moved or renamed is found again by its
+files' names and sizes. With Save settings beside images (Settings) each
+record also goes into `DSC_0871.NEF.flx` beside its picture, the
+Mac app's own form, so a folder's settings travel between the two apps both
+ways (`flxport-checks` reads sidecars the Mac app wrote, and the Mac's own
+decoder reads the port's); a sidecar is read wherever there is one, and of
+it and the library the newer counts. Copy Settings and Paste Settings to
+Selected (each keeps its own masks, gradients and crop, the paste a step of
+its own history), Copy Look and Paste Look in Motion (Ctrl+Shift+C and V),
+and Export Selected (Ctrl+Shift+E): each picture printed at full size on an
+engine of its own, metered on its own preview-sized decode, one after
+another, or each clip written with its own look, a picture or clip never
+opened taking the look on screen; progress and Stop in the sidebar.
+
+The previews are colour-managed for the monitor the window is on, as macOS
+manages every window of the Mac app (`DisplayColour`). Windows shows an app's
+pixels as they are, unless it manages colour itself on that monitor: with
+Windows 11's automatic colour management on (wide colour on an SDR display),
+or with HDR, it maps an app's sRGB to the display on its own, and FLX leaves
+its previews in sRGB. Otherwise a monitor with a profile of its own (a
+wide-gamut panel's, a calibration's) gets the print, the loupe, Motion's
+frame, the sidebar's pictures and the surround converted to that profile,
+the print straight from its output space, so a Display P3 or ProPhoto print
+is not clipped to sRGB on the way. Windows' own sRGB profile, or one Qt
+cannot read, changes nothing. The monitor's state is read again when the
+window moves to another monitor, the screens change or the app comes to the
+front; Settings says what the previews do, and `--display-colour FILE`
+writes every monitor's colour mode and profile. The conversion runs on the
+render threads (2.6 ms for a 2560 px preview on the M4 Pro); exports are
+untouched, as they carry their own profile. HDR is left to Windows for now.
+
+File > Settings (Ctrl+,) is the Mac's Settings window (`SettingsDialog`):
+what belongs to the app rather than to a picture, kept between launches and
+applied at once. Text size (Standard, Larger, Largest) makes the inspectors
+and the sidebars 15 or 30 % larger as a whole, their type, controls, widths
+and spacing together (`theme::px`, the panel fonts), as the Mac's does; the
+toolbar, the canvas, the transport bar and the dialogs keep their size. The
+panels are made again at the new size in their places, each section open or
+closed as it was left, so nothing they show is lost. Control names
+(Photographic or Darkroom, the Stills sliders; Motion's keep the
+photographic names, as on the Mac), Preview size, Save settings beside
+images, and the monitor's colour are there too; the inspector's Output
+section keeps the picture's own colour space and gamut compression.
+
+Original (`\`, in the View menu and the toolbar) shows the picture before film
+and paper, the RAW as macOS renders it by default, as shot, in the print's
+place, as the Mac's Original does; again, the print. Windows has no Core
+Image, so the port renders it as Apple does (`engine/AppleRendering`),
+measured on the Mac from CIRAWFilter at its defaults against its linear
+decode: the decode with the camera's own white balance, at the preview's
+size; Apple's shadow bias, which takes s x 2^baselineExposure off and scales
+by 1 / (1 - s), s being 5/1000 for DNG files and 3/1000 for the cameras'
+own formats; and Apple's tone curve, one table for every camera, on each
+channel of linear Rec.2020 alike. Apple's gamut mapping, sharpening and
+noise reduction are left out. The original is decoded the first time it is asked for, for the
+picture on screen alone, and runs through the print's own geometry map,
+so it is turned, levelled and cropped as the print is and a toggle moves
+nothing; nothing is decoded until then. Against the Mac's Original on 15
+pictures, colour and tone over 80-pixel blocks are within ΔE2000 0.2-1.0
+median per picture on the Nikon Z 7 and Z f, the Leica M, the Ricoh GR IIIx
+and a Canon EOS 400D, 1.8 on a tungsten-lit portrait from the Canon. Two
+things differ: light sources past sRGB, which Apple's gamut mapping keeps
+redder (the taxi's tail lights), and a Fujifilm frame shot with an extreme
+custom white balance, which Apple reads as 100000 K. Windows' originals
+equal the Mac build's within one 8-bit level.
+
     cmake --build build/mac --target FLXFilmLab       # the Mac build, for development
     tools\pc\build.cmd                                # Windows: build\win\FLXFilmLab.exe, Qt deployed beside it
     tools\pc\package.cmd                              # Windows: dist\FLX Film Lab and its installer
@@ -208,7 +307,40 @@ times N renders, `--size WxH` and `--preview N` set the window and the
 preview. With a movie, `--at SECONDS` shows that frame, `--play SECONDS`
 plays first and counts the frames shown, `--codec prores|hevc` chooses
 what `--export` writes, and `--export-lut PATH` writes the look's .cube.
-`flxport-export` writes a clip as the app's Export does.
+`flxport-export` writes a clip as the app's Export does. `--save-original
+PNG` writes the original in the print's place. The file may be a
+folder, and `--screenshot` then waits for the sidebar's pictures too;
+`--library DIR` keeps the library, the cached prints and the settings (an INI
+file) in DIR rather than the app's own, so a test run never reads or changes
+the person's. `--self-test RAWS --library DIR [--self-test-clips CLIPS]` drives
+the folder workflow in the running app, as the Mac's app tests do: four of
+RAWS' files copied into DIR and opened as a folder, decoded ahead, stepped
+through without a load showing, settings and flags kept and found again by a
+new library, the print kept from the screen, Paste Settings to Selected and
+its undo step, Export Selected, the sidecars; and the two smallest of CLIPS
+copied into DIR as a folder of clips, a look kept, its graded frame, Paste
+Look and Export Selected; and the previews on a
+wide-gamut monitor (`FLX_DISPLAY_PROFILE` names a profile to use as the
+monitor's): the print, the surround, the sidebar's pictures and Motion's
+frame converted, a Display P3 print reaching it unclipped; and Settings:
+each text size's panels made again at their widths and type, a section left
+open kept open, the sidebar made again with the folder and its selection,
+Control names, Preview size and Save settings beside images reaching what
+they change, the monitor's colour said, and on Windows every film's and
+paper's name whole on its menu at each text size; and Original: its menu
+item and key in Stills alone, the original at the print's size, not the
+print, turned with it and let go; a row's pick and reject buttons, which
+flag its picture alone and leave the selection and the list where they
+were, a double click on one counting once; the toolbar's Stills/Motion
+switch, in the middle of the window in both halves; and the menus, which
+the wheel does not change and which open with the choice ticked, and the
+status saying the photograph, and the film menu one column that scrolls;
+and Settings' Films tab: films left out of the Stills and Motion film menus,
+a hidden film in use kept in them, a group hidden and every film shown again
+(83 checks, all passing on Direct3D 12; the Mac build, whose type is wider
+than Segoe UI, runs the other 79, all passing on Metal, and only reports
+the menus). `--text-size
+SIZE` shows the panels at a text size for one run, without keeping it.
 
 A slider's tick at the 2560 px preview, all of it (meters, setup, GPU,
 readback, the image), on DSC_0871 with Portra 400 on Endura:
@@ -264,6 +396,39 @@ noise reduction, the false-colour (moiré) suppression and the lens
 correction can each be switched off: `--no-sharpening`, `--no-colour-nr`,
 `--no-moire`, `--no-lens-correction`.
 
+**What it cannot read.** Tested (2026-11-12) with raw.pixls.us's samples of
+each mode, against Apple's decoder on macOS 27.0.1, which opens them all:
+
+| Camera | Mode | The port |
+|---|---|---|
+| Nikon Z f | Lossless compressed | reads it (RawSpeed) |
+| Nikon Z f | High Efficiency (HE), HE* | cannot |
+| Canon EOS R6 Mark II | RAW, C-RAW, full frame and 1.6x crop | reads them (LibRaw) |
+| Sony A7R V | uncompressed, compressed, lossless compressed L | reads them (RawSpeed) |
+| Sony A7R V | lossless compressed M, S | cannot |
+
+- Nikon's High Efficiency RAW, on the Z 8, Z 9, Z f, Z6III and later, codes
+  the mosaic in JPEG XS (intoPIX's TicoRAW). Neither decoder reads it: LibRaw
+  0.22.3 identifies it and refuses it ("not supported yet" in its camera
+  list), and RawSpeed fails on it. The port identifies it by the NEF's own
+  compression (13 HE, 14 HE*), so cameras LibRaw does not list count too,
+  and says so, with what to do: shoot Lossless compressed, or convert the file
+  with Adobe DNG Converter (free), whose DNG is a mosaic again and opens with
+  the camera's Apple colour (tested with DNG Converter 17.4.1 on HE*).
+- Sony's lossless compressed RAW at M and S size (A1, A7 IV, A7R V and
+  later) holds YCbCr colour, interpolated in the camera, not the sensor's
+  mosaic. LibRaw reads it as colour pixels, which the port's pipeline, from
+  the mosaic on, does not take; RawSpeed refuses it. Adobe DNG Converter
+  turns it into a Linear Raw DNG, not a mosaic either. The port says so; the
+  L size opens.
+- `UnreadableFormat` (`engine/RawUnpack.h`) carries those messages in place
+  of the decoders' own, and the canvas wraps a long error onto more lines.
+
+A camera without Apple's colour measured (the Sony A7R V and A7R VI among
+them: the A7R V's sample on raw.pixls.us is an M-size file) decodes with the
+colour matrix RawSpeed's camera list gives it, Adobe's, close to Apple's but
+not the same.
+
 ### Apple's colour
 
 Apple colours each camera with a profile of its own. Adobe's profile for the
@@ -276,9 +441,13 @@ balance, Apple's colour is a 3x3 transform of the camera's RGB:
 - C is the colour. On most cameras it follows a two-illuminant DNG profile,
   blended by 1/T between 2856 K and 6504 K and the same at any tint, but not
   on all. Some Fujifilms' depends on the tint too.
-- The transform includes Apple's baseline exposure, which is per file. On
-  Fujifilm it follows the file's raw exposure shift (DR100/200/400) and ISO,
-  though not by a rule one sample per camera can pin down.
+- The transform includes Apple's baseline exposure for the camera, which
+  Apple varies per file. Where a camera's files at some ISO values get
+  another, the profile lists them (`isoExposure`, below) and the decode adds
+  the difference; a DNG gets its own BaselineExposure, as Apple applies it,
+  with a profile or without. On Fujifilm it also follows the file's raw
+  exposure shift (DR100/200/400), though not by a rule one sample per camera
+  can pin down.
 - Temperatures and tints are the DNG SDK's (Robertson's lines, tint -3000 to
   a unit of uv).
 
@@ -529,6 +698,26 @@ whole 4:3, also for a picture cropped to 3:2 or 16:9.
 - `encode_display` rounds to the 8-bit levels itself: left to Direct3D's
   conversion, 4% of the values came out one level off Metal's.
 - `active` and `shared` are reserved words in GLSL.
+- Apple's baseline exposure goes by the file's ISO: for each camera a table of
+  ISO values that get another, read in nothing but the ISO tags (copies of one
+  file differing only in them read differently, and as files really taken at
+  that ISO). On the Nikon D700, +0.1 EV, but -0.7 at ISO 100 (Lo 1), -0.57 at
+  125, -0.23 at 160 and +0.2 from 25600. Its profile carried -0.7, the value
+  Apple gives at ISO 100 alone, so the raw.pixls.us file it was measured from
+  was most likely taken there (the file itself is gone), and the port decoded
+  every other D700 file 0.8 EV darker than Apple. On the Z 7 and Z f, +0.35,
+  but +1.35 from ISO 82 to 97 and +1 from 103 to 122, where auto ISO's sixth
+  stops fall (ISO 90, 110), and less at their Lo settings; nothing above 163
+  differs but the top Hi settings. Active D-Lighting changes nothing.
+  `tools/calibrate/iso_exposure.py` reads a camera's table from one file of it
+  (every whole ISO to 200, the third and sixth stops above) through Apple's
+  decoder (`flxbaseline`) and writes it to the camera's profile, scaling the
+  profile's transforms where its file was taken at an exception; done for the
+  D700, Z 7 and Z f, whose files were at hand. A DNG carries its own
+  BaselineExposure, which Apple applies: the port now does too, for a camera
+  with a profile or without (the Ricoh GR IIIx's, -0.5 EV, had been left out).
+  Against Apple's linear decode the D700's and the GR IIIx's are now within 1%
+  (they were 0.8 and 0.5 EV off), and the Z 7 at ISO 90 within 0.1 EV (0.9).
 - The C++ reproduces the Mac's Swift bit for bit, on the Mac, when it fuses
   no multiply and add (`-ffp-contract=off`, as Swift) and stays in float:
   `std::pow(10, x)` is double, `std::pow(10.0f, x)` float.

@@ -157,6 +157,11 @@ const AppleColour &AppleColour::table(const std::string &path)
         p.make = o["make"].toString().toStdString();
         p.model = o["model"].toString().toStdString();
         p.decoder = o["decoder"].toString().toStdString();
+        p.baselineExposure = float(o["baselineExposure"].toDouble());
+        for (const QJsonValue &v : o["isoExposure"].toArray()) {
+            const QJsonArray r = v.toArray();
+            p.isoExposure.push_back({r[0].toInt(), r[1].toInt(), float(r[2].toDouble())});
+        }
         p.black = float(o["black"].toArray()[0].toDouble());
         p.white = float(o["white"].toDouble());
         p.mosaicWidth = o["mosaic"].toArray()[0].toInt();
@@ -190,6 +195,15 @@ const AppleColour &AppleColour::table(const std::string &path)
         t->profiles[it.key().toStdString()] = std::move(p);
     }
     return *t;
+}
+
+float AppleProfile::exposureAt(float iso) const
+{
+    const long whole = std::lround(iso);
+    for (const IsoExposure &r : isoExposure)
+        if (whole >= r.from && whole <= r.to)
+            return r.exposure;
+    return baselineExposure;
 }
 
 const int *AppleProfile::cropFor(int width, int height) const

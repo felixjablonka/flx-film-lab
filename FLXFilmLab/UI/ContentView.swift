@@ -48,10 +48,12 @@ enum CanvasBackground: String, CaseIterable, Identifiable {
 struct ContentView: View {
     @ObservedObject var model: DocumentModel
     @State private var selectedMask: UUID?
-    @State private var isImporting = false
-    @State private var isExporting = false
-    @State private var exportFormat: Exporter.Format = .tiff16
-    @State private var isNamingPreset = false
+    /// The format Export and Export Selected write, kept between launches.
+    @AppStorage("exportFormat") private var exportFormat: Exporter.Format = .tiff16
+    /// The folder's pictures down the left (⌃⌘S).
+    @AppStorage("showSidebar") private var showSidebar = true
+    /// Settings' Text size: the side panels are made again when it changes.
+    @AppStorage(PanelScale.key) private var textSize = PanelScale.standard.rawValue
     @State private var presetName = ""
     @AppStorage("canvasBackground") private var backgroundRaw = CanvasBackground.dark.rawValue
     /// The masks' and gradients' lines hidden, to judge the print without them.
@@ -63,14 +65,27 @@ struct ContentView: View {
 
     var body: some View {
         HStack(spacing: 0) {
+            if showSidebar {
+                FolderSidebar(browser: model.browser,
+                              open: { model.open(url: $0) },
+                              openFolder: { FolderPanels.openFolder(model) },
+                              flag: { model.flagSelection($0) },
+                              flagOne: { model.flag($1, for: [$0]) },
+                              pasteToSelected: { model.pasteSettingsToSelected() },
+                              exportSelected: { FolderPanels.exportSelected(model, format: exportFormat) },
+                              cancelBatch: { model.cancelBatch() })
+                    .equatable()
+                    .id(textSize)
+                Divider()
+            }
             canvas
             Divider()
             InspectorView(model: model, selectedMask: $selectedMask)
+                .id(textSize)
         }
         .frame(minWidth: 1080, minHeight: 700)
         .background(Color(nsColor: .windowBackgroundColor))
-        .navigationTitle(model.fileURL?.lastPathComponent ?? "FLX Film Lab")
-        .toolbar { toolbarContent }
+        .background { HalfTitle(model.fileURL?.lastPathComponent ?? "FLX Film Lab") }
         // A mask selected on one image means nothing on the next.
         .onChange(of: model.fileURL) { selectedMask = nil }
         // Hiding the lines puts editing down; choosing a mask or gradient to
@@ -81,13 +96,15 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             model.reloadPresets()
         }
-        .sheet(isPresented: $isNamingPreset) {
+        .sheet(isPresented: $model.showsPresetNaming) {
             PresetNameSheet(name: $presetName, taken: Set(model.presets.map(\.name))) { save in
                 if save { model.savePreset(named: presetName) }
-                isNamingPreset = false
+                model.showsPresetNaming = false
             }
         }
-        .fileImporter(isPresented: $isImporting,
+        // a new preset is first named after the film
+        .onChange(of: model.showsPresetNaming) { if model.showsPresetNaming { presetName = model.filmPack?.name ?? "" } }
+        .fileImporter(isPresented: $model.showsOpenPanel,
                       allowedContentTypes: [.rawImage, .image, UTType(filenameExtension: "dng") ?? .image],
                       allowsMultipleSelection: false) { result in
             if case .success(let urls) = result, let url = urls.first {
@@ -95,7 +112,7 @@ struct ContentView: View {
                 model.open(url: url)
             }
         }
-        .fileExporter(isPresented: $isExporting,
+        .fileExporter(isPresented: $model.showsExportPanel,
                       document: PlaceholderDocument(),
                       contentType: exportFormat.utType,
                       defaultFilename: exportFilename) { result in
@@ -105,8 +122,11 @@ struct ContentView: View {
         }
         .background {
             // Invisible shortcut host: ⌘B cycles the surround, ⌘[ and ⌘] turn
-            // the picture a quarter.
-            Group {
+            // the picture a quarter, \\ shows the original and back; off while
+            // Motion, with a \\ and a ⌘B of its own, is on screen.
+            HalfKeys {
+                Button("") { if model.hasImage { model.showOriginal.toggle() } }
+                    .keyboardShortcut("\\", modifiers: [])
                 Button("") { backgroundRaw = background.next.rawValue }
                     .keyboardShortcut("b", modifiers: .command)
                 Button("") { model.turn(clockwise: false) }
@@ -116,14 +136,21 @@ struct ContentView: View {
             }
             .opacity(0)
         }
-        .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+        .modifier(HalfDrop { providers in
             guard let provider = providers.first else { return false }
             _ = provider.loadObject(ofClass: URL.self) { url, _ in
                 guard let url else { return }
-                Task { @MainActor in model.open(url: url) }
+                Task { @MainActor in
+                    // A folder dropped opens in the sidebar, a picture on its own.
+                    if (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+                        model.openFolder(url)
+                    } else {
+                        model.open(url: url)
+                    }
+                }
             }
             return true
-        }
+        })
     }
 
     private var exportFilename: String {
@@ -138,104 +165,97 @@ struct ContentView: View {
     /// watch the preview themselves, so a finished frame redraws them alone.
     private var canvas: some View {
         PrintCanvas(model: model, preview: model.preview, selectedMask: $selectedMask,
-                    background: background, linesHidden: hideMaskLines, open: { isImporting = true })
+                    background: background, linesHidden: hideMaskLines, open: { model.showsOpenPanel = true })
             .overlay(alignment: .bottom) {
                 StatusLine(model: model, preview: model.preview, background: background)
             }
     }
 
-    // MARK: Toolbar
+}
 
-    @ToolbarContentBuilder
-    private var toolbarContent: some ToolbarContent {
-        ToolbarItem(placement: .navigation) {
-            Button { isImporting = true } label: { Label("Open", systemImage: "folder") }
-                .help("Open a RAW file")
-        }
-        ToolbarItem(placement: .navigation) {
-            Picker("", selection: $backgroundRaw) {
-                ForEach(CanvasBackground.allCases) { option in
-                    Image(systemName: option.symbol).tag(option.rawValue)
-                }
-            }
-            .pickerStyle(.segmented).labelsHidden().frame(width: 108)
-            .help("Surround: dark, middle grey or white. Brightness and colour are judged against their surround — the same print reads heavy against white and washed against black. ⌘B cycles.")
-        }
-        // One group, so the presets always sit with Copy and Paste.
-        ToolbarItemGroup {
-            ControlGroup {
-                Button { model.copySettings() } label: { Label("Copy Settings", systemImage: "doc.on.doc") }
-                    .keyboardShortcut("c", modifiers: [.command, .shift])
-                    .disabled(!model.canCopySettings)
-                    .help("Copy this image's settings to paste onto another (⇧⌘C): film, paper, filter, every slider and auto, and white balance.")
-                Button { model.pasteSettings() } label: { Label("Paste Settings", systemImage: "doc.on.clipboard") }
-                    .keyboardShortcut("v", modifiers: [.command, .shift])
-                    .disabled(!model.canPasteSettings)
-                    .help(model.copiedSettings.map {
-                        "Paste the settings copied from \($0.source) (⇧⌘V). This image keeps its own masks, gradients and crop."
-                    } ?? "Copy an image's settings first (⇧⌘C), then paste them onto another.")
-            }
-            presetsMenu
-        }
-        ToolbarItem {
-            Toggle(isOn: $model.isCropping) { Label("Crop", systemImage: "crop") }
-                .keyboardShortcut("r", modifiers: .command)
-                .disabled(!model.hasImage)
-                .help("Crop, turn and level the print (⌘R): the whole frame shows with the crop on it. Return keeps the crop, Escape goes back.")
-        }
-        ToolbarItem {
-            Toggle(isOn: $hideMaskLines) { Label("Hide Mask Lines", systemImage: "eye.slash") }
-                .keyboardShortcut("h", modifiers: [.command, .shift])
-                .disabled(!model.hasImage)
-                .help("Hide the lines of the masks and gradients (⇧⌘H), to see the print without them: they still act. Choosing one to edit shows them again.")
-        }
-        ToolbarItem {
-            Toggle(isOn: $model.loupeOn) { Label("Loupe", systemImage: "magnifyingglass") }
-                .keyboardShortcut("l", modifiers: .command)
-                .disabled(!model.hasImage)
-                .help("The print at 100% (⌘L), as the export will have it: drag the loupe over the print. While it is open the picture is held at full size.")
-        }
-        ToolbarItem {
-            ToolbarChoice(selection: $exportFormat)
-                .help("The format Export writes.")
-        }
-        ToolbarItem {
-            Button { isExporting = true } label: { Label("Export", systemImage: "square.and.arrow.up") }
-                .disabled(!model.canExport)
-                .help("Render at full resolution and write to disk. Waits until the image on screen has finished loading.")
+// MARK: - The toolbar's Stills items
+
+/// What the window's toolbar (`WindowToolbar`, FLXFilmLabApp.swift) shows for
+/// Stills, item by item, in the places Motion's own (`MotionBar`) take in
+/// Motion. Each watches only what it shows; the panels they ask for are
+/// ContentView's.
+enum StillsBar {
+    static let surroundHelp = "Surround: dark, middle grey or white. Brightness and colour are judged against their surround — the same print reads heavy against white and washed against black. ⌘B cycles."
+
+    struct OpenItem: View {
+        let model: DocumentModel
+        var body: some View {
+            Button { model.showsOpenPanel = true } label: { Label("Open", systemImage: "folder") }
+                .help("Open a RAW file; the sidebar shows the pictures of its folder. Open Folder (⇧⌘O) opens a folder.")
         }
     }
 
-    /// Saved settings: choose one to put it on the image on screen.
-    private var presetsMenu: some View {
-        Menu {
-            ForEach(model.presets) { preset in
-                Button(preset.name) { model.applyPreset(preset) }
-                    .disabled(!model.canCopySettings)
+    /// The presets, Crop, Original and Loupe, one item, where Motion has Log
+    /// footage. (Copy and Paste, before them, are the window's: `CopyButton`.)
+    struct ViewItem: View {
+        @ObservedObject var model: DocumentModel
+        var body: some View {
+            HStack(spacing: 0) {
+                presetsMenu
+                Toggle(isOn: $model.isCropping) { Label("Crop", systemImage: "crop") }
+                    .keyboardShortcut("r", modifiers: .command)
+                    .disabled(!model.hasImage)
+                    .help("Crop, turn and level the print (⌘R): the whole frame shows with the crop on it. Return keeps the crop, Escape goes back.")
+                Toggle(isOn: $model.showOriginal) { Label("Original", systemImage: "square.split.2x1") }
+                    .disabled(!model.hasImage)
+                    .help("The picture before film and paper (\\): the RAW as macOS renders it, as shot, in the print's place. Again for the print.")
+                Toggle(isOn: $model.loupeOn) { Label("Loupe", systemImage: "magnifyingglass") }
+                    .keyboardShortcut("l", modifiers: .command)
+                    .disabled(!model.hasImage)
+                    .help("The print at 100% (⌘L), as the export will have it: drag the loupe over the print. While it is open the picture is held at full size.")
             }
-            if model.presets.isEmpty {
-                Text("No presets yet")
-            }
-            Divider()
-            Button("Save Settings as Preset…") {
-                presetName = model.filmPack?.name ?? ""
-                isNamingPreset = true
-            }
-            .disabled(!model.canCopySettings)
-            if !model.presets.isEmpty {
-                Menu("Delete Preset") {
-                    ForEach(model.presets) { preset in
-                        Button(preset.name) { model.deletePreset(preset) }
+        }
+
+        /// Saved settings: choose one to put it on the image on screen.
+        private var presetsMenu: some View {
+            Menu {
+                ForEach(model.presets) { preset in
+                    Button(preset.name) { model.applyPreset(preset) }
+                        .disabled(!model.hasImage || model.isBusy)
+                }
+                if model.presets.isEmpty {
+                    Text("No presets yet")
+                }
+                Divider()
+                Button("Save Settings as Preset…") { model.showsPresetNaming = true }
+                    .disabled(!model.hasImage || model.isBusy)
+                if !model.presets.isEmpty {
+                    Menu("Delete Preset") {
+                        ForEach(model.presets) { preset in
+                            Button(preset.name) { model.deletePreset(preset) }
+                        }
                     }
                 }
+                Button("Show Presets in Finder") {
+                    if let folder = model.presetsFolder() { NSWorkspace.shared.open(folder) }
+                }
+            } label: {
+                Label("Presets", systemImage: "film.stack")
             }
-            Button("Show Presets in Finder") {
-                if let folder = model.presetsFolder() { NSWorkspace.shared.open(folder) }
-            }
-        } label: {
-            Label("Presets", systemImage: "film.stack")
+            .help("Presets: settings saved by name, to put on any image later, in this session or another. A preset holds what Copy Settings copies; the image it is put on keeps its own masks, gradients and crop.")
         }
-        .help("Presets: settings saved by name, to put on any image later, in this session or another. A preset holds what Copy Settings copies; the image it is put on keeps its own masks, gradients and crop.")
+    }
+
+    struct FormatItem: View {
+        @AppStorage("exportFormat") private var exportFormat: Exporter.Format = .tiff16
+        var body: some View {
+            ToolbarChoice(selection: $exportFormat)
+                .help("The format Export writes.")
+        }
+    }
+
+    struct ExportItem: View {
+        @ObservedObject var model: DocumentModel
+        var body: some View {
+            Button { model.showsExportPanel = true } label: { Label("Export", systemImage: "square.and.arrow.up") }
+                .disabled(!model.hasImage || model.isBusy)
+                .help("Render at full resolution and write to disk. Waits until the image on screen has finished loading.")
+        }
     }
 }
 
@@ -254,7 +274,10 @@ private struct PrintCanvas: View {
             background.color
                 .animation(.easeInOut(duration: 0.18), value: background)
 
-            if let image = preview.image {
+            if let print = preview.image {
+                // the original in the print's place while it is shown, alone
+                let original = model.showOriginal ? model.originalImage : nil
+                let image = original ?? print
                 GeometryReader { geo in
                     let fitted = fit(imageSize: CGSize(width: image.width, height: image.height),
                                      into: geo.size)
@@ -268,7 +291,9 @@ private struct PrintCanvas: View {
                             .shadow(color: .black.opacity(background.isLight ? 0.22 : 0.5),
                                     radius: background.isLight ? 10 : 18, y: 5)
 
-                        if model.isCropping {
+                        if original != nil {
+                            EmptyView()
+                        } else if model.isCropping {
                             CropOverlay(model: model, preview: preview, size: fitted,
                                         onLightBackground: background.isLight)
                         } else {
@@ -283,7 +308,7 @@ private struct PrintCanvas: View {
                     }
                     .frame(width: geo.size.width, height: geo.size.height)
                     .overlay {
-                        if model.loupeOn, !model.isCropping {
+                        if model.loupeOn, !model.isCropping, original == nil {
                             LoupeView(model: model, preview: preview,
                                       print: CGRect(x: (geo.size.width - fitted.width) / 2,
                                                     y: (geo.size.height - fitted.height) / 2,
@@ -293,7 +318,18 @@ private struct PrintCanvas: View {
                     .coordinateSpace(name: "canvas")
                 }
                 .padding(28)
-                .overlay(alignment: .top) { if model.isCropping { cropBar } }
+                .overlay(alignment: .top) {
+                    if original != nil {
+                        Text("Original")
+                            .font(.system(size: 11, weight: .semibold))
+                            .padding(.horizontal, 10).padding(.vertical, 4)
+                            .background(.ultraThinMaterial, in: Capsule())
+                            .help("The RAW as macOS renders it, as shot, before film and paper. \\ or the toolbar's Original for the print.")
+                            .padding(.top, 8)
+                    } else if model.isCropping {
+                        cropBar
+                    }
+                }
             } else {
                 VStack(spacing: 10) {
                     Image(systemName: "camera.aperture")
@@ -361,16 +397,13 @@ private struct StatusLine: View {
     var body: some View {
         HStack(spacing: 10) {
             Text(model.status)
-            if preview.milliseconds > 0 {
-                Text(String(format: "%.0f ms", preview.milliseconds))
-                    .foregroundStyle(.tertiary)
-            }
-            if model.isDecoding {
+            if model.isBusy && model.isDecoding {
                 Text("decoding…").foregroundStyle(.orange.opacity(0.9))
             }
-            if preview.isRendering || model.isDecoding {
-                ProgressView().controlSize(.small).scaleEffect(0.55).frame(width: 12, height: 12)
-            }
+            // Its place kept whether it turns or not, so the line does not
+            // change width with every frame.
+            ProgressView().controlSize(.small).scaleEffect(0.55).frame(width: 12, height: 12)
+                .opacity(preview.isRendering || (model.isBusy && model.isDecoding) ? 1 : 0)
         }
         .font(.system(size: 10, design: .monospaced))
         .foregroundStyle(.secondary)
@@ -425,5 +458,56 @@ private struct PlaceholderDocument: FileDocument {
     init(configuration: ReadConfiguration) throws {}
     func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
         FileWrapper(regularFileWithContents: Data())
+    }
+}
+
+/// The folder choosers of Open Folder and Export Selected, for the toolbar,
+/// the sidebar and the menus alike.
+@MainActor
+enum FolderPanels {
+    static func openFolder(_ model: DocumentModel) {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.prompt = "Open Folder"
+        panel.message = "Choose a folder of pictures"
+        if panel.runModal() == .OK, let url = panel.url { model.openFolder(url) }
+    }
+
+    static func exportSelected(_ model: DocumentModel, format: Exporter.Format) {
+        let count = model.browser.selectedForBatch.count
+        guard count > 0, model.browser.batch == nil else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Export Here"
+        panel.message = "Choose where the \(count) print\(count == 1 ? "" : "s") go, as \(format.rawValue)"
+        if panel.runModal() == .OK, let url = panel.url { model.exportSelected(to: url, format: format) }
+    }
+}
+
+/// The surround in the toolbar: three symbols in a segmented control. A view
+/// of its own, equal to itself while the choice is, so the toolbar's being
+/// built again at every change to the document leaves it alone. Updated while
+/// a click or a key was being handled, it was laid out at its ideal width for
+/// a moment and its symbols shifted sideways and back.
+struct SurroundPicker<Choice: Hashable & Identifiable>: View, Equatable {
+    let choices: [Choice]
+    let selection: Choice
+    let symbol: (Choice) -> String
+    let help: String
+    let choose: (Choice) -> Void
+
+    nonisolated static func == (a: SurroundPicker, b: SurroundPicker) -> Bool {
+        MainActor.assumeIsolated { a.choices == b.choices && a.selection == b.selection && a.help == b.help }
+    }
+
+    var body: some View {
+        Picker("", selection: Binding(get: { selection }, set: choose)) {
+            ForEach(choices) { Image(systemName: symbol($0)).tag($0) }
+        }
+        .pickerStyle(.segmented).labelsHidden().frame(width: 108)
+        .help(help)
     }
 }

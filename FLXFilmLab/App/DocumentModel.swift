@@ -23,17 +23,37 @@ import CoreGraphics
 @MainActor
 final class DocumentModel: ObservableObject {
 
-    /// Everything that belongs to one image.
-    struct ImageEdits: Equatable {
+    /// Everything that belongs to one image. Codable for the library and the
+    /// sidecars (`ImageLibrary`); every key but the recipe optional, so a file
+    /// written by an earlier build still reads.
+    struct ImageEdits: Equatable, Codable {
         var recipe: Recipe
         var whiteBalance: RawLoader.WhiteBalance
         var customTemperature: Double
         var customTint: Double
+
+        init(recipe: Recipe, whiteBalance: RawLoader.WhiteBalance, customTemperature: Double, customTint: Double) {
+            self.recipe = recipe
+            self.whiteBalance = whiteBalance
+            self.customTemperature = customTemperature
+            self.customTint = customTint
+        }
+
+        private enum CodingKeys: String, CodingKey { case recipe, whiteBalance, customTemperature, customTint }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            recipe = try c.decode(Recipe.self, forKey: .recipe)
+            whiteBalance = try c.decodeIfPresent(RawLoader.WhiteBalance.self, forKey: .whiteBalance) ?? .filmReference
+            customTemperature = try c.decodeIfPresent(Double.self, forKey: .customTemperature) ?? 5500
+            customTint = try c.decodeIfPresent(Double.self, forKey: .customTint) ?? 0
+        }
     }
 
     @Published var recipe = Recipe() {
         didSet {
             edited { $0.recipe = oldValue }
+            scheduleRecord()
             guard !applyingEdits else { return }
             // The film's reference illuminant sets the decode white balance, so
             // changing stock in that mode means re-decoding.
@@ -61,26 +81,59 @@ final class DocumentModel: ObservableObject {
     /// opened file has decoded.
     @Published private(set) var fileURL: URL?
     /// A file that has been opened but not yet decoded.
-    @Published private(set) var pendingURL: URL?
+    @Published private(set) var pendingURL: URL? {
+        didSet { updateBusy() }
+    }
     @Published var whiteBalance: RawLoader.WhiteBalance = .filmReference {
         didSet {
             edited { $0.whiteBalance = oldValue }
+            scheduleRecord()
             if !applyingEdits, oldValue != whiteBalance { syncSource() }
         }
     }
     @Published var customTemperature: Double = 5500 {
         didSet {
             edited { $0.customTemperature = oldValue }
+            scheduleRecord()
             if !applyingEdits, whiteBalance == .custom { syncSource() }
         }
     }
     @Published var customTint: Double = 0 {
         didSet {
             edited { $0.customTint = oldValue }
+            scheduleRecord()
             if !applyingEdits, whiteBalance == .custom { syncSource() }
         }
     }
-    @Published var showOriginal = false
+    /// Before and after (Original, \): the RAW as macOS renders it, as
+    /// shot, in the print's place. Decoded the first time it is asked for, for
+    /// the picture on screen alone (0.07-0.4 s at 2560 px on an M4 Pro, 17 MB),
+    /// placed again when the crop or the turn moves; nothing at all until then.
+    @Published var showOriginal = false {
+        didSet {
+            guard oldValue != showOriginal else { return }
+            if showOriginal {
+                updateOriginal()
+            } else {
+                originalDecode?.cancel()
+                originalPlacing?.cancel()
+                originalImage = nil
+            }
+        }
+    }
+    /// The original in the print's place, while it is shown.
+    @Published private(set) var originalImage: CGImage?
+    /// The panels the window's toolbar asks for, which ContentView puts up:
+    /// Open's, Export's, and the sheet that names a new preset. The toolbar is
+    /// the window's (RootView's), the same for both halves, not ContentView's.
+    @Published var showsOpenPanel = false
+    @Published var showsExportPanel = false
+    @Published var showsPresetNaming = false
+    /// The original of the picture on screen, whole, at the preview's size.
+    private var originalFrame: (url: URL, longEdge: Int, image: CGImage)?
+    private var originalDecode: Task<Void, Never>?
+    private var originalPlacing: Task<Void, Never>?
+    private var originalWatch: [AnyCancellable] = []
     var lastRenderMilliseconds: Double { preview.milliseconds }
     /// What the meters read, for the controls whose auto is on. The sliders
     /// show these while their auto is on.
@@ -90,7 +143,35 @@ final class DocumentModel: ObservableObject {
     /// The recipe as last rendered, with the meters' choices filled in: the
     /// print actually being made. No view shows it, so it is not published.
     private(set) var resolvedRecipe: Recipe?
-    @Published private(set) var isDecoding = false
+    @Published private(set) var isDecoding = false {
+        didSet { updateBusy() }
+    }
+    /// A decode or an open that has taken long enough to show, 0.3 s: what the
+    /// toolbar, the status line and the white balance's note wait for, so that
+    /// stepping through pictures decoded ahead, a few ms each, does not flash
+    /// them. Export and Copy Settings still refuse for as long as one is under
+    /// way (`canExport`, `canCopySettings`).
+    @Published private(set) var isBusy = false
+    private var busyTask: Task<Void, Never>?
+
+    private func updateBusy() {
+        guard pendingURL != nil || isDecoding else {
+            busyTask?.cancel()
+            busyTask = nil
+            if isBusy { isBusy = false }
+            if status.hasPrefix("Opening ") { status = statusLine }
+            return
+        }
+        guard busyTask == nil, !isBusy else { return }
+        busyTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard let self, !Task.isCancelled else { return }
+            self.busyTask = nil
+            guard self.pendingURL != nil || self.isDecoding else { return }
+            self.isBusy = true
+            if let pending = self.pendingURL { self.status = "Opening \(pending.lastPathComponent)…" }
+        }
+    }
 
     /// Longest edge of the interactive proxy, one of `previewSizes`. At 2560,
     /// big enough to judge tone and colour, small enough that a print control
@@ -109,7 +190,7 @@ final class DocumentModel: ObservableObject {
     private let defaults: UserDefaults
 
     /// One decode: the file and every option that changes its pixels.
-    struct DecodeKey: Equatable {
+    struct DecodeKey: Hashable {
         var url: URL
         var whiteBalance: RawLoader.WhiteBalance
         var referenceIlluminant: String
@@ -129,7 +210,8 @@ final class DocumentModel: ObservableObject {
         var sourceID: Int
         var width: Int
         var height: Int
-        var camera: String
+        /// The photograph's settings in one line: the status (`PhotoLine`).
+        var photo: String
     }
 
     private let engine: RenderEngine?
@@ -154,7 +236,30 @@ final class DocumentModel: ObservableObject {
     private var renderInFlight = false
     private var renderAgain = false
 
-    init(presetStore: PresetStore = PresetStore(), defaults: UserDefaults = .standard) {
+    /// Each picture's own settings and flag, kept between launches.
+    let library: ImageLibrary
+    /// The folder in the sidebar, its selection and flags.
+    let browser = FolderBrowser()
+    /// What each picture opened with this session: one whose edits still
+    /// equal these has nothing of its own to keep in the library.
+    private var openedWith: [URL: ImageEdits] = [:]
+    /// The picture on screen and the two either side of it in the sidebar,
+    /// decoded at the preview's size, so stepping to a neighbour shows it at
+    /// once. The one on screen shares its pixels with the engine.
+    private var decoded: [DecodeKey: RawLoader.Decoded] = [:]
+    private var prefetchTask: Task<Void, Never>?
+    /// The pictures visited, the most recent last: only the last
+    /// `historiesKept` keep their undo history, so a session through hundreds
+    /// of pictures does not hold hundreds of histories.
+    private var visited: [URL] = []
+    static let historiesKept = 30
+    private var recordTask: Task<Void, Never>?
+    private var printTask: Task<Void, Never>?
+    private var memoryPressure: DispatchSourceMemoryPressure?
+    private var batchCancel: BatchCancel?
+
+    init(presetStore: PresetStore = PresetStore(), defaults: UserDefaults = .standard,
+         library: ImageLibrary? = nil) {
         self.defaults = defaults
         let saved = defaults.integer(forKey: Self.previewSizeKey)
         proxyMaxDimension = Self.previewSizes.contains(saved) ? saved : Self.defaultPreviewSize
@@ -163,6 +268,55 @@ final class DocumentModel: ObservableObject {
         if case .failure(let error) = made { errorMessage = error.localizedDescription }
         self.presetStore = presetStore
         presets = presetStore.load()
+        self.library = library ?? ImageLibrary(defaults: defaults)
+        browser.library = self.library
+        browser.ownEdits = { [weak self] url in self?.ownEdits(url) }
+        // The original follows the picture on screen and the print's shape.
+        // @Published sends before it sets: the new map is the one passed.
+        originalWatch = [
+            preview.$map
+                .removeDuplicates { a, b in
+                    a?.sourceSize == b?.sourceSize && a?.crop == b?.crop && a?.sourceToOutput == b?.sourceToOutput
+                }
+                .sink { [weak self] map in
+                    MainActor.assumeIsolated {
+                        guard let self, self.showOriginal, let frame = self.originalFrame,
+                              frame.url == self.fileURL else { return }
+                        if frame.longEdge != self.proxyMaxDimension {
+                            self.updateOriginal()
+                        } else {
+                            self.placeOriginal(frame.image, url: frame.url, map: map)
+                        }
+                    }
+                },
+            $fileURL
+                .removeDuplicates()
+                .sink { [weak self] url in
+                    MainActor.assumeIsolated {
+                        guard let self, url != self.originalFrame?.url else { return }
+                        // never the last picture's original over this one's print
+                        self.originalImage = nil
+                        self.originalFrame = nil
+                        self.updateOriginal(url: url)
+                    }
+                },
+        ]
+        // Short of memory, the neighbours' decodes and the sidebar's pictures
+        // go first.
+        let pressure = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
+        pressure.setEventHandler { [weak self] in
+            MainActor.assumeIsolated { self?.memoryRanShort() }
+        }
+        pressure.activate()
+        memoryPressure = pressure
+        NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil,
+                                               queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.recordCurrent()
+                self?.library.save(wait: true)
+                self?.library.finishWriting()
+            }
+        }
     }
 
     var hasImage: Bool { loaded != nil }
@@ -179,14 +333,18 @@ final class DocumentModel: ObservableObject {
 
     // MARK: - Opening
 
-    func open(url: URL) {
+    func open(url given: URL) {
+        let url = FolderBrowser.canonical(given)
         errorMessage = nil
+        showFolder(of: url)
         if url == fileURL {
             // Back to the image already on screen: forget a pending open.
             pendingURL = nil
         } else {
             pendingURL = url
-            status = "Opening \(url.lastPathComponent)…"
+            // The sidebar marks it at once; the status line says so only if
+            // it takes a while (`isBusy`).
+            browser.current = url
         }
         syncSource()
     }
@@ -201,6 +359,7 @@ final class DocumentModel: ObservableObject {
     private func edits(for url: URL) -> ImageEdits {
         if url == fileURL { return currentEdits }
         if let remembered = editsByImage[url] { return remembered }
+        if let saved = library.record(for: url)?.edits { return saved }
         let fresh = recipe.carryingLook()
         return ImageEdits(recipe: fresh, whiteBalance: .filmReference,
                           customTemperature: 5500, customTint: 0)
@@ -238,6 +397,13 @@ final class DocumentModel: ObservableObject {
         let generation = sourceGeneration
         isDecoding = true
         decodeTask?.cancel()
+        if let ready = decoded[key] {
+            // Decoded ahead of time, as a neighbour: no settle, no decode.
+            decodeTask = Task { [weak self] in
+                await self?.finishDecode(.success(ready), key: key, generation: generation)
+            }
+            return
+        }
         decodeTask = Task { [weak self] in
             // A short settle so dragging the temperature slider decodes once at
             // the end instead of once per tick — a RAW decode is ~0.5 s, far
@@ -264,16 +430,18 @@ final class DocumentModel: ObservableObject {
                 // A new file that will not open changes nothing: the image on
                 // screen stays, with its edits.
                 pendingURL = nil
+                browser.current = fileURL
                 errorMessage = "Could not open \(key.url.lastPathComponent): \(error.localizedDescription)"
                 status = statusLine
             } else {
                 errorMessage = error.localizedDescription
                 status = "Could not decode \(key.url.lastPathComponent)"
             }
-        case .success(let decoded):
+        case .success(let picture):
             guard let engine else { return }
-            let sourceID = await engine.setSource(decoded, grainSeed: Renderer.grainSeed(for: key.url))
-            adopt(decoded, key: key, sourceID: sourceID)
+            let sourceID = await engine.setSource(picture, grainSeed: Renderer.grainSeed(for: key.url))
+            decoded[key] = picture
+            adopt(picture, key: key, sourceID: sourceID)
         }
     }
 
@@ -286,12 +454,23 @@ final class DocumentModel: ObservableObject {
         if key.url != fileURL {
             // Switching images: put the outgoing one's edits and undo history
             // away and bring the incoming one's out, all at once.
+            if let outgoing = fileURL {
+                recordCurrent()
+                keepPrint(of: outgoing)
+            }
             let steps = history.swap(for: historyByImage.removeValue(forKey: key.url) ?? .init())
             if let outgoing = fileURL {
                 editsByImage[outgoing] = currentEdits
                 historyByImage[outgoing] = steps
+                visited.removeAll { $0 == outgoing }
+                visited.append(outgoing)
+                if visited.count > Self.historiesKept {
+                    for old in visited.prefix(visited.count - Self.historiesKept) { historyByImage[old] = nil }
+                    visited.removeFirst(visited.count - Self.historiesKept)
+                }
             }
             let incoming = edits(for: key.url)
+            if openedWith[key.url] == nil { openedWith[key.url] = incoming }
             history.unrecorded {
                 applyingEdits = true
                 recipe = incoming.recipe
@@ -302,28 +481,31 @@ final class DocumentModel: ObservableObject {
                 applyingEdits = false
             }
             fileURL = key.url
+            browser.current = key.url
             if pendingURL == key.url { pendingURL = nil }
-            // Readings from the previous image must not show on this one's
-            // sliders while its first frame renders.
-            meteredExposureEV = nil
-            meteredBrightness = nil
-            meteredGrade = nil
+            // The previous image's readings stay on the sliders until this
+            // one's first frame brings its own, a few ms later: blanked, the
+            // auto sliders jumped twice at every picture stepped to.
             resolvedRecipe = nil
         }
-        let camera = [decoded.cameraMake, decoded.cameraModel].compactMap { $0 }.joined(separator: " ")
+        let photo = PhotoLine.text(camera: PhotoLine.camera(make: decoded.cameraMake, model: decoded.cameraModel),
+                                   focalLength: decoded.focalLength, shutter: decoded.exposureTime, iso: decoded.iso)
         loaded = Loaded(key: key, sourceID: sourceID, width: decoded.width, height: decoded.height,
-                        camera: camera)
+                        photo: photo)
         status = statusLine
         syncLoupe()
         // The incoming edits may want a different decode (their own white
         // balance, or a stock with another reference illuminant).
         syncSource()
         scheduleRender()
+        prefetchNeighbours()
     }
 
+    /// The photograph as its camera took it: the camera, the focal length,
+    /// the shutter speed and the ISO, as far as the file says (`PhotoLine`).
     private var statusLine: String {
         guard let loaded else { return "Open a RAW file to begin" }
-        return "\(loaded.width)x\(loaded.height)" + (loaded.camera.isEmpty ? "" : "  ·  \(loaded.camera)")
+        return loaded.photo
     }
 
     // MARK: - Stocks
@@ -345,7 +527,9 @@ final class DocumentModel: ObservableObject {
         var source: String
     }
 
-    @Published private(set) var copiedSettings: CopiedSettings?
+    @Published private(set) var copiedSettings: CopiedSettings? {
+        didSet { browser.hasCopiedSettings = copiedSettings != nil }
+    }
 
     var canCopySettings: Bool { fileURL != nil && pendingURL == nil }
     var canPasteSettings: Bool { copiedSettings != nil && canCopySettings }
@@ -447,7 +631,7 @@ final class DocumentModel: ObservableObject {
     /// What the decode is actually balanced for, so the setting is never a
     /// guess about whether it took effect.
     var whiteBalanceSummary: String {
-        if isDecoding { return "decoding…" }
+        if isBusy && isDecoding { return "decoding…" }
         switch whiteBalance {
         case .filmReference:
             let name = filmPack?.referenceIlluminant ?? "D55"
@@ -516,9 +700,13 @@ final class DocumentModel: ObservableObject {
                 if meteredBrightness != output.metered.brightness { meteredBrightness = output.metered.brightness }
                 if meteredGrade != output.metered.grade { meteredGrade = output.metered.grade }
                 requestLoupe()
+                schedulePrintKeep()
             }
         case .failure(let error):
             errorMessage = error.localizedDescription
+            meteredExposureEV = nil
+            meteredBrightness = nil
+            meteredGrade = nil
         }
         if renderAgain || sourceID != loaded?.sourceID {
             renderAgain = false
@@ -542,29 +730,325 @@ final class DocumentModel: ObservableObject {
             // Exactly the values on screen, metered on the same decode.
             let resolved = try await engine.resolve(recipe).recipe
             try await Task.detached(priority: .userInitiated) {
-                let full = try RawLoader.load(url: source, options: options)
-                let renderer = try Renderer()
-                renderer.setImage(full.pixels, width: full.width, height: full.height)
-                renderer.grainSeed = Renderer.grainSeed(for: source)
-                let setup = try RenderSetupBuilder.build(recipe: resolved,
-                                                         exposureEV: Float(resolved.exposureEV))
-                let masks = resolved.masks.filter { $0.enabled }
-                if !masks.isEmpty {
-                    renderer.setDodgeBurnMap(
-                        MaskRasterizer.rasterize(masks: masks, width: full.width, height: full.height))
-                }
-                _ = try renderer.render(setup: setup, recipe: resolved)
-                guard let linear = renderer.readLinear() else { throw Exporter.ExportError.renderFailed }
-                try Exporter.write(linear: linear, width: Int(renderer.outputSize.width),
-                                   height: Int(renderer.outputSize.height),
-                                   to: url, format: format, colorSpace: resolved.outputColorSpace,
-                                   metadata: RawLoader.metadata(of: source),
-                                   provenance: Exporter.Provenance(recipe: resolved))
+                try Self.printFullSize(source, options: options, resolved: resolved, to: url, format: format)
             }.value
             status = "Exported \(url.lastPathComponent)"
         } catch {
             errorMessage = error.localizedDescription
             status = statusLine
+        }
+    }
+
+    // MARK: - The folder, flags and batches
+
+    /// Open a folder: its pictures in the sidebar, and the first of them on
+    /// screen, unless the picture on screen is one of them.
+    func openFolder(_ given: URL) {
+        let folder = FolderBrowser.canonical(given)
+        errorMessage = nil
+        list(folder)
+        guard let first = browser.shown.first?.url ?? browser.items.first?.url else {
+            status = "No pictures in \(folder.lastPathComponent)"
+            return
+        }
+        if let current = fileURL, browser.items.contains(where: { $0.url == current }) {
+            browser.selection = [current]
+            return
+        }
+        browser.selection = [first]
+        open(url: first)
+    }
+
+    /// The sidebar lists the folder of the picture opened, with it selected.
+    private func showFolder(of url: URL) {
+        let folder = url.deletingLastPathComponent()
+        if browser.folder?.standardizedFileURL != folder.standardizedFileURL { list(folder) }
+        if !browser.selection.contains(url) { browser.selection = [url] }
+    }
+
+    private func list(_ folder: URL) {
+        let items = FolderBrowser.listing(folder)
+        let records = library.load(folder, files: items.map { ($0.url, $0.size) })
+        browser.show(folder, items: items, records: records)
+        prefetchNeighbours()
+    }
+
+    /// A picture's own settings, if it has any: none for one that would open
+    /// with the look on screen.
+    private func ownEdits(_ url: URL) -> ImageEdits? {
+        guard browser.edited.contains(url) else { return nil }
+        if url == fileURL { return currentEdits }
+        return editsByImage[url] ?? library.record(for: url)?.edits
+    }
+
+    /// The edits of the picture on screen go into the library once they have
+    /// settled, if they are its own: changed since it opened, or already kept.
+    private func scheduleRecord() {
+        recordTask?.cancel()
+        recordTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(800))
+            guard !Task.isCancelled else { return }
+            self?.recordCurrent()
+        }
+    }
+
+    private func recordCurrent() {
+        recordTask?.cancel()
+        recordTask = nil
+        guard let url = fileURL else { return }
+        let edits = currentEdits
+        if let kept = library.record(for: url)?.edits {
+            guard kept != edits else { return }
+        } else {
+            guard let opened = openedWith[url], opened != edits else { return }
+        }
+        library.update(url) { $0.edits = edits }
+        browser.markEdited(url)
+    }
+
+    /// The print on screen, shrunk, as the sidebar's picture of a picture with
+    /// settings of its own, once the frames have stopped coming.
+    private func schedulePrintKeep() {
+        printTask?.cancel()
+        printTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(1500))
+            guard !Task.isCancelled, let self, let url = self.fileURL else { return }
+            self.keepPrint(of: url)
+        }
+    }
+
+    private func keepPrint(of url: URL) {
+        guard url == fileURL, browser.edited.contains(url), !isCropping, !showOriginal, !preview.isRendering,
+              let image = preview.image else { return }
+        browser.thumbnails.setPrint(image, for: url, edits: currentEdits)
+    }
+
+    /// Decode the pictures either side of the one on screen, at the preview's
+    /// size, after it has had its first frame; keep no other decodes.
+    private func prefetchNeighbours() {
+        prefetchTask?.cancel()
+        guard let current = fileURL else { return }
+        let neighbours = [browser.neighbour(of: current, offset: 1), browser.neighbour(of: current, offset: -1)]
+            .compactMap { $0 }.filter { $0 != current }
+        let wanted = neighbours.map { decodeKey(for: $0) }
+        let keep = Set(wanted + [loaded?.key, requested].compactMap { $0 })
+        decoded = decoded.filter { keep.contains($0.key) }
+        let missing = wanted.filter { decoded[$0] == nil }
+        guard !missing.isEmpty else { return }
+        prefetchTask = Task { [weak self] in
+            for key in missing {
+                try? await Task.sleep(for: .milliseconds(150))
+                if Task.isCancelled { return }
+                let picture = await Task.detached(priority: .utility) {
+                    try? RawLoader.load(url: key.url, options: key.options)
+                }.value
+                guard let self, !Task.isCancelled else { return }
+                if let picture { self.decoded[key] = picture }
+            }
+        }
+    }
+
+    /// The pictures decoded ahead of time, and how many undo histories are
+    /// kept, for the tests.
+    var prefetchedPictures: Set<URL> { Set(decoded.keys.map(\.url)) }
+    var historiesHeld: Int { historyByImage.count }
+
+    private func memoryRanShort() {
+        prefetchTask?.cancel()
+        decoded = decoded.filter { $0.key == loaded?.key }
+        browser.thumbnails.trim()
+        if !showOriginal { originalFrame = nil }
+    }
+
+    /// The original of the picture on screen, decoded once for it, then put
+    /// in the print's place as the print stands when the decode is done.
+    private func updateOriginal(url givenURL: URL? = nil) {
+        guard showOriginal, let url = givenURL ?? fileURL else { return }
+        let longEdge = proxyMaxDimension
+        if let frame = originalFrame, frame.url == url, frame.longEdge == longEdge {
+            placeOriginal(frame.image, url: url)
+            return
+        }
+        originalDecode?.cancel()
+        originalDecode = Task { [weak self] in
+            let frame = await Task.detached(priority: .userInitiated) {
+                RawLoader.original(url: url, longEdge: longEdge)
+            }.value
+            guard let self, !Task.isCancelled, self.showOriginal, self.fileURL == url, let frame else { return }
+            self.originalFrame = (url, longEdge, frame)
+            self.placeOriginal(frame, url: url)
+        }
+    }
+
+    /// The decoded original turned, levelled and cropped as the print is.
+    private func placeOriginal(_ frame: CGImage, url: URL, map given: GeometryMap? = nil) {
+        guard let map = given ?? preview.map else { return }
+        originalPlacing?.cancel()
+        originalPlacing = Task { [weak self] in
+            let placed = await Task.detached(priority: .userInitiated) { RawLoader.placed(frame, on: map) }.value
+            guard let self, !Task.isCancelled, self.showOriginal, self.fileURL == url else { return }
+            self.originalImage = placed
+        }
+    }
+
+    /// Flag the selection, or the picture on screen when nothing is selected:
+    /// P, X and U in the sidebar.
+    func flagSelection(_ flag: ImageLibrary.Flag?) {
+        var targets = browser.items.map(\.url).filter { browser.selection.contains($0) }
+        if targets.isEmpty, let current = fileURL { targets = [current] }
+        self.flag(flag, for: targets)
+    }
+
+    /// Flag those pictures alone, the selection as it is: a row's button.
+    func flag(_ flag: ImageLibrary.Flag?, for urls: [URL]) {
+        for url in urls {
+            library.update(url) { $0.flag = flag }
+            browser.setFlag(flag, for: url)
+        }
+    }
+
+    /// Step to the picture `offset` places along the sidebar.
+    func showNeighbour(_ offset: Int) {
+        guard let from = fileURL ?? browser.shown.first?.url,
+              let next = browser.neighbour(of: from, offset: offset), next != fileURL else { return }
+        browser.selection = [next]
+        open(url: next)
+    }
+
+    /// Paste the copied settings onto every picture selected but the rejects,
+    /// as Paste Settings puts them on the one on screen: each keeps its own
+    /// masks, gradients and crop, and has the paste as a step of its own
+    /// history, to undo when it is on screen.
+    func pasteSettingsToSelected() {
+        guard let copied = copiedSettings?.edits else { return }
+        var changed: [(url: URL, edits: ImageEdits)] = []
+        for url in browser.selectedForBatch {
+            if url == fileURL {
+                pasteSettings()
+                continue
+            }
+            let before = edits(for: url)
+            var pasted = copied
+            pasted.recipe.masks = before.recipe.masks
+            pasted.recipe.gradients = before.recipe.gradients
+            pasted.recipe.geometry = before.recipe.geometry
+            guard pasted != before else { continue }
+            editsByImage[url] = pasted
+            historyByImage[url] = EditHistory<ImageEdits>.adding("Paste Settings", before: before, after: pasted,
+                                                                 to: historyByImage[url] ?? .init())
+            if openedWith[url] == nil { openedWith[url] = before }
+            library.update(url) { $0.edits = pasted }
+            browser.markEdited(url)
+            changed.append((url, pasted))
+        }
+        browser.thumbnails.refresh(changed)
+        prefetchNeighbours()
+    }
+
+    /// Print every picture selected but the rejects at full size into
+    /// `folder`, one after another, each with its own settings, or, never
+    /// opened, the look on screen with its autos as opening it would give it.
+    /// Each is metered on its own preview-sized decode, so it prints as it
+    /// would on screen. The names are the picture's and the film's, as
+    /// Export's; a name already taken gets a number.
+    func exportSelected(to folder: URL, format: Exporter.Format) {
+        guard browser.batch == nil else { return }
+        recordCurrent()
+        let urls = browser.selectedForBatch
+        guard !urls.isEmpty else { return }
+        var taken = Set<String>()
+        let jobs: [(url: URL, edits: ImageEdits, target: URL)] = urls.map { url in
+            let edits = edits(for: url)
+            let film = (try? PackLibrary.shared.pack(edits.recipe.filmStock))?.name
+                .replacingOccurrences(of: " ", with: "") ?? "film"
+            let stem = url.deletingPathExtension().lastPathComponent + "_" + film
+            var name = stem + "." + format.fileExtension
+            var n = 2
+            while taken.contains(name.lowercased())
+                    || FileManager.default.fileExists(atPath: folder.appendingPathComponent(name).path) {
+                name = "\(stem)-\(n).\(format.fileExtension)"
+                n += 1
+            }
+            taken.insert(name.lowercased())
+            return (url, edits, folder.appendingPathComponent(name))
+        }
+        let cancel = BatchCancel()
+        batchCancel = cancel
+        let proxy = proxyMaxDimension
+        browser.batch = .init(done: 0, total: jobs.count, current: jobs[0].url.lastPathComponent, folder: folder)
+        Task { [weak self] in
+            var failures: [String] = []
+            for (i, job) in jobs.enumerated() {
+                if cancel.isCancelled { break }
+                self?.browser.batch?.done = i
+                self?.browser.batch?.current = job.url.lastPathComponent
+                let result = await Task.detached(priority: .utility) {
+                    Result { try DocumentModel.printSelected(job.url, edits: job.edits, previewSize: proxy,
+                                                             to: job.target, format: format) }
+                }.value
+                if case .failure(let error) = result {
+                    failures.append("\(job.url.lastPathComponent): \(error.localizedDescription)")
+                }
+            }
+            self?.finishBatch(failures: failures, total: jobs.count, cancelled: cancel.isCancelled, folder: folder)
+        }
+    }
+
+    func cancelBatch() { batchCancel?.cancel() }
+
+    private func finishBatch(failures: [String], total: Int, cancelled: Bool, folder: URL) {
+        let done = browser.batch?.done ?? 0
+        browser.batch = nil
+        batchCancel = nil
+        if cancelled {
+            status = "Export stopped after \(done) of \(total)"
+        } else if failures.isEmpty {
+            status = "Exported \(total) print\(total == 1 ? "" : "s") to \(folder.lastPathComponent)"
+        } else {
+            errorMessage = "Exported \(total - failures.count) of \(total); not exported: "
+                + failures.prefix(5).joined(separator: "; ") + (failures.count > 5 ? "; …" : "")
+        }
+    }
+
+    /// One picture of a batch, as Export prints the one on screen: metered on
+    /// its decode at the preview's size, then printed at full size.
+    nonisolated static func printSelected(_ url: URL, edits: ImageEdits, previewSize: Int, to target: URL,
+                                          format: Exporter.Format) throws {
+        let film = try? PackLibrary.shared.pack(edits.recipe.filmStock)
+        var options = RawLoader.Options(whiteBalance: edits.whiteBalance,
+                                        filmReference: film?.referenceIlluminant ?? "D55",
+                                        temperature: edits.customTemperature, tint: edits.customTint,
+                                        maxDimension: previewSize)
+        let resolved = try autoreleasepool {
+            let proxy = try RawLoader.load(url: url, options: options)
+            return try RenderEngine.resolved(edits.recipe, pixels: proxy.pixels, width: proxy.width,
+                                             height: proxy.height)
+        }
+        options.maxDimension = nil
+        try printFullSize(url, options: options, resolved: resolved, to: target, format: format)
+    }
+
+    /// Decode `source` at full size and print it with `resolved`, every meter
+    /// already read, into `url`: Export's render, the batch's too.
+    nonisolated static func printFullSize(_ source: URL, options: RawLoader.Options, resolved: Recipe, to url: URL,
+                                          format: Exporter.Format) throws {
+        try autoreleasepool {
+            let full = try RawLoader.load(url: source, options: options)
+            let renderer = try Renderer()
+            renderer.setImage(full.pixels, width: full.width, height: full.height)
+            renderer.grainSeed = Renderer.grainSeed(for: source)
+            let setup = try RenderSetupBuilder.build(recipe: resolved, exposureEV: Float(resolved.exposureEV))
+            let masks = resolved.masks.filter { $0.enabled }
+            if !masks.isEmpty {
+                renderer.setDodgeBurnMap(MaskRasterizer.rasterize(masks: masks, width: full.width, height: full.height))
+            }
+            _ = try renderer.render(setup: setup, recipe: resolved)
+            guard let linear = renderer.readLinear() else { throw Exporter.ExportError.renderFailed }
+            try Exporter.write(linear: linear, width: Int(renderer.outputSize.width),
+                               height: Int(renderer.outputSize.height),
+                               to: url, format: format, colorSpace: resolved.outputColorSpace,
+                               metadata: RawLoader.metadata(of: source),
+                               provenance: Exporter.Provenance(recipe: resolved))
         }
     }
 
@@ -954,4 +1438,13 @@ final class PrintPreview: ObservableObject {
         histogram = output.histogram
         milliseconds = output.milliseconds
     }
+}
+
+/// Stops a batch between two pictures: set on the main thread, read by the
+/// batch as it goes.
+final class BatchCancel: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+    var isCancelled: Bool { lock.lock(); defer { lock.unlock() }; return cancelled }
+    func cancel() { lock.lock(); cancelled = true; lock.unlock() }
 }

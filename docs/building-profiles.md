@@ -129,6 +129,26 @@ checklist for the next one.
   kept so (`as_drawn`). A dye plot's visual neutral ("normalized dyes to form
   a visual neutral density of 1.0") is how the dyes add up to a grey, not how
   the film renders one.
+- **Lay a maker's films over each other, plot by plot.** A range sheet that
+  plots several films side by side can repeat one film's plot for another:
+  Agfa's 1998 range sheet gives APX 400 APX 100's MTF to the third decimal,
+  and APX 25 APX 100's density curve within 0.011. Where a film has a sheet
+  of its own, read it, lay the two over each other, and take each plot from
+  the film's own.
+- **A filter-factor table can be the maker's boilerplate.** Fujifilm's Acros
+  II table (2, 4 and 8 in daylight) is its Neopan 1600 sheet's, where Acros
+  II's own spectrogram gives 1.6, 2.6 and 4.2. Check a table against the
+  spectral plot, say where they disagree, and build from the plot.
+- **Where a sheet plots several developers, take the maker's own at its rated
+  time, the one its grain and resolving power are measured in,** and check
+  its speed point against the rating: Acros II's Microfine curve at 10 minutes
+  reads ISO 95 for its EI 100, its D-76 curve at the rated 7 1/4 minutes
+  ISO 137.
+- **Measure an unlabelled curve's contrast against the sheet's gamma-time
+  plot.** APX 100's density curve measures gamma 0.73, where that plot puts
+  every development the film is rated in at 0.65: it is developed further
+  than the ratings. It is taken as plotted and placed by its own speed point,
+  and the difference said.
 - **Use the sheet's ratings to check its spectral sensitivity.** A daylight and
   a tungsten rating fix how much more one light exposes the film than the
   other at equal illuminance, more exactly than a filter-factor table rounded
@@ -171,7 +191,10 @@ shift a layer's curve to hide it.
     by the maker's own range. Say it is an estimate.
 - **Sharpness.** The sheet's MTF, fitted in the bake (`slide_mtf.py`; for
   silver, `bw_mtf.py`, which fits the scatter's tail as well as its core when
-  the core alone misses a sheet's curve by more than 5%, as on Double-X).
+  the core alone misses a sheet's curve by more than 5%, as on Double-X and
+  APX 100 and 400). Without one, the film of the same resolving power: Acros
+  II, 200 and 60 lines/mm, takes T-Max 100's (200 and 63). Say it is an
+  estimate.
 
 ## Judge by eye
 

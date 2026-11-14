@@ -1,4 +1,5 @@
 #include "MotionCanvas.h"
+#include "DisplayColour.h"
 
 #include "MotionDocument.h"
 #include "Theme.h"
@@ -192,10 +193,10 @@ void MotionCanvas::layoutChildren()
 void MotionCanvas::paintEvent(QPaintEvent *)
 {
     QPainter p(this);
-    p.fillRect(rect(), surroundColour(m_surround));
+    p.fillRect(rect(), displaycolour::toScreen(surroundColour(m_surround)));
     p.setRenderHint(QPainter::Antialiasing);
     const bool light = m_surround == Surround::White;
-    const QImage &image = m_doc.image();
+    const QImage &image = m_doc.shownImage();
     const auto place = placement();
 
     if (place && !image.isNull()) {

@@ -2,8 +2,10 @@
 // what the Mac app's own checks expect (tests/app, tests/checks,
 // tests/motionapp): the paper the film picker leaves the print on
 // (Recipe.loadingFilm), for Stills and Motion alike; the film menu's groups
-// and order; instant prints' processing and frame; oval gradients; the undo
-// steps' names.
+// and order, and the films Settings leaves in it; the colour films' camera
+// filters; instant prints' processing and frame; oval gradients; the undo
+// steps' names; the library and its sidecars, read and written as the Mac app
+// reads and writes them (fixtures/, sidecars the Mac app wrote).
 //
 //   flxport-checks [--packs DIR]
 //
@@ -12,6 +14,8 @@
 
 #include "../../app/EditHistory.h"
 #include "../../app/EditNames.h"
+#include "AppSettings.h"
+#include "ImageLibrary.h"
 #include "Filters.h"
 #include "Packs.h"
 #include "Provenance.h"
@@ -22,7 +26,11 @@
 #include <QJsonDocument>
 
 #include <QCoreApplication>
+#include <QDir>
 #include <QElapsedTimer>
+#include <QFile>
+#include <QRegularExpression>
+#include <QTemporaryDir>
 #include <QThread>
 
 #include <algorithm>
@@ -91,6 +99,85 @@ void groupChecks(PackLibrary &packs)
     for (const StockGroup &g : papers)
         noInstant = noInstant && g.title != "Instant print";
     check(noInstant, "the paper picker has no instant prints");
+}
+
+// The films Settings' Films tab leaves in the Film menu (tests/app's
+// filmMenu): the hidden ones kept by name, a hidden film in use listed, the
+// rest in the menu's order and groups.
+void filmMenuChecks(PackLibrary &packs)
+{
+    std::printf("the film menu leaves out the films Settings hides\n");
+    const std::vector<PackIndexEntry> &all = packs.filmEntries();
+    auto stocksOf = [](const std::vector<PackIndexEntry> &entries) {
+        std::vector<std::string> out;
+        for (const PackIndexEntry &e : entries)
+            out.push_back(e.stock);
+        return out;
+    };
+    check(filmmenu::shown(all, "", "kodak_portra_400").size() == all.size(),
+          "nothing hidden: all " + std::to_string(all.size()) + " films listed");
+    const std::string hidden = filmmenu::stored({"kodak_vision3_500t", "agfa_apx_25", "fujifilm_neopan_1600"});
+    check(hidden == "agfa_apx_25,fujifilm_neopan_1600,kodak_vision3_500t" && filmmenu::hidden(hidden).size() == 3
+              && filmmenu::hidden(",agfa_apx_25,,").size() == 1,
+          "the setting keeps the hidden films' names: " + hidden);
+    const std::vector<std::string> shown = stocksOf(filmmenu::shown(all, hidden, "kodak_portra_400"));
+    const auto lists = [](const std::vector<std::string> &s, const std::string &stock) {
+        return std::find(s.begin(), s.end(), stock) != s.end();
+    };
+    check(shown.size() == all.size() - 3 && !lists(shown, "agfa_apx_25") && !lists(shown, "kodak_vision3_500t"),
+          "three hidden: " + std::to_string(shown.size()) + " of " + std::to_string(all.size()) + " listed");
+    std::vector<std::string> rest;
+    for (const PackIndexEntry &e : all)
+        if (!filmmenu::hidden(hidden).count(e.stock))
+            rest.push_back(e.stock);
+    check(shown == rest, "the rest keep the menu's order");
+    const std::vector<std::string> inUse = stocksOf(filmmenu::shown(all, hidden, "agfa_apx_25"));
+    check(lists(inUse, "agfa_apx_25") && inUse.size() == all.size() - 2, "a hidden film in use stays listed");
+    std::vector<std::string> motion;
+    for (const StockGroup &g : stockGroups(filmmenu::shown(all, hidden, "kodak_portra_400"), true))
+        if (g.title == "Motion picture")
+            motion = stocksOf(g.entries);
+    check(!lists(motion, "kodak_vision3_500t") && lists(motion, "kodak_vision3_250d"),
+          "the menu's groups list what is left: " + std::to_string(motion.size()) + " motion picture films");
+    for (const std::string stock : {"agfa_apx_100", "agfa_apx_400", "fujifilm_neopan_100_acros_ii"}) {
+        bool monochrome = false;
+        for (const PackIndexEntry &e : all)
+            monochrome = monochrome || (e.stock == stock && e.isMonochrome());
+        check(monochrome, stock + " is a black-and-white film in the menu");
+    }
+}
+
+// Every colour film's camera filters (tests/checks): Kodak's 81C, Tiffen's
+// 812, Kodak's 82A and 82C cooling filters and its 85 and 85B, in that order,
+// the 82A opening up as the 81C does and the 82C more.
+void colourFilterChecks(PackLibrary &packs)
+{
+    std::printf("colour films take warming, cooling and conversion filters\n");
+    int films = 0, right = 0;
+    std::string wrong;
+    for (const PackIndexEntry &e : packs.filmEntries()) {
+        if (e.isMonochrome())
+            continue;
+        ++films;
+        std::vector<std::string> ids;
+        double cooler = 0, coolest = 0;
+        for (const LensFilterRef &f : packs.pack(e.stock).lensFilters) {
+            ids.push_back(f.id);
+            if (f.id == "82a")
+                cooler = std::log2(f.factor);
+            if (f.id == "82c")
+                coolest = std::log2(f.factor);
+        }
+        const bool ok = joined(ids) == "81c,812,82a,82c,85,85b" && cooler > 0.3 && cooler < 0.7 && coolest > 0.6
+                     && coolest < 1.0;
+        right += ok ? 1 : 0;
+        if (!ok)
+            wrong += " " + e.stock + " (" + joined(ids) + ")";
+    }
+    check(films > 40 && right == films,
+          std::to_string(right) + " of " + std::to_string(films)
+              + " colour films take 81C, 812, 82A, 82C, 85 and 85B, the 82A opening up a third to two thirds of a "
+                "stop and the 82C more" + wrong);
 }
 
 // Polaroid's peel-apart prints (tests/checks' instant prints): the three
@@ -338,6 +425,132 @@ void undoChecks()
     check(h.stacks().undo.size() == 9, "and going back finds this one's");
 }
 
+// The library and its sidecars (ImageLibrary.swift): what the Mac app wrote
+// reads here with everything in it, what is written here reads back after a
+// relaunch, of a library record and a sidecar the newer counts, and a folder
+// moved is found again by its files' names and sizes.
+void libraryChecks()
+{
+    using Flag = ImageLibrary::Flag;
+    std::printf("the library and its sidecars\n");
+    const QString fixtures = QStringLiteral(FLX_SOURCE_DIR "/tools/port-checks/fixtures");
+    const auto picture = ImageLibrary::readSidecar(fixtures + "/mac-picture.NEF.flx");
+    const bool pictureOK = picture && picture->flag == Flag::Pick && picture->edits
+        && picture->edits->recipe.filmStock == "kodak_ektar_100" && picture->edits->recipe.printStock == "kodak_portra_endura"
+        && picture->edits->recipe.exposureEV == 1.25 && !picture->edits->recipe.autoExposure
+        && picture->edits->recipe.brightness == 0.1 && picture->edits->whiteBalance == WhiteBalance::Custom
+        && picture->edits->customTemperature == 4300 && picture->edits->customTint == 7
+        && picture->edits->recipe.gradients.size() == 1 && picture->edits->recipe.gradients[0].name == "Sky"
+        && picture->edits->recipe.gradients[0].exposureEV == -0.7 && picture->edits->recipe.geometry.quarterTurns == 1
+        && picture->edits->recipe.geometry.straighten == 1.5 && !picture->look;
+    check(pictureOK, "a picture's sidecar the Mac app wrote: its flag, film, paper, exposure, white balance, gradient and turn");
+    const auto clip = ImageLibrary::readSidecar(fixtures + "/mac-clip.MOV.flx");
+    const bool clipOK = clip && clip->flag == Flag::Reject && clip->look && !clip->edits
+        && clip->look->recipe.filmStock == "kodak_vision3_250d" && clip->look->recipe.printStock == "kodak_2383"
+        && clip->look->recipe.brightness == -0.2 && clip->look->input.format == LogFormat::VLog
+        && clip->look->effects.bloom.enabled;
+    check(clipOK, "a clip's sidecar the Mac app wrote: its flag, film, print film, brightness, V-Log and bloom");
+
+    // what is written here, in the Mac's form
+    ImageLibrary::Record record{QDateTime::currentDateTimeUtc(), Flag::Pick, picture ? picture->edits : std::nullopt,
+                                clip ? clip->look : std::nullopt, ImageLibrary::software()};
+    const QJsonObject o = ImageLibrary::recordToJson(record);
+    const QStringList keys = o.keys(), editKeys = o.value("edits").toObject().keys();
+    check(QRegularExpression(QStringLiteral("^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\dZ$"))
+                  .match(o.value("modified").toString()).hasMatch(),
+          "the time to the second in UTC, as Swift's ISO 8601 reads it: " + o.value("modified").toString().toStdString());
+    check(keys == QStringList({"app", "edits", "flag", "look", "modified"})
+              && editKeys == QStringList({"customTemperature", "customTint", "recipe", "whiteBalance"})
+              && o.value("flag").toString() == "pick",
+          "the record's keys and the settings' keys the Mac's: " + keys.join(',').toStdString());
+    const auto back = ImageLibrary::recordFromJson(o);
+    check(back && back->edits == record.edits && back->look == record.look && back->flag == record.flag,
+          "written and read back, the same record");
+
+    QTemporaryDir scratch;
+    const QString folder = scratch.filePath("Roll 1"), libraryAt = scratch.filePath("library");
+    QDir().mkpath(folder);
+    auto file = [&](const QString &dir, const QString &name, int size) {
+        QFile f(QDir(dir).filePath(name));
+        if (!f.open(QIODevice::WriteOnly))
+            throw std::runtime_error("cannot write " + name.toStdString());
+        f.write(QByteArray(size, 'x'));
+        return QFileInfo(f).absoluteFilePath();
+    };
+    const QString a = file(folder, "A.NEF", 100), b = file(folder, "B.NEF", 200), c = file(folder, "C.MOV", 300);
+    const std::vector<std::pair<QString, qint64>> files{{a, 100}, {b, 200}, {c, 300}};
+    appSettings().setValue(ImageLibrary::sidecarsKey, false);
+    {
+        ImageLibrary library(libraryAt);
+        library.load(folder, files);
+        library.update(a, [&](ImageLibrary::Record &r) { r.edits = record.edits; r.flag = Flag::Pick; });
+        library.update(c, [&](ImageLibrary::Record &r) { r.look = record.look; });
+        library.update(b, [&](ImageLibrary::Record &r) { r.flag = Flag::Reject; });
+        library.save(true);
+        check(!QFileInfo::exists(ImageLibrary::sidecarPath(a)), "with the preference off, nothing beside the pictures");
+    }
+    {
+        ImageLibrary library(libraryAt);
+        auto records = library.load(folder, files);
+        check(records.size() == 3 && records[a].edits == record.edits && records[a].flag == Flag::Pick
+                  && records[b].flag == Flag::Reject && !records[b].edits && records[c].look == record.look,
+              "kept between launches: A's settings and pick, B's reject, C's look");
+
+        // of a library record and a sidecar, the newer counts
+        auto sidecar = [&](const QString &path, Flag flag, int seconds) {
+            ImageLibrary::Record r = records[path];
+            r.flag = flag;
+            r.modified = r.modified.addSecs(seconds);
+            QFile f(ImageLibrary::sidecarPath(path));
+            if (!f.open(QIODevice::WriteOnly))
+                throw std::runtime_error("cannot write a sidecar");
+            f.write(QJsonDocument(ImageLibrary::recordToJson(r)).toJson());
+        };
+        sidecar(a, Flag::Reject, 60);
+        sidecar(b, Flag::Pick, -60);
+    }
+    {
+        ImageLibrary library(libraryAt);
+        auto records = library.load(folder, files);
+        check(records[a].flag == Flag::Reject && records[b].flag == Flag::Reject,
+              "a newer sidecar counts over the library, an older one not");
+        library.setSavesSidecars(true);
+        library.finishWriting();
+        const auto beside = ImageLibrary::readSidecar(ImageLibrary::sidecarPath(c));
+        check(beside && beside->look == record.look, "turned on, the preference writes every record beside its file");
+        library.update(c, [&](ImageLibrary::Record &r) { r.flag = Flag::Pick; });
+        library.finishWriting();
+        check(ImageLibrary::readSidecar(ImageLibrary::sidecarPath(c))->flag == Flag::Pick, "and each change at once");
+        // FLX_KEEP_SIDECARS=DIR: the port's sidecars kept, for the Mac app's decoder to read
+        if (const QString keep = qEnvironmentVariable("FLX_KEEP_SIDECARS"); !keep.isEmpty()) {
+            QDir().mkpath(keep);
+            for (const QString &path : {a, c})
+                QFile::copy(ImageLibrary::sidecarPath(path), QDir(keep).filePath(QFileInfo(path).fileName() + ".flx"));
+        }
+        appSettings().setValue(ImageLibrary::sidecarsKey, false);
+        library.save(true);
+    }
+
+    // a folder moved or renamed is found again by its files' names and sizes
+    const QString moved = scratch.filePath("Roll 1, moved");
+    QDir().mkpath(moved);
+    for (const auto &[path, size] : files)
+        file(moved, QFileInfo(path).fileName(), int(size));
+    const QString other = scratch.filePath("Another roll");
+    QDir().mkpath(other);
+    const QString d = file(other, "A.NEF", 999), e = file(other, "E.NEF", 100);
+    {
+        ImageLibrary library(libraryAt);
+        auto records = library.load(moved, {{QDir(moved).filePath("A.NEF"), 100}, {QDir(moved).filePath("B.NEF"), 200},
+                                            {QDir(moved).filePath("C.MOV"), 300}});
+        check(records.size() == 3 && records[QDir(moved).filePath("A.NEF")].edits == record.edits,
+              "a folder moved finds its records again");
+        auto none = library.load(other, {{d, 999}, {e, 100}});
+        check(none.empty(), "a folder whose files are not those takes nothing of theirs");
+        library.save(true);
+    }
+}
+
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
@@ -389,10 +602,13 @@ int main(int argc, char **argv)
         pick("kodak_gold_200");
         check(r.printStock == "kodak_2383", "a print film chosen for a still film stays");
         groupChecks(packs);
+        filmMenuChecks(packs);
+        colourFilterChecks(packs);
         instantChecks(packs);
         ovalChecks(packs);
         nameChecks();
         undoChecks();
+        libraryChecks();
     } catch (const std::exception &e) {
         std::fprintf(stderr, "flxport-checks: %s\n", e.what());
         return 1;

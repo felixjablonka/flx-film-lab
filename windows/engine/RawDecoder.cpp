@@ -5,6 +5,7 @@
 #include "RawDetail.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstring>
 #include <functional>
@@ -410,6 +411,8 @@ DecodePlan planDecode(const std::string &path, const DecodeOptions &options)
         } catch (const std::exception &rawspeed) {
             try {
                 m = unpackWithLibRaw(path);
+            } catch (const UnreadableFormat &) {
+                throw;      // said plainly, without RawSpeed's view of it
             } catch (const std::exception &libraw) {
                 throw std::runtime_error(std::string(rawspeed.what()) + "; " + libraw.what());
             }
@@ -422,6 +425,23 @@ DecodePlan planDecode(const std::string &path, const DecodeOptions &options)
     if (!options.cameraRGB && !options.appleColour.empty())
         profile = AppleColour::table(options.appleColour).find(m.make, m.model);
     result.profiled = profile != nullptr;
+    {
+        std::string extension = path.size() > 4 ? path.substr(path.size() - 4) : std::string();
+        for (char &ch : extension)
+            ch = char(std::tolower(static_cast<unsigned char>(ch)));
+        result.dng = extension == ".dng";
+        // The exposure Apple gives this file: a DNG's own; else its camera's,
+        // or the one Apple gives the file's ISO where that differs (the D700
+        // at ISO 100, the Z f at 90): the profile's own is in its transforms,
+        // and the gain below adds the difference. Without a profile, the
+        // options' where they name one.
+        const bool dngOwn = result.dng && !std::isnan(m.exposure.dngBaselineExposure);
+        const float apple = dngOwn ? m.exposure.dngBaselineExposure
+                            : profile ? profile->exposureAt(m.exposure.iso)
+                                      : 0.0f;
+        result.baselineExposure = profile || std::isnan(options.exposureEV) ? apple : options.exposureEV;
+        result.decodedExposure = options.cameraRGB ? 0 : result.baselineExposure;
+    }
 
     // the image area: as given, else Apple's crop for the camera's mode,
     // else the decoder's
@@ -550,8 +570,10 @@ DecodePlan planDecode(const std::string &path, const DecodeOptions &options)
         result.cameraToRec2020 = kXYZToRec2020 * bradford(xyzOf(white), xyzOf({0.31271f, 0.32902f})) * cameraToXYZ;
     }
     plan.toRec2020 = options.cameraRGB ? Mat3::identity() : result.cameraToRec2020;
-    // a profile has Apple's exposure in it
-    plan.gain = options.cameraRGB || profile ? 1.0f : std::pow(2.0f, options.exposureEV);
+    // a profile has Apple's exposure for the camera in it; the file's may differ
+    plan.gain = options.cameraRGB ? 1.0f
+                : profile         ? std::exp2(result.baselineExposure - profile->baselineExposure)
+                                  : std::exp2(result.baselineExposure);
 
     // the lens's distortion, in the sensor's frame, about the image area's centre
     if (options.lensCorrection && !options.cameraRGB) {

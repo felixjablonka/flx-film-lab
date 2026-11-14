@@ -158,6 +158,11 @@ BW_RMS_GRANULARITY = {
     # 17 x sqrt(0.718 / 0.581).
     "kodak_tri_x_400_push2": 19.0,
     "agfa_apx_25": 7.0,         # Agfa's range sheet, REFINAL 6 min at 20 C
+    "agfa_apx_100": 9.0,        # Agfa's own sheet (1995) and its range sheet, REFINAL 6 min at 20 C
+    "agfa_apx_400": 14.0,       # the same
+    # Fujifilm AF3-0258E: Microfine, measured at density 1.0 over minimum
+    # through 48 um, the reading the other sheets quote.
+    "fujifilm_neopan_100_acros_ii": 7.0,
     "kodak_t_max_100": 8.0,     # Kodak F-4016, D-76 at 20 C
     # Kodak H-1-5222, both editions: D-96 to the recommended control gamma,
     # tungsten exposure.
@@ -582,7 +587,7 @@ def bake_profile(stock: str, out_dir: Path, tc_lut_size_note: dict) -> dict:
         }
         tc_lut_size_note[stock] = tc_lut.shape
         # every film takes camera filters: Kodak's Wratten set on black and
-        # white, warming and conversion filters on colour
+        # white, warming, cooling and conversion filters on colour
         import lens_filters
         filters = lens_filters.filters_for(stock, p.info.channel_model)
         pack["lensFilters"] = bake_lens_filters(stock, sensitivity, adaptation, out_dir,
@@ -604,8 +609,8 @@ def bake_profile(stock: str, out_dir: Path, tc_lut_size_note: dict) -> dict:
 def bake_lens_filters(stock: str, sensitivity: np.ndarray, adaptation, out_dir: Path,
                       reference_illuminant: str, filters) -> list[dict]:
     """One exposure LUT per camera filter: Kodak's Wratten filters for a
-    black-and-white film, warming and conversion filters (Kodak's 81C, 85 and
-    85B, Tiffen's 812) for a colour film.
+    black-and-white film, warming, cooling and conversion filters (Kodak's
+    81C, 82A, 82C, 85 and 85B, Tiffen's 812) for a colour film.
 
     The film sees the scene through the filter: its sensitivity times the
     filter's transmittance (tools/bake/lens_filters.py). The exposure is

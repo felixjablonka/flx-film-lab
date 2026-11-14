@@ -18,13 +18,26 @@ struct PreviewView: NSViewRepresentable {
         return view
     }
 
-    func updateNSView(_ nsView: PreviewNSView, context: Context) {}
+    func updateNSView(_ nsView: PreviewNSView, context: Context) {
+        nsView.isShown = context.environment.halfShown
+    }
 }
 
 final class PreviewNSView: NSView {
     weak var model: ClipModel?
     private var link: CADisplayLink?
     private var attached = false
+    /// Whether the Motion half is on screen (RootView keeps both halves).
+    /// Hidden, the view is hidden to AppKit as well, which takes it out of
+    /// the pointer's tracking and the drops, and its display link waits.
+    var isShown = true {
+        didSet {
+            guard isShown != oldValue else { return }
+            isHidden = !isShown
+            link?.isPaused = !isShown
+            if isShown { model?.preview.redraw() }
+        }
+    }
 
     private var metalLayer: CAMetalLayer? { layer as? CAMetalLayer }
 
@@ -58,6 +71,7 @@ final class PreviewNSView: NSView {
         if link == nil {
             let link = displayLink(target: self, selector: #selector(tick(_:)))
             link.add(to: .main, forMode: .common)
+            link.isPaused = !isShown
             self.link = link
         }
     }

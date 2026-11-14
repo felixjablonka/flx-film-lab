@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 # the Mac release this port matches
-project(flx_film_lab_win VERSION 1.5.0 LANGUAGES CXX)
+project(flx_film_lab_win VERSION 2.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -214,6 +214,10 @@ target_link_libraries(flxport-motion PRIVATE flx_ffmpeg)
 flx_tool(flxport-export tools/port-export/main.cpp)
 target_sources(flxport-export PRIVATE ${MOTION_SOURCES})
 target_link_libraries(flxport-export PRIVATE flx_ffmpeg)
+# the library's records hold clips' looks too (ImageLibrary), in the Mac's form
+target_sources(flxport-checks PRIVATE app/ImageLibrary.cpp app/AppSettings.cpp ${MOTION_SOURCES})
+target_link_libraries(flxport-checks PRIVATE flx_ffmpeg)
+target_compile_definitions(flxport-checks PRIVATE FLX_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 
 # The app: FLX Film Lab for Windows, both halves of the Mac app, Stills and Motion.
 set(APP_SOURCES
@@ -222,6 +226,7 @@ set(APP_SOURCES
     app/Theme.cpp
     app/Vocabulary.cpp
     app/Widgets.cpp
+    app/Icons.cpp
     app/CurvesView.cpp
     app/Inspector.cpp
     app/Canvas.cpp
@@ -238,10 +243,17 @@ set(APP_SOURCES
     app/TransportBar.cpp
     app/MotionInspector.cpp
     app/AudioPlayback.cpp
+    app/ImageLibrary.cpp
+    app/FolderBrowser.cpp
+    app/Thumbnails.cpp
+    app/FolderSidebar.cpp
+    app/SettingsDialog.cpp
+    app/SelfTest.cpp
+    app/DisplayColour.cpp
 )
 qt_add_executable(FLXFilmLab ${APP_SOURCES} ${ENGINE_SOURCES} ${MOTION_SOURCES}
     engine/RawUnpackRawSpeed.cpp engine/RawUnpackLibRaw.cpp engine/RawDecoder.cpp engine/RawDetail.cpp
-    engine/GpuDecoder.cpp engine/AppleColour.cpp engine/LensCorrection.cpp)
+    engine/GpuDecoder.cpp engine/AppleColour.cpp engine/LensCorrection.cpp engine/AppleRendering.cpp)
 set_target_properties(FLXFilmLab PROPERTIES MACOSX_BUNDLE OFF WIN32_EXECUTABLE ON)
 # the version, for the program, Explorer and the installer (tools/pc/package.cmd)
 configure_file(app/version.h.in ${CMAKE_CURRENT_BINARY_DIR}/version.h)
@@ -251,7 +263,7 @@ target_include_directories(FLXFilmLab PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 if(WIN32)
     target_sources(FLXFilmLab PRIVATE app/FLXFilmLab.rc)
     # the GPU's memory budget (RenderEngine's gpuMemoryFree)
-    target_link_libraries(FLXFilmLab PRIVATE dxgi)
+    target_link_libraries(FLXFilmLab PRIVATE dxgi dwmapi)
 endif()
 target_include_directories(FLXFilmLab PRIVATE engine app)
 target_link_libraries(FLXFilmLab PRIVATE Qt6::Widgets Qt6::Gui Qt6::GuiPrivate Qt6::Network Qt6::Multimedia

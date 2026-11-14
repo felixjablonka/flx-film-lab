@@ -39,6 +39,8 @@ protected:
 
 private:
     QRect pictureRect() const;
+    // the original shows in the print's place (Document::showOriginal), alone
+    bool originalShowing() const;
     void layoutPlaceholder();
     void layoutCropBar();
 

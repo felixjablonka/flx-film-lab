@@ -15,6 +15,14 @@ Six stocks, each from its maker's own sheet in `film spec sheets/`:
   characteristic curves, scanned line art (CCITT image masks), traced.
 - Agfa APX 25 (Agfa Professional range sheet): spectral sensitivity and the
   characteristic curve, vector plots labelled in text.
+- Agfa APX 100 and APX 400 (Agfa-Gevaert's own sheet for each, 08/1995):
+  spectral sensitivity and the density curve, vector plots, read with the
+  range sheet's edition of them laid over (`agfa_bw_sheets`): they agree, but
+  for two plots the range sheet repeats from APX 100, its APX 25 density curve
+  and its APX 400 MTF.
+- Fujifilm Neopan 100 Acros II (AF3-0258E, 02/2020): its spectrogram to
+  daylight and the Microfine curve for EI 100, bitmaps, traced
+  (`fujifilm_bw_sheets`).
 - Ilford Multigrade RC Deluxe: spectral sensitivity and the curves for each
   filter grade, bitmaps, traced.
 - Ilford Delta 100, Delta 400, FP4 Plus, Pan F Plus and Ortho Plus (HARMAN
@@ -50,6 +58,22 @@ Choices the datasheets leave open, and how they are made here:
   daylight 1.92 times as effective as tungsten at equal illuminance, where read
   as tungsten-weighted it gives 2.45; its daylight factor for a yellow filter,
   2.5, comes out 2.7 through Kodak's Wratten 8, against 5.3.
+- APX 100's density curve, like APX 25's, names no developer, and it is
+  developed further than the ratings: it measures gamma 0.73, where every
+  development Agfa rates the film in (REFINAL 6 min, ISO 125; RODINAL 1+25 8
+  min, ISO 100; ...) reaches 0.65 on the sheet's own gamma-time plot, and its
+  ISO speed point is ISO 193 on Agfa's lux-second axis. It is taken as
+  plotted and placed by its own speed point, as APX 25's is. APX 400's curve
+  measures 0.655 and its speed point ISO 440, on its rating.
+- Acros II takes the curve Fujifilm gives for EI 100 in its own developer,
+  Microfine, 10 minutes, in which its sheet measures the RMS granularity and
+  the resolving power too: its ISO speed point is ISO 95 on Fujifilm's
+  lux-second axis, and its G-bar 0.53 where the sheet's time-G plot reads
+  0.545. (In D-76 the sheet's EI 100 time, 7 1/4 minutes, puts the speed
+  point at ISO 137.) Its spectrogram is to daylight (5400K), as Neopan 1600's,
+  and read the same way. Fujifilm's filter factors, 2, 4 and 8 for yellow,
+  orange (No. 21) and red, are its Neopan 1600 sheet's too; the spectrogram
+  gives 1.6, 2.6 (No. 22) and 4.2.
 - Neopan 1600 is rated EI 1600, but its D-76 curve for that rating (7 1/2
   min) puts the ISO speed point at about ISO 750: the rating is a push of
   about a stop, as Fujifilm's development table implies. Mid-grey goes where
@@ -158,6 +182,21 @@ HP5 = Film("ilford_hp5_plus", "Ilford HP5 Plus", 400,
 APX25 = Film("agfa_apx_25", "Agfa APX 25", 25,
              "Agfa-Gevaert, AGFAPAN APX 25 PROFESSIONAL (Agfa Professional range, Technical Data), 35 mm; "
              "the plot names no developer, the sheet's ISO 25 and RMS 7.0 are for REFINAL, 6 min at 20 C.")
+APX100 = Film("agfa_apx_100", "Agfa APX 100", 100,
+              "Agfa-Gevaert, AGFAPAN APX 100 PROFESSIONAL technical data (status 08/1995, 1st edition), 35 mm, "
+              "with Agfa's Professional range sheet (09/1998), which plots the same; the density curve names no "
+              "developer and measures gamma 0.73, against the 0.65 the sheet's gamma-time plot gives every "
+              "development it rates the film in (REFINAL 6 min ISO 125, RODINAL 1+25 8 min ISO 100); the sheet's "
+              "RMS 9.0 is for REFINAL, 6 min at 20 C.")
+APX400 = Film("agfa_apx_400", "Agfa APX 400", 400,
+              "Agfa-Gevaert, AGFAPAN APX 400 PROFESSIONAL technical data (status 08/1995, 1st edition), 35 mm, "
+              "with Agfa's Professional range sheet (09/1998), which plots the same; the density curve names no "
+              "developer and measures gamma 0.655, as the sheet's gamma-time plot gives its rated developments "
+              "(REFINAL 6 min ISO 400); the sheet's RMS 14.0 is for REFINAL, 6 min at 20 C.")
+ACROS2 = Film("fujifilm_neopan_100_acros_ii", "Fujifilm Neopan 100 Acros II", 100,
+              "Fujifilm data sheet AF3-0258E (20.02), NEOPAN 100 ACROS II (135), Microfine, small tank, 10 min at "
+              "20 C: Fujifilm's time for EI 100 in its own developer, in which the sheet measures its RMS "
+              "granularity and resolving power too.")
 NEOPAN = Film("fujifilm_neopan_1600", "Fujifilm Neopan 1600", NEOPAN_EI,
               "Fujifilm data sheet AF3-608E, NEOPAN 1600 Super Presto / Professional, 35 mm, "
               "D-76 developer, small tank, 7 1/2 min at 20 C (Fujifilm's time for EI 1600).")
@@ -422,6 +461,33 @@ def apx25_sheet() -> tuple[np.ndarray, np.ndarray]:
     spectral = by_position(sensitivity, ("s",))["s"]
     characteristic = by_position(curve, ("d",))["d"]
     return spectral[np.argsort(spectral[:, 0])], characteristic[np.argsort(characteristic[:, 0])]
+
+
+def apx_sheet(film: Film) -> tuple[np.ndarray, np.ndarray]:
+    """(wavelength, log sensitivity) and (log H in lux-seconds, density) off
+    Agfa's own 1995 sheet for APX 100 or 400 (`agfa_bw_sheets`)."""
+    import agfa_bw_sheets as agfa
+    plots = agfa.edition(film.iso, "1995")
+    return plots["spectral"], plots["curve"]
+
+
+def _without_daylight_5400(spectral: np.ndarray) -> np.ndarray:
+    """A spectrogram to daylight records sensitivity times the source: take
+    the source back out (CIE daylight at 5400 K, on the plotted wavelengths)."""
+    xy = colour.temperature.CCT_to_xy_CIE_D(5400 * 1.4388 / 1.4380)
+    daylight = colour.sd_CIE_illuminant_D_series(xy)
+    out = spectral.copy()
+    out[:, 1] -= np.log10(np.array([daylight[w] for w in out[:, 0]]))
+    return out
+
+
+def acros_ii_sheet() -> tuple[np.ndarray, np.ndarray]:
+    """(wavelength, log sensitivity) and (log H in lux-seconds, density) off
+    Fujifilm's AF3-0258E (`fujifilm_bw_sheets`): the spectrogram to daylight,
+    the daylight taken out; the Microfine curve for EI 100."""
+    import fujifilm_bw_sheets as fuji
+    spectral = _without_daylight_5400(fuji.spectrogram())
+    return spectral, fuji.characteristic_curves("Microfine")[fuji.MICROFINE_EI100_MINUTES]
 
 
 def _bitmap(pdf: str, page: int, index: int) -> np.ndarray:
@@ -1040,6 +1106,25 @@ def main() -> int:
                      "daylight at 5400 K (read as it stands it implies a 6.6x red filter factor, "
                      "against Fujifilm's 8x).",
                      metered_at=NEOPAN_EI))
+    for film in (APX100, APX400):
+        spectral, curve = apx_sheet(film)
+        absolute = float(np.log10(0.65 * 12.5 / film.iso))
+        write(build_film(film, spectral, curve,
+                         "Spectral sensitivity: Agfa's curve as plotted (to an equal-energy spectrum, read at density "
+                         "1.0 above minimum density, as Agfa's range sheet says of all its films' plots).",
+                         cross_check=lambda shift, absolute=absolute, iso=film.iso:
+                             f"Agfa's absolute axis puts mid-grey {(-shift) - absolute:+.3f} decades from ISO {iso}'s",
+                         created="2026-11-12"))
+    spectral, curve = acros_ii_sheet()
+    absolute = float(np.log10(0.65 * 12.5 / ACROS2.iso))
+    write(build_film(ACROS2, spectral, curve,
+                     "Spectral sensitivity: Fujifilm's spectrogram to daylight (5400K), divided by CIE daylight at "
+                     "5400 K, as Neopan 1600's: it gives filter factors of 1.6x yellow (Wratten 8), 2.6x orange "
+                     "(No. 22) and 4.2x red (No. 25) in daylight, where the sheet's table, which repeats Neopan "
+                     "1600's, says 2, 4 (No. 21) and 8.",
+                     cross_check=lambda shift: f"Fujifilm's absolute axis puts mid-grey {(-shift) - absolute:+.3f} "
+                                               f"decades from ISO {ACROS2.iso}'s",
+                     created="2026-11-12"))
     spectral, curves = multigrade_sheet()
     write(build_paper(spectral, curves))
 

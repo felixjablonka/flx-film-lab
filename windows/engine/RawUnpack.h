@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -62,6 +63,14 @@ struct RawMosaic {
 // needs its camera list, data/cameras.xml, and refuses cameras not in it.
 RawMosaic unpackWithRawSpeed(const std::string &path, const std::string &camerasXml);
 RawMosaic unpackWithLibRaw(const std::string &path);
+
+// A file in a format known but not read here (Nikon's High Efficiency RAW,
+// Sony's lossless compressed RAW at M and S size): its message says so, and
+// what to do instead, in the person's terms; it stands in for the decoders'
+// own errors.
+struct UnreadableFormat : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
 // The metadata RawSpeed reads none of (orientation, the exposure's, the lens), from
 // LibRaw's parse of the file alone; left as they are where it cannot read it.
 void readMetadataWithLibRaw(const std::string &path, RawMosaic &m);

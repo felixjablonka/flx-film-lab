@@ -3,11 +3,17 @@
 
 #include "AppSettings.h"
 
+#include "DisplayColour.h"
+#include "Thumbnails.h"
+
 #include <QApplication>
 #include <QCoreApplication>
+#include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonDocument>
+
+#include <set>
 
 #include <algorithm>
 #include <cmath>
@@ -65,8 +71,8 @@ QString movieFilter()
     return QStringLiteral("Movies (%1);;All files (*)").arg(patterns.join(QLatin1Char(' ')));
 }
 
-MotionDocument::MotionDocument(const AppData &data, QObject *parent)
-    : QObject(parent), m_data(data)
+MotionDocument::MotionDocument(const AppData &data, ImageLibrary &library, QObject *parent)
+    : QObject(parent), m_data(data), m_library(library), m_browser(FolderBrowser::Kind::Clips, data)
 {
     m_packs = std::make_unique<PackLibrary>(data.packs);
     m_builder = std::make_unique<SetupBuilder>(*m_packs);
@@ -100,6 +106,13 @@ MotionDocument::MotionDocument(const AppData &data, QObject *parent)
         },
         [this] { emit changed(); });
     m_history->joinSeconds = QApplication::doubleClickInterval() / 1000.0;
+
+    m_browser.library = &m_library;
+    m_browser.pasteName = QStringLiteral("Paste Look");
+    m_browser.ownGrade = [this](const QString &path) { return ownGrade(path); };
+    m_recordTimer.setSingleShot(true);
+    m_recordTimer.setInterval(800);
+    connect(&m_recordTimer, &QTimer::timeout, this, [this] { recordCurrent(); });
 }
 
 MotionDocument::~MotionDocument()
@@ -149,8 +162,11 @@ void MotionDocument::lookDidChange(const MotionLook &old)
 
 void MotionDocument::store()
 {
-    if (m_clip)
+    if (m_clip) {
         m_edits[m_clipPath] = m_look;
+        // into the library once it has settled
+        m_recordTimer.start();
+    }
     appSettings().setValue(kLookKey, QJsonDocument(motionLookToJson(m_look)).toJson(QJsonDocument::Compact));
 }
 
@@ -286,8 +302,11 @@ void MotionDocument::clearError()
 // MARK: - Clips
 
 // Safe during an export: that holds its own copy of the clip and the look.
-void MotionDocument::open(const QString &path)
+void MotionDocument::open(const QString &given)
 {
+    const QString path = FolderBrowser::canonical(given);
+    showFolder(path);
+    m_browser.setCurrent(path);
     m_isOpening = true;
     emit changed();
     const int id = ++m_clipCounter;
@@ -305,6 +324,7 @@ void MotionDocument::open(const QString &path)
             } else {
                 m_isOpening = false;
                 m_error = error;
+                m_browser.setCurrent(m_clipPath);
                 emit changed();
                 emit statusChanged();
             }
@@ -316,6 +336,7 @@ void MotionDocument::adopt(const ClipInfo &info, const QString &path, int id)
 {
     pause();
     if (path != m_clipPath) {
+        recordCurrent();
         // what was done before the first clip came is not any clip's
         EditHistory<MotionLook>::Stacks steps;
         if (const auto it = m_histories.find(path); it != m_histories.end()) {
@@ -328,20 +349,24 @@ void MotionDocument::adopt(const ClipInfo &info, const QString &path, int id)
     }
     if (m_clip)
         m_edits[m_clipPath] = m_look;
-    // the clip first: storing the look files it under the clip on screen,
-    // which has to be the new one by then
+    // Its look, chosen while the clip on screen is still the one before, then
+    // the clip: storing the look files it under the clip on screen, which has
+    // to be the new one by then.
+    MotionLook next = lookToOpen(path);
     m_clip = info;
     m_clipPath = path;
     m_clipID = id;
-    const auto known = m_edits.find(path);
-    MotionLook next = known != m_edits.end() ? known->second : m_look.carryingLook(defaultGrade());
+    m_browser.setCurrent(path);
     // how files are written is a preference, not part of a grade
     next.exportSettings = m_look.exportSettings;
+    if (!m_openedWith.count(path))
+        m_openedWith[path] = gradeOf(next);
     m_look = next;
     m_reading.reset();
     m_metered.reset();
     m_frame.reset();
     m_image = QImage();
+    m_shown = QImage();
     m_time = 0;
     m_probePoint.reset();
     m_probeText.clear();
@@ -391,6 +416,7 @@ void MotionDocument::scheduleRender()
     request.effects = effectsAsPrinted(m_look, *m_packs);
     request.mode = m_showLog ? FramePipeline::Mode::Log : FramePipeline::Mode::Graded;
     request.size = m_viewSize;
+    request.screen = displaycolour::generation();
     runOnEngine([this, request] {
         QString error;
         std::optional<MotionEngine::Output> output;
@@ -421,6 +447,7 @@ void MotionDocument::finishRender(std::optional<MotionEngine::Output> output, co
         }
         if (!output->image.isNull()) {
             m_image = std::move(output->image);
+            m_shown = std::move(output->shown);
             m_drawMilliseconds = output->milliseconds;
             emit frameChanged();
         }
@@ -789,4 +816,324 @@ void MotionDocument::exportLUT(const QString &path)
             emit statusChanged();
         });
     });
+}
+
+// MARK: - The folder, flags and batches
+
+void MotionDocument::openFolder(const QString &given)
+{
+    const QString folder = FolderBrowser::canonical(given);
+    m_error.clear();
+    list(folder);
+    const std::vector<FolderBrowser::Item> shown = m_browser.shown();
+    const QString first = !shown.empty()                  ? shown.front().path
+                          : !m_browser.items().empty()    ? m_browser.items().front().path
+                                                          : QString();
+    if (first.isEmpty()) {
+        m_status = QStringLiteral("No clips in %1").arg(QFileInfo(folder).fileName());
+        emit changed();
+        emit statusChanged();
+        return;
+    }
+    const auto &items = m_browser.items();
+    if (m_clip && std::any_of(items.begin(), items.end(), [&](const FolderBrowser::Item &i) { return i.path == m_clipPath; })) {
+        m_browser.setSelection({m_clipPath});
+        return;
+    }
+    m_browser.setSelection({first});
+    open(first);
+}
+
+void MotionDocument::showFolder(const QString &path)
+{
+    const QString folder = FolderBrowser::canonical(QFileInfo(path).absolutePath());
+    if (folder != m_browser.folder())
+        list(folder);
+    if (!m_browser.selection().count(path))
+        m_browser.setSelection({path});
+}
+
+void MotionDocument::list(const QString &folder)
+{
+    std::vector<FolderBrowser::Item> items = FolderBrowser::listing(folder, FolderBrowser::Kind::Clips);
+    std::vector<std::pair<QString, qint64>> files;
+    files.reserve(items.size());
+    for (const FolderBrowser::Item &item : items)
+        files.emplace_back(item.path, item.size);
+    const auto records = m_library.load(folder, files);
+    m_browser.show(folder, std::move(items), records);
+}
+
+MotionLook MotionDocument::lookToOpen(const QString &path)
+{
+    if (m_clip && path == m_clipPath)
+        return m_look;
+    if (const auto it = m_edits.find(path); it != m_edits.end())
+        return it->second;
+    if (const auto kept = m_library.record(path); kept && kept->look) {
+        MotionLook look = *kept->look;
+        look.exportSettings = m_look.exportSettings;
+        return look;
+    }
+    return m_look.carryingLook(defaultGrade());
+}
+
+std::optional<MotionLook> MotionDocument::ownGrade(const QString &path)
+{
+    if (!m_browser.edited().count(path))
+        return std::nullopt;
+    if (m_clip && path == m_clipPath)
+        return grade();
+    if (const auto it = m_edits.find(path); it != m_edits.end())
+        return gradeOf(it->second);
+    if (const auto kept = m_library.record(path); kept && kept->look)
+        return gradeOf(*kept->look);
+    return std::nullopt;
+}
+
+void MotionDocument::recordCurrent()
+{
+    m_recordTimer.stop();
+    if (!m_clip)
+        return;
+    const MotionLook now = grade();
+    if (const auto kept = m_library.record(m_clipPath); kept && kept->look) {
+        if (gradeOf(*kept->look) == now)
+            return;
+    } else {
+        const auto opened = m_openedWith.find(m_clipPath);
+        if (opened == m_openedWith.end() || opened->second == now)
+            return;
+    }
+    m_library.update(m_clipPath, [&](ImageLibrary::Record &r) { r.look = now; });
+    m_browser.markEdited(m_clipPath);
+    m_browser.thumbnails().refreshClips({{m_clipPath, now}});
+}
+
+void MotionDocument::flagSelection(std::optional<ImageLibrary::Flag> flag)
+{
+    std::vector<QString> targets;
+    for (const FolderBrowser::Item &item : m_browser.items())
+        if (m_browser.selection().count(item.path))
+            targets.push_back(item.path);
+    if (targets.empty() && m_clip)
+        targets = {m_clipPath};
+    flagPaths(targets, flag);
+}
+
+void MotionDocument::flagPaths(const std::vector<QString> &paths, std::optional<ImageLibrary::Flag> flag)
+{
+    for (const QString &path : paths) {
+        m_library.update(path, [&](ImageLibrary::Record &r) { r.flag = flag; });
+        m_browser.setFlag(flag, path);
+    }
+}
+
+void MotionDocument::showNeighbour(int offset)
+{
+    const std::vector<FolderBrowser::Item> shown = m_browser.shown();
+    const QString from = m_clip ? m_clipPath : !shown.empty() ? shown.front().path : QString();
+    if (from.isEmpty())
+        return;
+    const auto next = m_browser.neighbour(from, offset);
+    if (!next || (m_clip && *next == m_clipPath))
+        return;
+    m_browser.setSelection({*next});
+    open(*next);
+}
+
+namespace {
+
+// The copied grade on a clip, which keeps how its own footage is read and how
+// files are written.
+MotionLook pasting(const MotionLook &grade, const MotionLook &target)
+{
+    MotionLook next = grade;
+    next.input = target.input;
+    next.exportSettings = target.exportSettings;
+    return next;
+}
+
+} // namespace
+
+void MotionDocument::copyLook()
+{
+    if (!m_clip)
+        return;
+    m_copiedLook.emplace(grade(), QFileInfo(m_clipPath).fileName());
+    m_browser.setHasCopiedSettings(true);
+    emit changed();
+}
+
+void MotionDocument::pasteLook()
+{
+    if (!m_copiedLook || !m_clip)
+        return;
+    const MotionLook copied = m_copiedLook->first;
+    m_history->named("Paste Look", [&] { setLook(pasting(copied, m_look)); });
+}
+
+void MotionDocument::pasteLookToSelected()
+{
+    if (!m_copiedLook)
+        return;
+    const MotionLook copied = m_copiedLook->first;
+    std::vector<std::pair<QString, MotionLook>> pastedOn;
+    for (const QString &path : m_browser.selectedForBatch()) {
+        if (m_clip && path == m_clipPath) {
+            pasteLook();
+            continue;
+        }
+        const MotionLook before = lookToOpen(path);
+        const MotionLook pasted = pasting(copied, before);
+        if (gradeOf(pasted) == gradeOf(before))
+            continue;
+        m_edits[path] = pasted;
+        m_histories[path] = EditHistory<MotionLook>::adding("Paste Look", gradeOf(before), gradeOf(pasted), m_histories[path]);
+        if (!m_openedWith.count(path))
+            m_openedWith[path] = gradeOf(before);
+        m_library.update(path, [&](ImageLibrary::Record &r) { r.look = gradeOf(pasted); });
+        m_browser.markEdited(path);
+        pastedOn.emplace_back(path, gradeOf(pasted));
+    }
+    m_browser.thumbnails().refreshClips(pastedOn);
+    emit changed();
+}
+
+void MotionDocument::exportSelected(const QString &folder)
+{
+    if (m_browser.batch() || isExporting())
+        return;
+    recordCurrent();
+    const std::vector<QString> paths = m_browser.selectedForBatch();
+    if (paths.empty())
+        return;
+    pause();
+    struct Job {
+        QString source, target;
+        MotionLook look;
+    };
+    std::vector<Job> jobs;
+    std::set<QString> taken;
+    for (const QString &path : paths) {
+        MotionLook look = lookToOpen(path);
+        look.exportSettings = m_look.exportSettings;
+        const ProfilePack *film = tryPack(*m_packs, look.recipe.filmStock);
+        QString filmName = QString::fromStdString(film ? film->name : look.recipe.filmStock);
+        for (const QString &maker : {QStringLiteral("Kodak "), QStringLiteral("Fujifilm "), QStringLiteral("Ilford ")})
+            filmName.remove(maker);
+        const QString stem = QFileInfo(path).completeBaseName() + QLatin1Char(' ') + filmName;
+        QString name = stem + QStringLiteral(".mov");
+        for (int n = 2; taken.count(name.toLower()) || QFileInfo::exists(QDir(folder).filePath(name)); ++n)
+            name = QStringLiteral("%1 %2.mov").arg(stem).arg(n);
+        taken.insert(name.toLower());
+        jobs.push_back({path, QDir(folder).filePath(name), look});
+    }
+    m_cancelExport = false;
+    m_exportProgress = 0;
+    m_browser.setBatch(FolderBrowser::Batch{0, int(jobs.size()), QFileInfo(jobs.front().source).fileName(), folder});
+    const auto highlights = m_highlights;
+    const QString packsDir = m_data.packs;
+    QPointer<MotionDocument> self(this);
+    QThread *worker = QThread::create([this, self, jobs, highlights, packsDir, folder] {
+        PackLibrary packs(packsDir);
+        SetupBuilder builder(packs);
+        QStringList failures;
+        int done = 0;
+        bool cancelled = false;
+        for (const Job &job : jobs) {
+            if (m_cancelExport.load()) {
+                cancelled = true;
+                break;
+            }
+            const QString name = QFileInfo(job.source).fileName();
+            QMetaObject::invokeMethod(qApp, [self, done, name, total = int(jobs.size())] {
+                if (!self || !self->m_browser.batch())
+                    return;
+                FolderBrowser::Batch b = *self->m_browser.batch();
+                b.done = done;
+                b.current = name;
+                self->m_browser.setBatch(b);
+                self->m_exportProgress = 0;
+                self->m_status = QStringLiteral("Exporting %1 of %2: %3").arg(done + 1).arg(total).arg(name);
+                emit self->statusChanged();
+            });
+            try {
+                // read in its own format, metered for its stock, every frame graded at full size
+                const ClipInfo info = readClipInfo(job.source.toStdString());
+                MotionLook look = job.look;
+                InputSettings settings = look.input;
+                const LogFormat f = look.input.format ? *look.input.format : info.detection().first;
+                settings.format = f;
+                if (look.recipe.autoExposure) {
+                    const ProfilePack &film = packs.pack(look.recipe.filmStock);
+                    std::optional<double> highlight;
+                    if (const auto known = highlights.find(job.source); known != highlights.end() && known->second.first == settings)
+                        highlight = known->second.second;
+                    else
+                        highlight = clipHighlight(job.source.toStdString(), settings, f);
+                    if (highlight)
+                        look.recipe.exposureEV = clipExposure(*highlight, builder.highlightHeadroomStops(film));
+                }
+                look.effects = effectsAsPrinted(look, packs);
+                look.input = settings;
+                int shown = -1;
+                runClipExport(packsDir, job.source, job.target, look, f, [this, self, &shown](double p) {
+                    const int permille = int(p * 1000);
+                    if (permille != shown) {
+                        shown = permille;
+                        QMetaObject::invokeMethod(qApp, [self, p] {
+                            if (self && self->m_exportProgress) {
+                                self->m_exportProgress = p;
+                                emit self->statusChanged();
+                            }
+                        });
+                    }
+                    return !m_cancelExport.load();
+                });
+            } catch (const ExportCancelled &) {
+                cancelled = true;
+                break;
+            } catch (const std::exception &e) {
+                failures << QStringLiteral("%1: %2").arg(name, QString::fromUtf8(e.what()));
+            }
+            ++done;
+        }
+        QMetaObject::invokeMethod(qApp, [self, failures, done, total = int(jobs.size()), cancelled, folder] {
+            if (self)
+                self->finishBatch(failures, done, total, cancelled, folder);
+        });
+    });
+    connect(worker, &QThread::finished, worker, &QObject::deleteLater);
+    m_workers.erase(std::remove_if(m_workers.begin(), m_workers.end(), [](const QPointer<QThread> &t) { return !t; }),
+                    m_workers.end());
+    m_workers.emplace_back(worker);
+    worker->start();
+    emit changed();
+    emit statusChanged();
+}
+
+void MotionDocument::finishBatch(const QStringList &failures, int done, int total, bool cancelled, const QString &folder)
+{
+    m_exportProgress.reset();
+    m_browser.setBatch(std::nullopt);
+    if (cancelled) {
+        m_status = QStringLiteral("Export stopped after %1 of %2").arg(done).arg(total);
+    } else if (failures.isEmpty()) {
+        m_status = QStringLiteral("Exported %1 clip%2 to %3").arg(total).arg(total == 1 ? "" : "s").arg(QFileInfo(folder).fileName());
+    } else {
+        m_error = QStringLiteral("Exported %1 of %2; not exported: %3%4")
+                      .arg(total - failures.size())
+                      .arg(total)
+                      .arg(failures.mid(0, 5).join(QStringLiteral("; ")))
+                      .arg(failures.size() > 5 ? QStringLiteral("; …") : QString());
+    }
+    emit changed();
+    emit statusChanged();
+}
+
+void MotionDocument::prepareToQuit()
+{
+    recordCurrent();
+    m_library.save(true);
 }

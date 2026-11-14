@@ -55,6 +55,20 @@ public:
     }
 
     const Stacks &stacks() const { return m_stacks; }
+    // Whether a step is open, waiting for its action or gesture to end.
+    bool isStepOpen() const { return m_open.has_value(); }
+
+    // `stacks` with a step added on top, as if it had been taken while they
+    // were on screen: a picture's share of Paste Settings to Selected, kept in
+    // its own history while another picture is on screen.
+    static Stacks adding(const std::string &name, const State &before, const State &after, Stacks stacks)
+    {
+        stacks.undo.push_back(Step{name, before, after, ++s_nextID});
+        if (stacks.undo.size() > limit)
+            stacks.undo.erase(stacks.undo.begin(), stacks.undo.end() - limit);
+        stacks.redo.clear();
+        return stacks;
+    }
     std::optional<std::string> undoName() const
     {
         return m_stacks.undo.empty() ? std::nullopt : std::optional(m_stacks.undo.back().name);
@@ -108,7 +122,7 @@ public:
                 m_stacks.undo.push_back(Step{name, std::move(last.before), after, last.id});
             joined = true;
         } else {
-            m_stacks.undo.push_back(Step{name, open.before, after, ++m_nextID});
+            m_stacks.undo.push_back(Step{name, open.before, after, ++s_nextID});
             if (m_stacks.undo.size() > limit)
                 m_stacks.undo.erase(m_stacks.undo.begin(), m_stacks.undo.end() - limit);
         }
@@ -256,5 +270,8 @@ private:
     std::optional<std::string> m_nextName;
     std::optional<std::pair<uint64_t, double>> m_joinable;
     bool m_recording = true;
-    uint64_t m_generation = 0, m_nextID = 0;
+    uint64_t m_generation = 0;
+    // shared by every history, so a step added to one put away (adding) is
+    // never taken for another's
+    static inline uint64_t s_nextID = 0;
 };

@@ -23,7 +23,7 @@ cd "$(dirname "$0")"
 
 APP_NAME="FLX Film Lab"
 # The version a release is built as; the release workflow sets it from the tag.
-VERSION="${VERSION:-1.5.0}"
+VERSION="${VERSION:-2.0.0}"
 # The binary inside the bundle, which refuse_if_running looks for.
 EXECUTABLE="FLXFilmLab"
 # The oldest macOS this is built to run on, on Apple Silicon only (since 1.1.2;
@@ -91,6 +91,8 @@ APP_SOURCES=(
   FLXFilmLab/App/RenderEngine.swift
   FLXFilmLab/App/Presets.swift
   FLXFilmLab/App/EditHistory.swift
+  FLXFilmLab/App/ImageLibrary.swift
+  FLXFilmLab/App/FolderBrowser.swift
   FLXFilmLab/App/DocumentModel.swift
   FLXFilmLab/App/AppMode.swift
   FLXFilmLab/App/FLXFilmLabApp.swift
@@ -101,6 +103,8 @@ APP_SOURCES=(
   FLXFilmLab/UI/MaskOverlay.swift
   FLXFilmLab/UI/CropOverlay.swift
   FLXFilmLab/UI/InspectorView.swift
+  FLXFilmLab/UI/SettingsView.swift
+  FLXFilmLab/UI/FolderSidebar.swift
   FLXFilmLab/UI/ContentView.swift
 )
 
@@ -115,6 +119,8 @@ CORE_SOURCES=(
   FLXFilmLab/App/RenderEngine.swift
   FLXFilmLab/App/Presets.swift
   FLXFilmLab/App/EditHistory.swift
+  FLXFilmLab/App/ImageLibrary.swift
+  FLXFilmLab/App/FolderBrowser.swift
   FLXFilmLab/App/DocumentModel.swift
   FLXFilmLab/App/AppMode.swift
   FLXFilmLab/UI/ControlVocabulary.swift

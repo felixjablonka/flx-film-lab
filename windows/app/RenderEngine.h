@@ -81,6 +81,8 @@ public:
         int id = 0;
         int width = 0, height = 0;
         QString camera;
+        // as the file says: mm, seconds, ISO; 0 where it does not
+        float focalLength = 0, shutter = 0, iso = 0;
     };
     // The picture `key` names, decoded at its size. Throws std::runtime_error.
     DecodedPicture decode(const DecodeKey &key);
@@ -89,7 +91,8 @@ public:
     Source setPicture(DecodedPicture &&picture, const QString &path);
 
     struct Output {
-        QImage image;                   // for the screen, in sRGB
+        QImage image;                   // in sRGB
+        QImage shown;                   // for the screen: the monitor's colour where it has a profile (DisplayColour)
         Recipe resolved;                // the recipe as printed, every metered value in
         Metered metered;
         GeometryMap map;                // where the image's pixels come from in the frame

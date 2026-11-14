@@ -1,5 +1,7 @@
 #include "Exif.h"
 
+#include <QStringList>
+
 #include <QDateTime>
 
 #include <algorithm>
@@ -215,4 +217,32 @@ QByteArray exifBlock(const ExportMetadata &m, int width, int height, bool srgb, 
     block.append(reinterpret_cast<const char *>(&first), 4);
     block.append(layoutDirectories(directories, 8));
     return block;
+}
+
+QString shutterSpeed(double seconds)
+{
+    if (seconds < 1) {
+        const long under = std::lround(1 / seconds);
+        if (under >= 1 && std::abs(1.0 / under - seconds) / seconds < 0.05)
+            return QStringLiteral("1/%1 s").arg(under);
+        return QString::number(seconds, 'f', 1) + QStringLiteral(" s");
+    }
+    if (std::abs(seconds - std::round(seconds)) < 0.05)
+        return QStringLiteral("%1 s").arg(std::lround(seconds));
+    return QString::number(seconds, 'f', 1) + QStringLiteral(" s");
+}
+
+QString photoLine(const QString &camera, double focalLength, double shutter, double iso)
+{
+    QStringList parts;
+    if (!camera.isEmpty())
+        parts << camera;
+    if (focalLength > 0)
+        parts << (focalLength < 10 ? QString::number(focalLength, 'f', 1) : QString::number(std::lround(focalLength)))
+                     + QStringLiteral(" mm");
+    if (shutter > 0)
+        parts << shutterSpeed(shutter);
+    if (iso > 0)
+        parts << QStringLiteral("ISO %1").arg(std::lround(iso));
+    return parts.join(QStringLiteral("  ·  "));
 }

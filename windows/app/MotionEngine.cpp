@@ -1,4 +1,5 @@
 #include "MotionEngine.h"
+#include "DisplayColour.h"
 
 #include "Provenance.h"
 #include "version.h"
@@ -89,7 +90,7 @@ std::optional<MotionEngine::Output> MotionEngine::render(const Request &request)
     shown.time = m_frame->time;
     if (m_shown && m_shown->clip == shown.clip && m_shown->time == shown.time && m_shown->recipe == shown.recipe
         && m_shown->format == shown.format && m_shown->input == shown.input && m_shown->effects == shown.effects
-        && m_shown->mode == shown.mode && m_shown->size == shown.size)
+        && m_shown->mode == shown.mode && m_shown->size == shown.size && m_shown->screen == shown.screen)
         return out;
     const double prepared = double(clock.nsecsElapsed()) / 1e6;
     clock.restart();
@@ -102,6 +103,8 @@ std::optional<MotionEngine::Output> MotionEngine::render(const Request &request)
         std::memcpy(image.scanLine(y), rgba.data() + size_t(y) * request.size.width() * 4,
                     size_t(request.size.width()) * 4);
     image.setColorSpace(QColorSpace(QColorSpace::SRgb));
+    // for the screen: the monitor's colour where it has a profile (DisplayColour)
+    out.shown = displaycolour::toScreen(image);
     out.image = std::move(image);
     // the grade alone, as the Mac's preview times its draw; the bake and the
     // decode before it only with FLX_TIMING

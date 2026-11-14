@@ -1,0 +1,122 @@
+{
+  "app" : "FLX Film Lab",
+  "flag" : "reject",
+  "look" : {
+    "effects" : {
+      "bloom" : {
+        "amount" : 100,
+        "blend" : "lighten",
+        "enabled" : true,
+        "haze" : 0,
+        "size" : 45,
+        "softness" : 100,
+        "threshold" : 80
+      },
+      "glow" : {
+        "amount" : 30,
+        "enabled" : false,
+        "size" : 40,
+        "threshold" : 50
+      },
+      "halation" : {
+        "amount" : 40,
+        "enabled" : false,
+        "haloOnly" : false,
+        "size" : 52,
+        "threshold" : 83,
+        "tint" : {
+          "b" : 0.05,
+          "g" : 0.3,
+          "r" : 1
+        }
+      }
+    },
+    "export" : {
+      "codec" : "ProRes 422 HQ",
+      "display" : "Rec.709 (Apple displays)"
+    },
+    "input" : {
+      "format" : "Panasonic V-Log",
+      "levels" : "From the file",
+      "matrix" : "From the file"
+    },
+    "recipe" : {
+      "autoDensity" : false,
+      "autoExposure" : true,
+      "autoGrade" : false,
+      "brightness" : -0.2,
+      "couplersAmount" : 1,
+      "couplersDiffusion" : 1,
+      "couplersEnabled" : true,
+      "density" : 0,
+      "densityCurveGamma" : 1,
+      "exposureEV" : 0,
+      "filmFormat" : "120",
+      "filmStock" : "kodak_vision3_250d",
+      "filterShiftM" : 0,
+      "filterShiftY" : 0,
+      "gamutCompress" : true,
+      "glareAmount" : 0.03,
+      "glareEnabled" : true,
+      "grade" : 115,
+      "gradeTrim" : {
+        "blue" : 0,
+        "green" : 0,
+        "red" : 0
+      },
+      "grainAmount" : 1,
+      "grainEnabled" : true,
+      "grainScale" : 1,
+      "halationAmount" : 1,
+      "halationEnabled" : true,
+      "halationScale" : 1,
+      "highlightCMY" : {
+        "cyan" : 0,
+        "magenta" : 0,
+        "yellow" : 0
+      },
+      "highlightGrade" : 0,
+      "highlights" : 0,
+      "masks" : [
+
+      ],
+      "normalizeToBase" : true,
+      "outputColorSpace" : "sRGB",
+      "preflashExposure" : 0,
+      "preflashM" : 0,
+      "preflashY" : 0,
+      "printStock" : "kodak_2383",
+      "scatterAmount" : 1,
+      "scatterScale" : 1,
+      "shadowCMY" : {
+        "cyan" : 0,
+        "magenta" : 0,
+        "yellow" : 0
+      },
+      "shadowGrade" : 0,
+      "shadows" : 0,
+      "shoulder" : 0,
+      "shoulderTrim" : {
+        "blue" : 0,
+        "green" : 0,
+        "red" : 0
+      },
+      "shoulderWidth" : 1,
+      "snap" : 0,
+      "snapTrim" : {
+        "blue" : 0,
+        "green" : 0,
+        "red" : 0
+      },
+      "toe" : 0,
+      "toeTrim" : {
+        "blue" : 0,
+        "green" : 0,
+        "red" : 0
+      },
+      "toeWidth" : 1
+    },
+    "version" : 2
+  },
+  "modified" : "2026-11-11T17:16:19Z"
+}

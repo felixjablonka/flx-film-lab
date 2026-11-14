@@ -7,11 +7,13 @@
 #include <vector>
 
 class Document;
+class FolderSidebar;
 class MotionDocument;
 class Canvas;
 class MotionCanvas;
 class Inspector;
 class MotionInspector;
+class SettingsDialog;
 class QAction;
 class QComboBox;
 class QMenu;
@@ -42,8 +44,15 @@ public:
     void openDialog();
     void exportDialog();
     void exportLUTDialog();
+    // A folder's pictures, or in Motion its clips, in the sidebar.
+    void openFolderDialog();
+    // Every picture or clip selected but the rejects, into a folder.
+    void exportSelectedDialog();
+    // File > Settings… (Ctrl+,): open, or brought to the front.
+    SettingsDialog *showSettings();
 
 protected:
+    void showEvent(QShowEvent *) override;
     void dragEnterEvent(QDragEnterEvent *) override;
     void dropEvent(QDropEvent *) override;
     void changeEvent(QEvent *) override;
@@ -52,6 +61,16 @@ protected:
 private:
     QWidget *buildStills();
     QWidget *buildMotion();
+    // The sidebar and the line beside it, wired to its half's document.
+    QWidget *sidebarFor(FolderSidebar *sidebar, bool motion);
+    MotionInspector *makeMotionInspector();
+    QWidget *makeMotionSidebar();
+    void rebuildPanels();
+    void setSidebarShown(bool shown);
+    // The previews follow the colour of the monitor the window is on
+    // (DisplayColour): read again when the window moves to another, the
+    // screens change, or the app comes back to the front.
+    void followScreen();
     void refresh();
     void rebuildPresets();
     void savePresetDialog();
@@ -67,15 +86,22 @@ private:
     Inspector *m_inspector;
     MotionCanvas *m_motionCanvas;
     MotionInspector *m_motionInspector;
-    QAction *m_undo, *m_redo, *m_loupe, *m_hideMaskLines;
+    QAction *m_undo, *m_redo, *m_loupe, *m_hideMaskLines, *m_original;
     QAction *m_copy, *m_paste, *m_export, *m_exportMenu, *m_exportLUT, *m_crop, *m_turnLeft, *m_turnRight;
     QAction *m_logFootage, *m_stillsMode, *m_motionMode, *m_editMenu;
+    QAction *m_showSidebar, *m_openFolder, *m_exportSelected, *m_previous, *m_next;
+    QAction *m_copyLook, *m_pasteLook;
+    // each half's sidebar, with the line beside it
+    QWidget *m_stillsSidebar, *m_motionSidebar;
+    bool m_followingScreen = false;
+    SettingsDialog *m_settings = nullptr;
     QMenu *m_presets;
     QComboBox *m_format, *m_codec;
     QButtonGroup *m_surround, *m_modes;
     QToolButton *m_presetsButton;
-    // the toolbar's items for each half
+    // each half's own actions, and its groups on the toolbar
     std::vector<QAction *> m_stillsItems, m_motionItems;
+    std::vector<QWidget *> m_stillsBar, m_motionBar;
     // the keys with no menu item of their own, Motion's alone
     std::vector<QShortcut *> m_motionKeys;
 };

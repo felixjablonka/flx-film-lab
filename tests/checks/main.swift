@@ -720,11 +720,12 @@ do {
 print("black-and-white stocks print in silver")
 do {
     let bw = ["kodak_tri_x_400", "kodak_tri_x_400_push2", "ilford_hp5_plus", "fujifilm_neopan_1600", "agfa_apx_25",
-              "kodak_t_max_100", "kodak_double_x_5222"]
+              "kodak_t_max_100", "kodak_double_x_5222", "agfa_apx_100", "agfa_apx_400", "fujifilm_neopan_100_acros_ii"]
     let paper = "ilford_multigrade_rc_deluxe"
     // Double-X prints on its own release print film, 2302, a silver film too.
     let ownPrint = ["kodak_double_x_5222": "kodak_2302"]
-    let ownSheet = ["agfa_apx_25", "kodak_t_max_100", "kodak_double_x_5222"]
+    let ownSheet = ["agfa_apx_25", "kodak_t_max_100", "kodak_double_x_5222", "agfa_apx_100", "agfa_apx_400",
+                    "fujifilm_neopan_100_acros_ii"]
 
     // A colourful chart, hue around and exposure across, grain on: on a
     // silver paper every pixel must come out neutral, grain included —
@@ -831,6 +832,21 @@ do {
                   String(format: "kodak_double_x_5222: response %.0f%% at 5, %.0f%% at 20, %.0f%% at 30 cycles/mm (Kodak's 126, 92, 68)",
                          got[0], got[1], got[2]))
         }
+        // Agfa's own 1995 sheets give APX 100 and 400 their curves (the 1998
+        // range sheet repeats APX 100's for APX 400); Fujifilm publishes none
+        // for Acros II, which takes T-Max 100's, whose resolving power it has.
+        for (film, points, whose) in [
+            ("agfa_apx_100", [(5.0, 112.0), (20.0, 95.0), (30.0, 79.0)], "Agfa's"),
+            ("agfa_apx_400", [(5.0, 107.0), (20.0, 83.0), (30.0, 65.0)], "Agfa's"),
+            ("fujifilm_neopan_100_acros_ii", [(5.0, 109.0), (20.0, 114.0), (30.0, 112.0)], "T-Max 100's"),
+        ] {
+            var r = try baseRecipe(film: film)
+            r.halationEnabled = true
+            let got = try points.map { try response(r, at: $0.0) }
+            check(zip(got, points).allSatisfy { abs($0 - $1.1) < 5 },
+                  String(format: "%@: response %.0f%% at 5, %.0f%% at 20, %.0f%% at 30 cycles/mm (%@ %.0f, %.0f, %.0f)",
+                         film, got[0], got[1], got[2], whose, points[0].1, points[1].1, points[2].1))
+        }
 
         // Fujifilm measures no edge effect for Provia 400X (AF3-0213E). On
         // 100F's couplers and its own steeper curve it read 200% at 10
@@ -887,14 +903,21 @@ do {
     // deep red shadow, here the inside of an ear) once landed on the
     // LUT's clamped edge, and Tri-X printed it lighter than the skin around
     // it. Scaled up five stops so the difference shows: it must not print
-    // lighter than a grey of the same luminance.
+    // lighter than the same red brought inside the triangle (its negative
+    // component taken off, at the same luminance). On most films that red
+    // prints darker than a grey of its luminance; Acros II sees red up to 650
+    // nm about as strongly as green, and prints it a little lighter.
     let ear = SIMD3<Float>(0.0131, 0.0004, -0.0024) * 32
     let earLuminance = simd_dot(ear, SIMD3(0.2627, 0.6780, 0.0593))
-    renderer.setImage([ear.x, ear.y, ear.z, 1, earLuminance, earLuminance, earLuminance, 1], width: 2, height: 1)
+    var inside = simd_max(ear, SIMD3<Float>(repeating: 0))
+    inside *= earLuminance / simd_dot(inside, SIMD3(0.2627, 0.6780, 0.0593))
+    renderer.setImage([ear.x, ear.y, ear.z, 1, inside.x, inside.y, inside.z, 1,
+                       earLuminance, earLuminance, earLuminance, 1], width: 3, height: 1)
     for film in bw {
         let out = try render(renderer, try baseRecipe(film: film)).map { lab($0).x }
         check(out[0] < out[1] + 2,
-              String(format: "%@: a chromaticity outside the triangle prints L* %.1f, a grey of its luminance %.1f", film, out[0], out[1]))
+              String(format: "%@: a chromaticity outside the triangle prints L* %.1f, the same red inside it %.1f, a grey of its luminance %.1f",
+                     film, out[0], out[1], out[2]))
     }
 
     // Camera filters. Exposure opens up by the filter factor, so a grey card
@@ -990,20 +1013,22 @@ do {
     renderer.setImage(greyWedge(stops), width: stops.count, height: 1)
 }
 
-print("colour films take warming and conversion filters")
+print("colour films take warming, cooling and conversion filters")
 do {
-    // Kodak's Wratten 81C, 85 and 85B and Tiffen's 812, read off their
-    // makers' transmission curves, on every colour film. One filter factor
-    // opens up for the green-sensitive layer: the 81C and 812 by about half a
-    // stop (each is rated a third), the 85 and 85B, which pass under half the
-    // green, by about one (their rated two thirds is a meter's reading).
+    // Kodak's Wratten 81C, 82A, 82C, 85 and 85B and Tiffen's 812, read off
+    // their makers' transmission curves, on every colour film. One filter
+    // factor opens up for the green-sensitive layer: the 81C, 812 and 82A by
+    // about half a stop (each is rated a third), the 82C by about three
+    // quarters, the 85 and 85B, which pass under half the green, by about one
+    // (their rated two thirds is a meter's reading).
     let colour = PackLibrary.shared.filmStocks.filter { $0.channelModel != "bw" }.map(\.stock)
     for film in colour {
         let filters = try PackLibrary.shared.pack(film).lensFilters ?? []
         let opened = Dictionary(uniqueKeysWithValues: filters.map { ($0.id, log2($0.factor)) })
-        let warming = ["81c", "812"].allSatisfy { (0.3...0.7).contains(opened[$0] ?? 0) }
-        let conversion = ["85", "85b"].allSatisfy { (0.7...1.4).contains(opened[$0] ?? 0) }
-        check(filters.map(\.id) == ["81c", "812", "85", "85b"] && warming && conversion,
+        let third = ["81c", "812", "82a"].allSatisfy { (0.3...0.7).contains(opened[$0] ?? 0) }
+        let twoThirds = (0.6...1.0).contains(opened["82c"] ?? 0)
+            && ["85", "85b"].allSatisfy { (0.7...1.4).contains(opened[$0] ?? 0) }
+        check(filters.map(\.id) == ["81c", "812", "82a", "82c", "85", "85b"] && third && twoThirds,
               String(format: "%@: %@, opened %@ stops", film, filters.map(\.name).joined(separator: ", "),
                      filters.map { String(format: "%.2f", log2($0.factor)) }.joined(separator: ", ")))
     }
@@ -1031,6 +1056,18 @@ do {
               String(format: "%@: a grey through the 81C a* %+.1f b* %+.1f, through the 812 a* %+.1f b* %+.1f, %.0f° nearer pink; L* within %.1f",
                      film, amber.y, amber.z, pinker.y, pinker.z, hue(amber) - hue(pinker),
                      max(abs(amber.x), abs(pinker.x))))
+        // The 82A and 82C cool it as the 81C warms it: the 82C about as far as
+        // the 81C goes, the 82A under half as far (Kodak's curves shift a
+        // lamp -19 and -48 mired, the 81C +35), and it keeps its lightness.
+        for f in ["82a", "82c"] {
+            r.lensFilter = f
+            casts[f] = lab(try render(renderer, r)[0]) - plain
+        }
+        let cooler = casts["82a"] ?? .zero, coolest = casts["82c"] ?? .zero
+        check(cooler.z < -3 && (0.3...0.6).contains(cooler.z / coolest.z) && (0.8...1.5).contains(-coolest.z / amber.z)
+              && abs(cooler.x) < 2.5 && abs(coolest.x) < 2.5,
+              String(format: "%@: a grey through the 82A a* %+.1f b* %+.1f, through the 82C a* %+.1f b* %+.1f (the 81C's b* %+.1f); L* within %.1f",
+                     film, cooler.y, cooler.z, coolest.y, coolest.z, amber.z, max(abs(cooler.x), abs(coolest.x))))
     }
 
     // A tungsten film, balanced for a 3200 K lamp, prints daylight blue. The 85
@@ -1075,6 +1112,24 @@ do {
         check(tinted && asLight,
               String(format: "%@ in daylight: a* %+.1f b* %+.1f bare, a* %+.1f b* %+.1f L* %+.1f through the 85B, a* %+.1f b* %+.1f L* %+.1f through the 85, against its own light",
                      film, bare.y, bare.z, b85b.y, b85b.z, b85b.x, b85.y, b85.z, b85.x))
+        // Under a lamp warmer than its own, the film prints a grey warm. The
+        // 82A takes a 3000 K lamp to 3200 K (Tiffen's rating), and the 82C,
+        // twice the 82A (Fujifilm's LBB-4 against LBB-2), a 2800 K one:
+        // through each the grey prints near neutral. The lamps are the
+        // Planckian 3000 K and 2800 K, read against the film's own light as
+        // daylight is above.
+        for (filter, kelvin, x, y) in [("82a", 3000, Float(0.43693), Float(0.40408)),
+                                       ("82c", 2800, Float(0.45186), Float(0.40863))] {
+            var lamp = try baseRecipe(film: film)
+            let warm = try PackLibrary.shared.pack(film).rgbToXYZMatrix.inverse * (SIMD3(x / y, 1, (1 - x - y) / y) * g)
+            renderer.setImage([warm.x, warm.y, warm.z, 1], width: 1, height: 1)
+            let underLamp = lab(try render(renderer, lamp)[0]) - balanced
+            lamp.lensFilter = filter
+            let through = lab(try render(renderer, lamp)[0]) - balanced
+            check(underLamp.z > 3 && abs(through.z) < 3 && cast(through) < 0.4 * cast(underLamp) && abs(through.x) < 3,
+                  String(format: "%@ under a %d K lamp: a* %+.1f b* %+.1f bare, a* %+.1f b* %+.1f L* %+.1f through the %@, against its own light",
+                         film, kelvin, underLamp.y, underLamp.z, through.y, through.z, through.x, filter.uppercased()))
+        }
     }
     renderer.setImage(greyWedge(stops), width: stops.count, height: 1)
 }
@@ -1397,6 +1452,68 @@ do {
         }
     } else {
         print("   skip DSC_0871.NEF not present")
+    }
+}
+
+print("the film decode stays on Core Image's RAW decoder 8 until a newer one is checked")
+// macOS 27 offers a decoder version 9 for some cameras but still picks 8 for
+// them; set up as the film decode is, 9 decoded them cyan
+// (RawLoader.filmDecoderVersion). The first check is a tripwire: it fails the
+// day Core Image's default for one of the sample raws (one per camera; not in
+// the repository, so skipped without them) passes 8, so a move to 9 is made on
+// purpose, with the Windows app's colour measured again. The second runs the
+// film decode's setup on each camera's default, and as if the newest version a
+// file offers were the default: it has to keep the first, and step back to 8
+// from the second with the decode still linear (choosing a version puts its
+// shadow bias back).
+do {
+    let folder = URL(fileURLWithPath: "Test Files/Test RAW files")
+    var cameras: [String: URL] = [:]
+    for url in ((try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? [])
+        .filter({ RawLoader.isRawFile($0) }).sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+        let tiff = RawLoader.metadata(of: url)?[kCGImagePropertyTIFFDictionary] as? [CFString: Any]
+        let model = (tiff?[kCGImagePropertyTIFFModel] as? String)?.trimmingCharacters(in: .whitespaces)
+            ?? url.lastPathComponent
+        if cameras[model] == nil { cameras[model] = url }
+    }
+    if cameras.isEmpty {
+        print("   skip no sample raws present")
+    } else {
+        let kept = RawLoader.filmDecoderVersion
+        let options = RawLoader.Options(whiteBalance: .daylight)
+        var defaults: [String] = [], newer: [String] = [], steppedBack: [String] = [], wrong: [String] = []
+        for (model, url) in cameras.sorted(by: { $0.key < $1.key }) {
+            guard let filter = CIRAWFilter(imageURL: url), let version = RawLoader.number(of: filter.decoderVersion) else {
+                wrong.append("\(url.lastPathComponent) does not open"); continue
+            }
+            let byDefault = filter.decoderVersion
+            defaults.append("\(model) \(byDefault.rawValue)")
+            if version > kept { newer.append("\(model) (\(url.lastPathComponent)) \(byDefault.rawValue)") }
+            RawLoader.configure(filter, options: options)
+            if version <= kept, filter.decoderVersion != byDefault {
+                wrong.append("\(model) moved from \(byDefault.rawValue) to \(filter.decoderVersion.rawValue)")
+            }
+            // as if the newest version the file offers were Core Image's default
+            guard let newest = filter.supportedDecoderVersions.max(by: {
+                      (RawLoader.number(of: $0) ?? 0) < (RawLoader.number(of: $1) ?? 0) }),
+                  (RawLoader.number(of: newest) ?? 0) > kept, let fresh = CIRAWFilter(imageURL: url) else { continue }
+            fresh.decoderVersion = newest
+            RawLoader.configure(fresh, options: options)
+            if RawLoader.number(of: fresh.decoderVersion) == kept, fresh.shadowBias == 0, fresh.boostShadowAmount == 0 {
+                steppedBack.append("\(model) \(newest.rawValue) to \(fresh.decoderVersion.rawValue)")
+            } else {
+                wrong.append(String(format: "%@ from %@: version %@, shadow bias %.1f, shadow boost %.2f", model,
+                                    newest.rawValue, fresh.decoderVersion.rawValue, fresh.shadowBias, fresh.boostShadowAmount))
+            }
+        }
+        check(newer.isEmpty, newer.isEmpty
+              ? "Core Image's default RAW decoder is \(kept) or older for every sample camera: \(defaults.joined(separator: ", "))"
+              : "Core Image's default RAW decoder is past \(kept) for \(newer.joined(separator: "; ")): check the film decode "
+                + "on it, measure the Windows app's colour again, then raise RawLoader.filmDecoderVersion")
+        check(wrong.isEmpty, "the film decode keeps Core Image's default where it is \(kept) or older"
+              + (steppedBack.isEmpty ? "" : ", and steps back to \(kept), still linear, where it is newer: "
+                 + steppedBack.joined(separator: ", "))
+              + (wrong.isEmpty ? "" : ": " + wrong.joined(separator: "; ")))
     }
 }
 

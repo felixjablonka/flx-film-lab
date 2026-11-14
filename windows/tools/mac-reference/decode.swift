@@ -42,6 +42,15 @@ let context = CIContext(options: [.workingColorSpace: workingSpace, .workingForm
                                   .cacheIntermediates: false])
 
 guard let filter = CIRAWFilter(imageURL: input) else { fail("CIRAWFilter cannot read \(input.path)") }
+// RawLoader.keepDecoderVersion: Core Image's RAW decoder 8 where its default is
+// newer and the file offers 8 (RawLoader.filmDecoderVersion; macOS 27's version
+// 9 decodes the film decode's setup cyan). First, as there: choosing a version
+// puts its shadow boost and shadow bias back to their defaults.
+func decoderNumber(_ version: CIRAWDecoderVersion) -> Int? { Int(version.rawValue.prefix(while: \.isNumber)) }
+if let current = decoderNumber(filter.decoderVersion), current > 8,
+   let kept = filter.supportedDecoderVersions.first(where: { decoderNumber($0) == 8 }) {
+    filter.decoderVersion = kept
+}
 let defaults: [String: Any] = [
     "sharpnessAmount": filter.sharpnessAmount, "colorNoiseReductionAmount": filter.colorNoiseReductionAmount,
     "luminanceNoiseReductionAmount": filter.luminanceNoiseReductionAmount,

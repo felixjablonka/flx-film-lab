@@ -89,7 +89,7 @@ void roundedFrame(QPainter &p, const QRectF &r)
 HistogramView::HistogramView(QWidget *parent)
     : QWidget(parent)
 {
-    setFixedHeight(56);
+    setFixedHeight(theme::px(56));
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     setToolTip(QStringLiteral("The print's histogram."));
 }
@@ -170,7 +170,7 @@ public:
     explicit CurvesGraph(CurvesEditor *editor)
         : QWidget(editor), m_editor(editor)
     {
-        setFixedHeight(176);
+        setFixedHeight(theme::px(176));
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         setMouseTracking(false);
         setToolTip(QStringLiteral(
@@ -294,7 +294,7 @@ void CurvesGraph::paintEvent(QPaintEvent *)
     // in and out on the 0...255 scale of an 8-bit file, while a point is dragged
     if (m_dragging && size_t(*m_dragging) < pts.size()) {
         const CurvePoint &q = pts[size_t(*m_dragging)];
-        p.setFont(theme::mono(9));
+        p.setFont(theme::panelMono(9));
         p.setPen(m_removing ? QColor(255, 149, 0) : theme::secondary());
         p.drawText(QRectF(r.left() + 2, r.top() + 2, r.width(), 14), Qt::AlignLeft | Qt::AlignTop,
                    m_removing ? QStringLiteral("Let go to remove")
@@ -413,10 +413,10 @@ CurvesEditor::CurvesEditor(QWidget *parent)
     : QWidget(parent)
 {
     auto *layout = new QVBoxLayout(this);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(5);
+    layout->setContentsMargins(0, theme::px(0), 0, 0);
+    layout->setSpacing(theme::px(5));
     auto *row = new QHBoxLayout;
-    row->setSpacing(6);
+    row->setSpacing(theme::px(6));
     m_channels = new Segmented({QStringLiteral("RGB"), QStringLiteral("Red"), QStringLiteral("Green"),
                                 QStringLiteral("Blue")});
     m_channels->setCurrent(0);
@@ -427,6 +427,7 @@ CurvesEditor::CurvesEditor(QWidget *parent)
     row->addWidget(m_channels, 1);
     m_reset = new QToolButton;
     m_reset->setText(QStringLiteral("↺"));
+    m_reset->setFont(theme::panelLabel());
     m_reset->setAutoRaise(true);
     m_reset->setToolTip(QStringLiteral("Straighten this curve again."));
     connect(m_reset, &QToolButton::clicked, this, [this] { straighten(m_channel); });

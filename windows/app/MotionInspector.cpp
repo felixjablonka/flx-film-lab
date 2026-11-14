@@ -1,5 +1,6 @@
 #include "MotionInspector.h"
 
+#include "AppSettings.h"
 #include "MotionDocument.h"
 #include "Theme.h"
 #include "Widgets.h"
@@ -21,7 +22,7 @@ QString filterFactor(float factor)
 QLabel *monoNote()
 {
     auto *l = new QLabel;
-    l->setFont(theme::mono(10));
+    l->setFont(theme::panelMono(10));
     l->setWordWrap(true);
     QPalette p = l->palette();
     p.setColor(QPalette::WindowText, theme::tertiary());
@@ -32,29 +33,32 @@ QLabel *monoNote()
 QPushButton *actionButton(const QString &text, const QString &help)
 {
     auto *b = new QPushButton(text);
-    b->setFont(theme::small());
+    b->setFont(theme::panelSmall());
     b->setToolTip(help);
     b->setCursor(Qt::PointingHandCursor);
     b->setStyleSheet(QStringLiteral("QPushButton { background: #3a3a3a; color: #e6e6e6; border: 1px solid #4a4a4a;"
-                                    " border-radius: 5px; padding: 3px 12px; }"
+                                    " border-radius: %1px; padding: %2px %3px; }"
                                     "QPushButton:hover { background: #474747; }"
-                                    "QPushButton:disabled { color: #666; }"));
+                                    "QPushButton:disabled { color: #666; }")
+                         .arg(theme::px(5))
+                         .arg(theme::px(3))
+                         .arg(theme::px(12)));
     return b;
 }
 
 } // namespace
 
-MotionInspector::MotionInspector(MotionDocument &document, Vocabulary vocabulary, QWidget *parent)
-    : QScrollArea(parent), m_doc(document), m_vocabulary(vocabulary)
+MotionInspector::MotionInspector(MotionDocument &document, QWidget *parent)
+    : QScrollArea(parent), m_doc(document)
 {
     m_content = new QWidget;
     auto *layout = new QVBoxLayout(m_content);
-    layout->setContentsMargins(12, 0, 12, 24);
+    layout->setContentsMargins(theme::px(12), 0, theme::px(12), theme::px(24));
     layout->setSpacing(0);
     setWidget(m_content);
     setWidgetResizable(true);
     setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    setFixedWidth(306);
+    setFixedWidth(theme::px(306));
     setFrameShape(QFrame::NoFrame);
     m_content->setAutoFillBackground(true);
     QPalette p = m_content->palette();
@@ -148,6 +152,8 @@ void MotionInspector::buildStocks()
 
     m_refreshers.push_back([=, this] {
         const Recipe &r = m_doc.look().recipe;
+        // the films Settings leaves in the menu, and the one in use
+        film->setGroups(stockGroups(filmmenu::shown(m_doc.packs().filmEntries(), hiddenFilms(), r.filmStock), true));
         film->setCurrent(QString::fromStdString(r.filmStock));
         const bool printing = m_doc.printsOnPaper();
         onPaper->setChecked(printing);
@@ -260,12 +266,16 @@ void MotionInspector::buildExposure()
                                  "progressively; red lightens skin and darkens foliage; green does the opposite; blue "
                                  "lightens skies and haze and deepens reds. Exposure is opened up by the filter "
                                  "factor shown, as a photographer would, so a grey card prints the same.")
-                : QStringLiteral("A warming or conversion filter on the lens, measured from its maker's transmission "
-                                 "curves (Kodak's Wratten 81C, 85 and 85B, Tiffen's 812): the film sees the scene "
-                                 "through it, wavelength by wavelength, with its own sensitivities. The 81C holds "
-                                 "back blue and some green, a plain amber warmth; the 812 holds back violet and a "
-                                 "little blue and lets blue and green through alike, so its warmth leans pink: both "
-                                 "for daylight film's cool shade, overcast light and flash. The 85 and 85B hold back "
+                : QStringLiteral("A warming, cooling or conversion filter on the lens, measured from its maker's "
+                                 "transmission curves (Kodak's Wratten 81C, 82A, 82C, 85 and 85B, Tiffen's 812): the "
+                                 "film sees the scene through it, wavelength by wavelength, with its own "
+                                 "sensitivities. The 81C holds back blue and some green, a plain amber warmth; the "
+                                 "812 holds back violet and a little blue and lets blue and green through alike, so "
+                                 "its warmth leans pink: both for daylight film's cool shade, overcast light and "
+                                 "flash. The 82A and 82C hold back red and some green, the 82C about twice as much: "
+                                 "they cool warm light, morning and evening sun on daylight film, or lamps warmer "
+                                 "than a tungsten film's 3200 K, the 82A taking 3000 K and the 82C 2800 K to about "
+                                 "3200 K. The 85 and 85B hold back "
                                  "blue and much of the green and pass the red: they convert daylight for tungsten "
                                  "film, rated 5500 K to 3400 K and to 3200 K. Measured, both go further than rated, "
                                  "to about 3300 K and 2800 K, and a tungsten film's own layers see the same: balanced "
@@ -367,8 +377,8 @@ void MotionInspector::buildEffects()
     auto group = [](QVBoxLayout *&layout) {
         auto *w = new QWidget;
         layout = new QVBoxLayout(w);
-        layout->setContentsMargins(0, 0, 0, 0);
-        layout->setSpacing(5);
+        layout->setContentsMargins(0, theme::px(0), 0, 0);
+        layout->setSpacing(theme::px(5));
         return w;
     };
 
@@ -567,8 +577,8 @@ void MotionInspector::buildExport()
 
     auto *buttons = new QWidget;
     auto *row = new QHBoxLayout(buttons);
-    row->setContentsMargins(0, 4, 0, 0);
-    row->setSpacing(8);
+    row->setContentsMargins(0, theme::px(4), 0, 0);
+    row->setSpacing(theme::px(8));
     auto *exportButton = actionButton(QStringLiteral("Export…"),
                                       QStringLiteral("Every frame at full size, with the sound copied as it is "
                                                      "(Ctrl+E)"));

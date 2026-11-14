@@ -34,8 +34,9 @@ guard let outputPath = args.first, !outputPath.hasPrefix("--") else {
       --film STOCK         film profile (default kodak_portra_800)
       --paper STOCK        print profile (default: the film's reference paper)
       --filter NAME        camera filter: blue, green, yellow, orange or red for a
-                           black-and-white film; 81c, 812, 85 or 85b (Wratten
-                           81C, Tiffen 812, Wratten 85, 85B) for a colour film
+                           black-and-white film; 81c, 812, 82a, 82c, 85 or 85b
+                           (Wratten 81C, Tiffen 812, Wratten 82A, 82C, 85, 85B)
+                           for a colour film
       --size N             lattice points per axis (default 65; 33 for monitors)
       --input MODE         the footage, and how the app hands it to the LUT:
                              code          Nikon N-Log, code value / 1023: a Zf writes

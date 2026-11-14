@@ -22,6 +22,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include "DisplayColour.h"
+
 #include <cstdio>
 #include <cstring>
 #include <stdexcept>
@@ -33,9 +35,13 @@ QColorSpace outputColorSpace(const std::string &name)
     if (name == "Display P3")
         return QColorSpace(P::DciP3D65, T::SRgb);
     // the sRGB curve on Rec.2020's primaries, as the pixels are encoded
-    // (encode_display), not the profile with a 2.4 power
-    if (name == "ITU-R BT.2020")
-        return QColorSpace(P::Bt2020, T::SRgb);
+    // (encode_display), not the profile with a 2.4 power; named, as Qt
+    // leaves a profile it has no name for unnamed
+    if (name == "ITU-R BT.2020") {
+        QColorSpace space(P::Bt2020, T::SRgb);
+        space.setDescription(QStringLiteral("ITU-R BT.2020"));
+        return space;
+    }
     if (name == "ProPhoto RGB")
         return QColorSpace(P::ProPhotoRgb, T::Gamma, 1.80078125f);
     return QColorSpace(QColorSpace::SRgb);
@@ -227,7 +233,8 @@ RenderEngine::Source RenderEngine::setPicture(DecodedPicture &&picture, const QS
     m_renderer->setDodgeBurn({}, 0, 0);
     ++m_sourceID;
     QString camera = QString::fromStdString(picture.mosaic.make + " " + picture.mosaic.model).trimmed();
-    return {m_sourceID, m_picture.width, m_picture.height, camera};
+    return {m_sourceID, m_picture.width, m_picture.height, camera, picture.mosaic.focalLength,
+            picture.mosaic.photo.shutter, picture.mosaic.exposure.iso};
 }
 
 const Dump &RenderEngine::meteredArea(const FrameGeometry &upright)
@@ -363,10 +370,15 @@ std::optional<RenderEngine::Output> RenderEngine::render(const Recipe &recipe, i
     for (int y = 0; y < h; ++y)
         std::memcpy(image.scanLine(y), &display[size_t(y) * w * 4], size_t(w) * 4);
     image.setColorSpace(outputColorSpace(out.resolved.outputColorSpace));
-    // the screen's colour is sRGB's: what isn't, comes into it
+    const QImage::Format format = transparent ? QImage::Format_ARGB32_Premultiplied : QImage::Format_RGB32;
+    // For a monitor with a profile of its own, the print goes to it straight
+    // from the output space, nothing clipped to sRGB on the way (DisplayColour).
+    const QImage shown = displaycolour::active() ? displaycolour::toScreen(image) : QImage();
+    // the print in sRGB: the sidebar's picture, and the screen's elsewhere
     if (out.resolved.outputColorSpace != "sRGB")
         image.convertToColorSpace(QColorSpace(QColorSpace::SRgb));
-    out.image = image.convertToFormat(transparent ? QImage::Format_ARGB32_Premultiplied : QImage::Format_RGB32);
+    out.image = image.convertToFormat(format);
+    out.shown = shown.isNull() ? out.image : shown.convertToFormat(format);
     out.milliseconds = double(clock.nsecsElapsed()) / 1e6;
     if (qEnvironmentVariableIsSet("FLX_GPU_STATS")) {
         const QRhiStats st = m_rhi->statistics();
@@ -756,6 +768,9 @@ QImage RenderEngine::renderLoupe(const Recipe &recipe, QPointF centre, int width
     for (int y = 0; y < wh; ++y)
         std::memcpy(image.scanLine(y), &display[size_t(y) * ww * 4], size_t(ww) * 4);
     image.setColorSpace(outputColorSpace(resolved.outputColorSpace));
+    // for the screen, as the print on the canvas is (DisplayColour)
+    if (displaycolour::active())
+        return displaycolour::toScreen(image).convertToFormat(QImage::Format_RGB32);
     if (resolved.outputColorSpace != "sRGB")
         image.convertToColorSpace(QColorSpace(QColorSpace::SRgb));
     return image.convertToFormat(QImage::Format_RGB32);

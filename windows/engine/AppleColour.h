@@ -25,6 +25,15 @@
 // black, as the profile's decoder read them.
 struct AppleProfile {
     std::string make, model, decoder;
+    float baselineExposure = 0;          // Apple's for the camera, EV: in its transforms already
+    // The ISO values Apple gives another exposure (tools/calibrate/iso_exposure.py)
+    struct IsoExposure {
+        int from = 0, to = 0;
+        float exposure = 0;
+    };
+    std::vector<IsoExposure> isoExposure;
+    // Apple's exposure for a file at `iso`: the camera's, or the exception's
+    float exposureAt(float iso) const;
     float black = 0, white = 1;          // the decoder's levels the colour was measured with,
     int mosaicWidth = 0, mosaicHeight = 0;   // in this mode
     struct Mode {

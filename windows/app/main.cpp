@@ -15,6 +15,13 @@
 //   --loupe X,Y,W,H     the loupe open at X,Y (fractions of the print), W x H pixels of the print
 //   --save-loupe PNG    with --loupe: the loupe's picture, once printed
 //   --white-balance WB  once it has rendered, this white balance (decoding again): Daylight, As shot, ...
+//   --library DIR       the library and the sidebar's cached prints there, not the app's own
+//   --display-colour F  every monitor's colour mode and profile, and what the previews do with them, to F
+//   --self-test RAWS    with --library: the folder workflow driven in the app, four of RAWS' files
+//                       copied into DIR (SelfTest); --self-test-clips CLIPS for Motion's too
+//
+// The file may be a folder: it opens in the sidebar, in the half that has its
+// kind of file, and --screenshot waits for the sidebar's first pictures too.
 //
 // With a movie, which opens in Motion:
 //   --at SECONDS        the frame showing then
@@ -23,10 +30,15 @@
 //   --export-lut PATH   once it has rendered, the look as a .cube
 
 #include "AppSettings.h"
+#include "DisplayColour.h"
 #include "Document.h"
+#include "ImageLibrary.h"
+#include "Icons.h"
 #include "MainWindow.h"
 #include "MotionDocument.h"
+#include "SelfTest.h"
 #include "Theme.h"
+#include "Thumbnails.h"
 #include "version.h"
 
 #include <QApplication>
@@ -138,21 +150,72 @@ int main(int argc, char **argv)
                                    QStringLiteral("x,y,w,h"));
     const QCommandLineOption saveLoupe(QStringLiteral("save-loupe"), QStringLiteral("The loupe's picture to PNG."),
                                        QStringLiteral("png"));
+    const QCommandLineOption saveOriginal(QStringLiteral("save-original"),
+                                          QStringLiteral("The original, in the print's place, to PNG."),
+                                          QStringLiteral("png"));
+    const QCommandLineOption libraryDir(QStringLiteral("library"),
+                                        QStringLiteral("The library, the sidebar's cached prints and the settings in DIR."),
+                                        QStringLiteral("dir"));
+    const QCommandLineOption selfTest(QStringLiteral("self-test"), QStringLiteral("The folder workflow, on RAWS."),
+                                      QStringLiteral("raws"));
+    const QCommandLineOption selfTestClips(QStringLiteral("self-test-clips"),
+                                           QStringLiteral("With --self-test: Motion's too, on CLIPS."), QStringLiteral("clips"));
+    const QCommandLineOption displayColour(QStringLiteral("display-colour"),
+                                           QStringLiteral("The monitors' colour, to FILE."), QStringLiteral("file"));
+    const QCommandLineOption iconSheet(QStringLiteral("icon-sheet"),
+                                       QStringLiteral("Every toolbar icon, normal and on, to PNG, at 2x."),
+                                       QStringLiteral("png"));
+    const QCommandLineOption textSize(QStringLiteral("text-size"),
+                                      QStringLiteral("The panels' text size for this run: Standard, Larger or Largest."),
+                                      QStringLiteral("size"));
     parser.addOptions({screenshot, exportTo, size, recipe, preview, savePreview, bench, cropping, select, whiteBalance,
-                       at, play, codec, exportLUT, loupe, saveLoupe});
+                       at, play, codec, exportLUT, loupe, saveLoupe, saveOriginal, libraryDir, selfTest, selfTestClips,
+                       displayColour, textSize, iconSheet});
     parser.addHelpOption();
     parser.process(app);
 
+    if (parser.isSet(iconSheet))
+        return icons::sheet(40, 2).save(parser.value(iconSheet)) ? 0 : 2;
+
+    if (parser.isSet(displayColour)) {
+        QFile out(parser.value(displayColour));
+        if (!out.open(QIODevice::WriteOnly | QIODevice::Text))
+            return 2;
+        for (const displaycolour::State &s : displaycolour::readAll())
+            out.write(QStringLiteral("%1: %2; %3; profile %4 (%5); previews %6\n")
+                          .arg(s.monitor, s.mode,
+                               s.managedByWindows ? QStringLiteral("Windows manages colour") : QStringLiteral("Windows leaves colour to the app"),
+                               s.profile.isEmpty() ? QStringLiteral("none") : s.profile, s.description,
+                               s.space.isValid() ? QStringLiteral("converted to it") : QStringLiteral("left in sRGB"))
+                          .toUtf8());
+        return 0;
+    }
+
     // the test switches run an app of their own; anything else is handed on
-    const bool testing = parser.isSet(screenshot) || parser.isSet(exportTo) || parser.isSet(exportLUT) || parser.isSet(saveLoupe);
+    const bool testing = parser.isSet(screenshot) || parser.isSet(exportTo) || parser.isSet(exportLUT) || parser.isSet(saveLoupe)
+        || parser.isSet(saveOriginal) || parser.isSet(selfTest);
     const QStringList files = parser.positionalArguments();
     if (!testing && handOver(files.isEmpty() ? QString() : QFileInfo(files.first()).absoluteFilePath()))
         return 0;
 
-    Document document(appData());
+    // One library for both halves: each writes a folder's whole file, so two
+    // would write over each other's pictures and clips.
+    QString libraryAt = ImageLibrary::standardDirectory();
+    if (parser.isSet(libraryDir)) {
+        // the settings too: a test run never reads or changes the person's
+        setAppSettingsFile(QDir(parser.value(libraryDir)).filePath(QStringLiteral("settings.ini")));
+        libraryAt = QDir(parser.value(libraryDir)).filePath(QStringLiteral("Library"));
+        ThumbnailStore::cacheDirectoryOverride = QDir(parser.value(libraryDir)).filePath(QStringLiteral("Thumbnails"));
+    }
+    ImageLibrary library(libraryAt);
+    Document document(appData(), library);
     if (parser.isSet(preview))
         document.setPreviewSize(parser.value(preview).toInt(), false);
-    MotionDocument motion(appData());
+    MotionDocument motion(appData(), library);
+    if (parser.isSet(textSize))
+        for (theme::TextSize s : {theme::TextSize::Standard, theme::TextSize::Larger, theme::TextSize::Largest})
+            if (parser.value(textSize).compare(theme::textSizeName(s), Qt::CaseInsensitive) == 0)
+                theme::setTextSize(s, false);
     MainWindow window(document, motion);
     if (parser.isSet(size)) {
         const QStringList wh = parser.value(size).split(QLatin1Char('x'));
@@ -181,12 +244,35 @@ int main(int argc, char **argv)
         });
     }
 
+    if (parser.isSet(selfTest)) {
+        if (!parser.isSet(libraryDir)) {
+            std::fprintf(stderr, "--self-test needs --library DIR, where it works\n");
+            return 2;
+        }
+        QTimer::singleShot(0, &app, [&] {
+            const int failed = runSelfTest(window, document, motion, parser.value(selfTest), parser.value(selfTestClips),
+                                           parser.value(libraryDir));
+            QCoreApplication::exit(failed == 0 ? 0 : 1);
+        });
+        return app.exec();
+    }
+
     if (!files.isEmpty())
         window.openFile(files.first());
+    const bool folder = !files.isEmpty() && QFileInfo(files.first()).isDir();
+    // the sidebar's first pictures, as far as they fill it, before the
+    // screenshot: a folder's, or those of the folder of the file opened
+    const bool listed = !files.isEmpty();
+    QElapsedTimer launched;
+    launched.start();
+    auto sidebarReady = [&](FolderBrowser &browser) {
+        const int wanted = std::min<int>(int(browser.items().size()), 8);
+        return !listed || browser.thumbnails().count() >= wanted || launched.elapsed() > 30000;
+    };
 
     // the test switches with a movie: wait until its frame is graded
     if ((parser.isSet(screenshot) || parser.isSet(exportTo) || parser.isSet(exportLUT) || parser.isSet(saveLoupe)) && !files.isEmpty()
-        && isMovie(files.first())) {
+        && (isMovie(files.first()) || (folder && window.mode() == MainWindow::Mode::Motion))) {
         auto *poll = new QTimer(&app);
         auto stage = std::make_shared<int>(0);      // 0 opening, 1 seek, 2 play, 3 export, 4 done
         auto quiet = std::make_shared<int>(0);
@@ -202,7 +288,7 @@ int main(int argc, char **argv)
                 return;
             }
             const bool busy = motion.isOpening() || motion.isRendering() || motion.image().isNull()
-                || motion.isMetering() || motion.isExporting() || motion.isPlaying();
+                || motion.isMetering() || motion.isExporting() || motion.isPlaying() || !sidebarReady(motion.browser());
             *quiet = busy ? 0 : *quiet + 1;
             if (*stage == 2 && motion.isPlaying() && clock->elapsed() >= parser.value(play).toDouble() * 1000)
                 motion.pause();
@@ -283,11 +369,16 @@ int main(int argc, char **argv)
                                                         benchRuns] {
             if (!document.errorMessage().isEmpty()) {
                 std::fprintf(stderr, "error: %s\n", qPrintable(document.errorMessage()));
-                if (!document.hasImage())
+                if (!document.hasImage()) {
+                    // the window as the person sees the error
+                    if (parser.isSet(screenshot))
+                        window.grab().save(parser.value(screenshot));
+                    poll->stop();
                     QCoreApplication::exit(1);
+                }
             }
             const bool busy = document.isDecoding() || document.isRendering() || document.displayImage().isNull()
-                || document.isExporting();
+                || document.isExporting() || !sidebarReady(document.browser());
             *quiet = busy ? 0 : *quiet + 1;
             if (*quiet < 3)
                 return;
@@ -347,6 +438,15 @@ int main(int argc, char **argv)
                 *quiet = 0;
                 return;
             }
+            if (parser.isSet(saveOriginal) && !document.showOriginal()) {
+                document.setShowOriginal(true);
+                *quiet = 0;
+                return;
+            }
+            if (document.showOriginal() && document.original().isNull()) {
+                *quiet = 0;
+                return;
+            }
             if (parser.isSet(exportTo) && !*exportStarted) {
                 const QString path = QFileInfo(parser.value(exportTo)).absoluteFilePath();
                 const QString ext = QFileInfo(path).suffix().toLower();
@@ -364,6 +464,8 @@ int main(int argc, char **argv)
                 document.displayImage().save(parser.value(savePreview));
             if (parser.isSet(saveLoupe))
                 document.loupeImage().save(parser.value(saveLoupe));
+            if (parser.isSet(saveOriginal))
+                document.original().save(parser.value(saveOriginal));
             if (!benched->empty()) {
                 std::vector<double> t(benched->begin() + 1, benched->end());
                 std::sort(t.begin(), t.end());

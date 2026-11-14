@@ -41,6 +41,19 @@ func writeImage(_ url: URL, width: Int, height: Int, colour: (Float, Float, Floa
     try Exporter.write(linear: px, width: width, height: height, to: url, format: .tiff16, colorSpace: "sRGB")
 }
 
+/// Where the tests keep their libraries and the sidebar's prints, never in
+/// the app's own.
+let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("flx-apptest-scratch-\(getpid())")
+
+/// A library of its own for each model, so no test sees another's kept
+/// settings.
+@MainActor func scratchLibrary(_ defaults: UserDefaults = .standard) -> ImageLibrary {
+    let library = ImageLibrary(directory: scratch.appendingPathComponent("library-\(UUID().uuidString)"),
+                               defaults: defaults)
+    library.saveDelay = .milliseconds(50)
+    return library
+}
+
 func size(_ image: CGImage?) -> String { image.map { "\($0.width)x\($0.height)" } ?? "none" }
 
 /// Mean of the display image's pixels in rows `rows` (fractions of the height), as 0...1 luminance.
@@ -90,7 +103,7 @@ func run() async throws {
     try writeImage(c, width: 500, height: 500, colour: (1.0, 1.0, 1.0))
     try Data("not an image".utf8).write(to: bad)
 
-    let m = DocumentModel()
+    let m = DocumentModel(library: scratchLibrary())
 
     print("open an image")
     m.open(url: a)
@@ -657,7 +670,7 @@ func run() async throws {
     // The suite's own folder, and deletes that do not go to the Trash.
     var store = PresetStore(directory: dir.appendingPathComponent("Presets"))
     store.discard = { try FileManager.default.removeItem(at: $0) }
-    let first = DocumentModel(presetStore: store)
+    let first = DocumentModel(presetStore: store, library: scratchLibrary())
     check(first.presets.isEmpty, "no presets to begin with")
     first.open(url: b)
     _ = await settle(first)
@@ -682,7 +695,7 @@ func run() async throws {
     check(first.presets.first.map { $0.recipe.masks.isEmpty && $0.recipe.frameGeometry == nil } == true,
           "without the mask or the crop")
 
-    let later = DocumentModel(presetStore: store)
+    let later = DocumentModel(presetStore: store, library: scratchLibrary())
     check(later.presets.map(\.name) == ["Ektar, warm"], "a new session finds it")
     later.open(url: c)
     _ = await settle(later)
@@ -715,7 +728,7 @@ func run() async throws {
     let suite = "flx-apptest-\(getpid())"
     let prefs = UserDefaults(suiteName: suite)!
     defer { prefs.removePersistentDomain(forName: suite) }
-    let launched = DocumentModel(presetStore: store, defaults: prefs)
+    let launched = DocumentModel(presetStore: store, defaults: prefs, library: scratchLibrary())
     check(launched.proxyMaxDimension == 2560, "2560 to begin with")
     let big = dir.appendingPathComponent("big.tif")
     try writeImage(big, width: 4600, height: 3000, colour: (1.0, 1.0, 1.0))
@@ -728,10 +741,10 @@ func run() async throws {
     launched.open(url: smaller)
     check(await settle(launched) && size(launched.displayImage) == "3000x2000",
           "a file smaller than that previews at its own size, \(size(launched.displayImage)), never enlarged")
-    let relaunched = DocumentModel(presetStore: store, defaults: prefs)
+    let relaunched = DocumentModel(presetStore: store, defaults: prefs, library: scratchLibrary())
     check(relaunched.proxyMaxDimension == 4096, "which is still the choice after a relaunch")
     prefs.set(5000, forKey: "previewSize")
-    check(DocumentModel(presetStore: store, defaults: prefs).proxyMaxDimension == 2560,
+    check(DocumentModel(presetStore: store, defaults: prefs, library: scratchLibrary()).proxyMaxDimension == 2560,
           "and a size the app does not offer goes back to 2560")
 }
 
@@ -772,7 +785,8 @@ func loupe() async throws {
     try Exporter.write(linear: px, width: w, height: h, to: big, format: .tiff16, colorSpace: "sRGB")
 
     let m = DocumentModel(presetStore: PresetStore(directory: dir.appendingPathComponent("presets")),
-                          defaults: UserDefaults(suiteName: "flx-apptest-loupe-\(getpid())")!)
+                          defaults: UserDefaults(suiteName: "flx-apptest-loupe-\(getpid())")!,
+                          library: scratchLibrary())
     m.open(url: big)
     let settled = await settle(m)
     check(settled && size(m.displayImage).hasPrefix("2560x"),
@@ -821,6 +835,214 @@ func loupe() async throws {
     check(m.loupeImage == nil && !m.loupeBusy, "put away, the loupe lets the picture at full size go")
 }
 
+/// The folder in the sidebar: what it lists, decoding ahead, flags, settings
+/// kept between launches and beside the pictures, a read-only folder, a moved
+/// folder, Paste Settings to Selected, Export Selected, and how many undo
+/// histories are kept.
+@MainActor
+func folders() async throws {
+    let fm = FileManager.default
+    let root = scratch.appendingPathComponent("folders")
+    let dir = root.appendingPathComponent("Roll 1")
+    try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+    let names = ["A.tif", "B.tif", "C.tif", "D.tif", "E.tif"]
+    let urls = names.map { dir.appendingPathComponent($0) }
+    for (i, url) in urls.enumerated() {
+        try writeImage(url, width: 360 + 20 * i, height: 240, colour: (1.0 + 0.05 * Float(i), 1.0, 0.9))
+    }
+    try Data("notes".utf8).write(to: dir.appendingPathComponent("notes.txt"))
+    try Data("hidden".utf8).write(to: dir.appendingPathComponent(".hidden.tif"))
+    let (a, b, c, d, e) = (urls[0], urls[1], urls[2], urls[3], urls[4])
+    let suite = "flx-apptest-folders-\(getpid())"
+    let defaults = UserDefaults(suiteName: suite)!
+    defaults.removePersistentDomain(forName: suite)
+    let libraryDir = scratch.appendingPathComponent("folders-library")
+    func model() -> DocumentModel {
+        let library = ImageLibrary(directory: libraryDir, defaults: defaults)
+        library.saveDelay = .milliseconds(50)
+        return DocumentModel(presetStore: PresetStore(directory: scratch.appendingPathComponent("folders-presets")),
+                             defaults: defaults, library: library)
+    }
+    /// The model's changes on disk: recorded once settled, then written.
+    func written(_ m: DocumentModel) async {
+        try? await Task.sleep(for: .milliseconds(1000))
+        m.library.save(wait: true)
+        m.library.finishWriting()
+    }
+    func writeSidecar(_ record: ImageLibrary.Record, for url: URL) throws {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(record).write(to: ImageLibrary.sidecar(for: url))
+    }
+
+    print("open a folder")
+    let m = model()
+    m.openFolder(dir)
+    check(await settle(m) && m.browser.items.map(\.name) == names && m.fileURL == a && m.browser.selection == [a],
+          "its pictures by name and nothing else, the first on screen: \(m.browser.items.map(\.name))")
+    check(await waitUntil { m.prefetchedPictures.contains(b) },
+          "the next picture is decoded ahead: \(m.prefetchedPictures.map(\.lastPathComponent).sorted())")
+    m.showNeighbour(1)
+    check(await settle(m) && m.fileURL == b && m.browser.current == b && m.browser.selection == [b], "⌘↓ steps to it")
+    check(await waitUntil { m.prefetchedPictures.contains(a) && m.prefetchedPictures.contains(c) },
+          "and its own neighbours either side are decoded ahead")
+    // Nothing of a load shows for a picture decoded ahead: the toolbar's
+    // buttons, the status line and the white balance's note stay as they are.
+    var showedLoad = false
+    m.showNeighbour(1)
+    for _ in 0..<50 {
+        showedLoad = showedLoad || m.isBusy || m.status.hasPrefix("Opening") || m.whiteBalanceSummary == "decoding…"
+        try? await Task.sleep(for: .milliseconds(10))
+    }
+    check(m.fileURL == c && !showedLoad, "stepping to a picture decoded ahead never shows a load")
+    m.showNeighbour(-1)
+    check(await settle(m) && m.fileURL == b, "and back")
+
+    print("settings of its own, kept")
+    m.recipe.shadows = 0.3
+    await written(m)
+    check(m.browser.edited == [b] && m.library.record(for: b)?.edits?.recipe.shadows == 0.3
+              && m.library.record(for: a) == nil,
+          "a picture changed keeps its settings, one only looked at none: \(m.browser.edited.map(\.lastPathComponent))")
+
+    print("flags")
+    m.browser.selection = [c, d]
+    m.flagSelection(.reject)
+    m.browser.selection = [e]
+    m.flagSelection(.pick)
+    check(m.browser.flags[c] == .reject && m.browser.flags[d] == .reject && m.browser.flags[e] == .pick,
+          "X rejects and P picks what is selected")
+    m.browser.filter = .withoutRejects
+    check(m.browser.shown.map(\.name) == ["A.tif", "B.tif", "E.tif"], "No Rejects hides the rejects: \(m.browser.shown.map(\.name))")
+    m.browser.filter = .picks
+    check(m.browser.shown.map(\.name) == ["E.tif"], "Picks shows the picks")
+    m.browser.filter = .all
+    m.browser.selection = [d]
+    m.flagSelection(nil)
+    check(m.browser.flags[d] == nil, "U unflags")
+    await written(m)
+
+    print("kept between launches")
+    let m2 = model()
+    m2.openFolder(dir)
+    check(await settle(m2) && m2.browser.edited == [b] && m2.browser.flags[c] == .reject
+              && m2.browser.flags[e] == .pick && m2.browser.flags[d] == nil,
+          "a new session finds the settings and the flags")
+    m2.open(url: b)
+    check(await settle(m2) && m2.recipe.shadows == 0.3, "B opens with its own settings")
+
+    print("beside the pictures")
+    check(!fm.fileExists(atPath: ImageLibrary.sidecar(for: b).path), "no sidecar while the setting is off")
+    m2.browser.savesSidecars = true
+    m2.library.finishWriting()
+    let besideB = ImageLibrary.readSidecar(ImageLibrary.sidecar(for: b))
+    check(besideB?.edits?.recipe.shadows == 0.3 && ImageLibrary.readSidecar(ImageLibrary.sidecar(for: c))?.flag == .reject,
+          "turned on, each picture kept gets one: B's settings, C's reject")
+    // Settings made elsewhere: a newer sidecar for D, an older one for B.
+    let triX = DocumentModel.ImageEdits(recipe: Recipe().loadingFilm("kodak_tri_x_400"), whiteBalance: .filmReference,
+                                        customTemperature: 5500, customTint: 0)
+    try writeSidecar(.init(modified: Date().addingTimeInterval(60), flag: .pick, edits: triX), for: d)
+    if var older = besideB {
+        older.modified = Date().addingTimeInterval(-3600)
+        older.edits?.recipe.shadows = -0.4
+        try writeSidecar(older, for: b)
+    }
+    let m3 = model()
+    m3.openFolder(dir)
+    check(await settle(m3) && m3.browser.flags[d] == .pick && m3.browser.edited.contains(d),
+          "a newer sidecar counts over the library: D picked, with settings")
+    m3.open(url: d)
+    check(await settle(m3) && m3.recipe.filmStock == "kodak_tri_x_400", "D opens on the film its sidecar gives")
+    m3.open(url: b)
+    check(await settle(m3) && m3.recipe.shadows == 0.3, "an older one does not: B keeps the library's settings")
+
+    print("a folder that cannot be written")
+    let locked = root.appendingPathComponent("Locked")
+    try fm.createDirectory(at: locked, withIntermediateDirectories: true)
+    let f = locked.appendingPathComponent("F.tif")
+    try writeImage(f, width: 300, height: 200, colour: (1, 1, 1))
+    try fm.setAttributes([.posixPermissions: 0o555], ofItemAtPath: locked.path)
+    m3.openFolder(locked)
+    _ = await settle(m3)
+    m3.recipe.highlights = -0.2
+    await written(m3)
+    check(m3.fileURL == f && m3.library.record(for: f)?.edits?.recipe.highlights == -0.2
+              && !fm.fileExists(atPath: ImageLibrary.sidecar(for: f).path),
+          "with nowhere beside it to write, a picture's settings stay in the library")
+    try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: locked.path)
+
+    print("a folder moved")
+    let moved = root.appendingPathComponent("Roll 1 moved")
+    try fm.moveItem(at: dir, to: moved)
+    for file in try fm.contentsOfDirectory(at: moved, includingPropertiesForKeys: nil) where file.pathExtension == "flx" {
+        try fm.removeItem(at: file)
+    }
+    let (movedA, movedB, movedC, movedD, movedE) = (moved.appendingPathComponent("A.tif"),
+        moved.appendingPathComponent("B.tif"), moved.appendingPathComponent("C.tif"),
+        moved.appendingPathComponent("D.tif"), moved.appendingPathComponent("E.tif"))
+    let m4 = model()
+    m4.openFolder(moved)
+    check(await settle(m4) && m4.browser.edited.contains(movedB) && m4.browser.flags[movedC] == .reject
+              && m4.browser.flags[movedD] == .pick,
+          "the library finds it again by its pictures' names and sizes, without the sidecars")
+
+    print("paste settings to the selection")
+    m4.open(url: movedB)
+    _ = await settle(m4)
+    m4.recipe.grade = 95
+    m4.copySettings()
+    m4.browser.selection = [movedA, movedC, movedE]
+    m4.pasteSettingsToSelected()
+    await written(m4)
+    check(m4.library.record(for: movedA)?.edits?.recipe.grade == 95
+              && m4.library.record(for: movedE)?.edits?.recipe.grade == 95
+              && m4.library.record(for: movedC)?.edits == nil,
+          "each picture selected gets them, but the reject")
+    m4.open(url: movedA)
+    check(await settle(m4) && m4.recipe.grade == 95 && m4.history.undoName == "Paste Settings",
+          "the paste a step of the picture's own history")
+    m4.history.undo()
+    check(m4.recipe.grade == m4.recipe.defaultGrade, "which ⌘Z takes off")
+
+    print("export the selection")
+    let g = moved.appendingPathComponent("G.tif")
+    try writeImage(g, width: 320, height: 200, colour: (0.9, 1.0, 1.1))
+    m4.openFolder(moved)
+    _ = await settle(m4)
+    m4.selectFilm("fujifilm_provia_100f")
+    _ = await settle(m4)
+    let out = scratch.appendingPathComponent("folders-out")
+    try fm.createDirectory(at: out, withIntermediateDirectories: true)
+    m4.browser.selection = [movedA, movedC, movedD, g]
+    m4.exportSelected(to: out, format: .jpeg)
+    check(m4.browser.batch?.total == 3, "three to print: the reject left out")
+    check(await waitUntil(timeout: 60) { m4.browser.batch == nil }, "the batch finishes")
+    let made = ((try? fm.contentsOfDirectory(atPath: out.path)) ?? []).sorted()
+    check(made == ["A_FujifilmProvia100F.jpg", "D_KodakTri-X400.jpg", "G_FujifilmProvia100F.jpg"],
+          "each with its own film, the one never opened with the look on screen: \(made)")
+    let printed = CGImageSourceCreateWithURL(out.appendingPathComponent("G_FujifilmProvia100F.jpg") as CFURL, nil)
+        .flatMap { CGImageSourceCreateImageAtIndex($0, 0, nil) }
+    check(size(printed) == "320x200", "at full size: \(size(printed))")
+
+    print("undo histories, the latest pictures'")
+    let many = root.appendingPathComponent("Many")
+    try fm.createDirectory(at: many, withIntermediateDirectories: true)
+    for i in 0..<34 {
+        try writeImage(many.appendingPathComponent(String(format: "P%02d.tif", i)), width: 48, height: 32, colour: (1, 1, 1))
+    }
+    let m5 = model()
+    m5.openFolder(many)
+    _ = await settle(m5)
+    for _ in 0..<33 {
+        m5.recipe.shadows += 0.01
+        try? await Task.sleep(for: .milliseconds(30))
+        m5.showNeighbour(1)
+        _ = await settle(m5)
+    }
+    check(m5.historiesHeld <= DocumentModel.historiesKept && m5.historiesHeld >= DocumentModel.historiesKept - 1,
+          "only the last \(DocumentModel.historiesKept) pictures visited keep their undo history: \(m5.historiesHeld)")
+}
+
 /// ⌘Z and ⇧⌘Z, through the model as the Edit menu drives it: one step per
 /// gesture, a double-click reset joined to its clicks, named resets and
 /// pastes, a history for each image, and a cancelled crop leaving none.
@@ -838,7 +1060,7 @@ func undoRedo() async throws {
     try writeImage(a, width: 600, height: 400, colour: (1.2, 1.0, 0.8))
     try writeImage(b, width: 300, height: 450, colour: (0.8, 1.0, 1.2))
     let m = DocumentModel(presetStore: PresetStore(directory: dir.appendingPathComponent("Presets")),
-                          defaults: defaults)
+                          defaults: defaults, library: scratchLibrary())
     var mouseDown = false
     m.history.mouseIsDown = { mouseDown }
     m.history.joinInterval = 0.3
@@ -1103,8 +1325,40 @@ func undoRedo() async throws {
           "and ⌘Z afterwards undoes them: \(size(m.displayImage))")
 }
 
+/// Settings, Films: the films the Film menu leaves out, in Stills and
+/// Motion. The one in use stays listed; a film the app gains later shows.
+@MainActor
+func filmMenu() {
+    print("the film menu leaves out the films Settings hides")
+    let all = PackLibrary.shared.filmStocks
+    check(FilmMenu.shown(all, hidden: "", inUse: "kodak_portra_400").count == all.count,
+          "nothing hidden: all \(all.count) films listed")
+    let hidden = FilmMenu.stored(["kodak_vision3_500t", "agfa_apx_25", "fujifilm_neopan_1600"])
+    check(hidden == "agfa_apx_25,fujifilm_neopan_1600,kodak_vision3_500t" && FilmMenu.hidden(hidden).count == 3,
+          "the setting keeps the hidden films' names: \(hidden)")
+    let shown = FilmMenu.shown(all, hidden: hidden, inUse: "kodak_portra_400").map(\.stock)
+    check(shown.count == all.count - 3 && !shown.contains("agfa_apx_25") && !shown.contains("kodak_vision3_500t"),
+          "three hidden: \(shown.count) of \(all.count) listed")
+    check(shown == all.map(\.stock).filter { !FilmMenu.hidden(hidden).contains($0) },
+          "the rest keep the menu's order")
+    let inUse = FilmMenu.shown(all, hidden: hidden, inUse: "agfa_apx_25").map(\.stock)
+    check(inUse.contains("agfa_apx_25") && inUse.count == all.count - 2,
+          "a hidden film in use stays listed")
+    let groups = PackIndexEntry.groups(FilmMenu.shown(all, hidden: hidden, inUse: "kodak_portra_400"), films: true)
+    let motion = groups.first { $0.title == "Motion picture" }?.entries.map(\.stock) ?? []
+    check(!motion.contains("kodak_vision3_500t") && motion.contains("kodak_vision3_250d"),
+          "the menu's groups list what is left: \(motion.count) motion picture films")
+    for stock in ["agfa_apx_100", "agfa_apx_400", "fujifilm_neopan_100_acros_ii"] {
+        check(all.contains { $0.stock == stock && $0.isMonochrome }, "\(stock) is a black-and-white film in the menu")
+    }
+}
+
+ThumbnailStore.cacheDirectoryOverride = scratch.appendingPathComponent("thumbnails")
+filmMenu()
+try await folders()
 try await undoRedo()
 try await loupe()
 try await run()
+try? FileManager.default.removeItem(at: scratch)
 print(failures == 0 ? "\nall app checks passed" : "\n\(failures) app check(s) failed")
 exit(failures == 0 ? 0 : 1)

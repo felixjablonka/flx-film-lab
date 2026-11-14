@@ -1,4 +1,5 @@
 #include "Inspector.h"
+#include "Icons.h"
 
 #include "AppSettings.h"
 #include "CurvesView.h"
@@ -9,6 +10,10 @@
 #include <QCheckBox>
 #include <QDoubleValidator>
 #include <QMouseEvent>
+#include <QPainter>
+#include <QPainterPath>
+#include <QPixmap>
+#include <QIcon>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
@@ -16,6 +21,8 @@
 #include <QVBoxLayout>
 
 #include <cmath>
+#include <optional>
+#include <tuple>
 
 namespace {
 
@@ -33,8 +40,8 @@ public:
                                      .arg(theme::accent().red()).arg(theme::accent().green()).arg(theme::accent().blue())
                                : QStringLiteral("#itemRow { background: transparent; }"));
         m_layout = new QVBoxLayout(this);
-        m_layout->setContentsMargins(6, 6, 6, 6);
-        m_layout->setSpacing(4);
+        m_layout->setContentsMargins(theme::px(6), theme::px(6), theme::px(6), theme::px(6));
+        m_layout->setSpacing(theme::px(4));
     }
     QVBoxLayout *layout() const { return m_layout; }
 
@@ -54,6 +61,7 @@ QToolButton *deleteButton(const QString &help)
 {
     auto *b = new QToolButton;
     b->setText(QStringLiteral("✕"));
+    b->setFont(theme::panelLabel());
     b->setToolTip(help);
     b->setAutoRaise(true);
     b->setCursor(Qt::PointingHandCursor);
@@ -63,15 +71,68 @@ QToolButton *deleteButton(const QString &help)
     return b;
 }
 
-QPushButton *addButton(const QString &text)
+// A button that adds something (a gradient, an oval, a mask), its icon
+// beside its name
+QPushButton *addButton(const QString &text, std::optional<icons::Icon> icon = std::nullopt)
 {
     auto *b = new QPushButton(text);
-    b->setFont(theme::small());
+    b->setFont(theme::panelSmall());
     b->setCursor(Qt::PointingHandCursor);
-    b->setStyleSheet(QStringLiteral("QPushButton { background: #333; color: #d0d0d0; border: 1px solid #444;"
-                                    " border-radius: 4px; padding: 2px 8px; }"
-                                    "QPushButton:hover { background: #3b3b3b; }"
-                                    "QPushButton:disabled { color: #666; }"));
+    if (icon) {
+        b->setIcon(icons::icon(*icon));
+        b->setIconSize(QSize(theme::px(14), theme::px(14)));
+    }
+    b->setStyleSheet(QStringLiteral("QPushButton { background: #353535; color: #d6d6d6; border: 1px solid #3e3e3e;"
+                                    " border-radius: %1px; padding: %2px %3px; }"
+                                    "QPushButton:hover { background: #3e3e3e; }"
+                                    "QPushButton:disabled { color: #666; }")
+                         .arg(theme::px(6))
+                         .arg(theme::px(3))
+                         .arg(theme::px(9)));
+    return b;
+}
+
+// An eye, struck through while the lines are hidden: Hide Mask Lines' button
+// at the end of the gradients' and the masks' buttons (the Mac's eye).
+QIcon eyeIcon(bool struck, QColor colour)
+{
+    const int side = theme::px(14);
+    const qreal dpr = 2;
+    QPixmap pixmap(QSize(side, side) * dpr);
+    pixmap.setDevicePixelRatio(dpr);
+    pixmap.fill(Qt::transparent);
+    QPainter p(&pixmap);
+    p.setRenderHint(QPainter::Antialiasing);
+    const qreal s = side, line = std::max(1.2, s / 11);
+    p.setPen(QPen(colour, line, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    QPainterPath lids;
+    lids.moveTo(s * 0.08, s * 0.5);
+    lids.quadTo(s * 0.5, s * 0.08, s * 0.92, s * 0.5);
+    lids.quadTo(s * 0.5, s * 0.92, s * 0.08, s * 0.5);
+    p.drawPath(lids);
+    p.setBrush(colour);
+    p.drawEllipse(QPointF(s / 2, s / 2), s * 0.13, s * 0.13);
+    if (struck)
+        p.drawLine(QPointF(s * 0.15, s * 0.85), QPointF(s * 0.85, s * 0.15));
+    return QIcon(pixmap);
+}
+
+// Hide Mask Lines in the inspector: one setting, shown in both sections that
+// draw lines on the picture.
+QPushButton *linesButton(Document &doc, QObject *owner, std::vector<std::function<void()>> &refreshers)
+{
+    auto *b = addButton(QString());
+    b->setCheckable(true);
+    b->setStyleSheet(b->styleSheet() + QStringLiteral("QPushButton:checked { background: #5a5a5a; }"));
+    QObject::connect(b, &QPushButton::clicked, owner, [&doc](bool hidden) { doc.setMaskLinesHidden(hidden); });
+    refreshers.push_back([&doc, b] {
+        const bool hidden = doc.maskLinesHidden();
+        b->setChecked(hidden);
+        b->setIcon(eyeIcon(hidden, theme::primary()));
+        b->setToolTip(hidden ? QStringLiteral("Show the lines of the masks and gradients on the picture again (Ctrl+Shift+H).")
+                             : QStringLiteral("Hide the lines of the masks and gradients on the picture (Ctrl+Shift+H), to see the "
+                                              "print without them: they still act. Choosing one to edit shows them again."));
+    });
     return b;
 }
 
@@ -94,12 +155,12 @@ Inspector::Inspector(Document &document, QWidget *parent)
                                                                                              : Vocabulary::Photographic;
     m_content = new QWidget;
     auto *layout = new QVBoxLayout(m_content);
-    layout->setContentsMargins(12, 0, 12, 24);
+    layout->setContentsMargins(theme::px(12), 0, theme::px(12), theme::px(24));
     layout->setSpacing(0);
     setWidget(m_content);
     setWidgetResizable(true);
     setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    setFixedWidth(306);
+    setFixedWidth(theme::px(306));
     setFrameShape(QFrame::NoFrame);
     m_content->setAutoFillBackground(true);
     QPalette p = m_content->palette();
@@ -189,35 +250,43 @@ void Inspector::buildCrop()
                                                "read only what the crop keeps."));
     m_content->layout()->addWidget(section);
     QVBoxLayout *body = section->body();
-    auto button = [](const QString &text, const QString &help, bool checkable = false) {
+    // the crop's buttons: an icon, with its name where it has one; on, the accent
+    auto button = [](const QString &text, const QString &help, icons::Icon icon, bool checkable = false) {
         auto *b = new QToolButton;
         b->setText(text);
+        b->setIcon(icons::icon(icon));
+        b->setIconSize(QSize(theme::px(16), theme::px(16)));
+        b->setToolButtonStyle(text.isEmpty() ? Qt::ToolButtonIconOnly : Qt::ToolButtonTextBesideIcon);
         b->setToolTip(help);
         b->setCheckable(checkable);
         b->setCursor(Qt::PointingHandCursor);
-        b->setFont(theme::label());
-        b->setStyleSheet(QStringLiteral("QToolButton { background: #333; color: #d8d8d8; border: 1px solid #444;"
-                                        " border-radius: 5px; padding: 2px 8px; }"
-                                        "QToolButton:checked { background: %1; color: white; border-color: %1; }"
-                                        "QToolButton:hover:!checked { background: #3b3b3b; }"
-                                        "QToolButton:disabled { color: #666; }").arg(theme::accent().name()));
+        b->setFont(theme::panelLabel());
+        b->setStyleSheet(QStringLiteral("QToolButton { background: transparent; color: #d8d8d8; border: none;"
+                                        " border-radius: %2px; padding: %3px %4px; }"
+                                        "QToolButton:checked { background: %1; color: white; }"
+                                        "QToolButton:hover:!checked { background: #3a3a3a; }"
+                                        "QToolButton:disabled { color: #666; }")
+                             .arg(theme::accent().name())
+                             .arg(theme::px(6))
+                             .arg(theme::px(3))
+                             .arg(theme::px(5)));
         return b;
     };
 
     auto *first = new QWidget;
     auto *firstRow = new QHBoxLayout(first);
     firstRow->setContentsMargins(0, 1, 0, 1);
-    firstRow->setSpacing(6);
+    firstRow->setSpacing(theme::px(6));
     auto *crop = button(QStringLiteral("Crop"),
                         QStringLiteral("Show the whole frame with the crop on it, to drag its corners and edges "
-                                       "(Ctrl+R)."), true);
+                                       "(Ctrl+R)."), icons::Icon::Crop, true);
     connect(crop, &QToolButton::clicked, this, [this](bool on) { m_doc.setCropping(on); });
     auto *aspect = new Choice({});
     for (CropAspect a : cropAspects())
         aspect->addItem(QString::fromStdString(cropAspectName(a)), int(a));
     aspect->setHelp(QStringLiteral("The crop's proportions. Original keeps the frame's own; Free has none."));
     connect(aspect, &Choice::chosen, this, [this](const QVariant &v) { m_doc.setCropAspect(CropAspect(v.toInt())); });
-    auto *swap = button(QStringLiteral("Swap"), QStringLiteral("Stand the crop up, or lay it down."));
+    auto *swap = button(QString(), QStringLiteral("Stand the crop up, or lay it down."), icons::Icon::SwapAspect);
     connect(swap, &QToolButton::clicked, this, [this] { m_doc.swapCropOrientation(); });
     firstRow->addWidget(crop);
     firstRow->addWidget(aspect, 1);
@@ -228,11 +297,11 @@ void Inspector::buildCrop()
     auto *custom = new QWidget;
     auto *customRow = new QHBoxLayout(custom);
     customRow->setContentsMargins(0, 1, 0, 1);
-    customRow->setSpacing(4);
+    customRow->setSpacing(theme::px(4));
     auto side = [](void) {
         auto *field = new QLineEdit;
-        field->setFixedWidth(56);
-        field->setFont(theme::label());
+        field->setFixedWidth(theme::px(56));
+        field->setFont(theme::panelLabel());
         auto *validator = new QDoubleValidator(0.01, 100000, 3, field);
         validator->setNotation(QDoubleValidator::StandardNotation);
         field->setValidator(validator);
@@ -240,6 +309,7 @@ void Inspector::buildCrop()
     };
     auto *customWidth = side(), *customHeight = side();
     auto *colon = new QLabel(QStringLiteral(":"));
+    colon->setFont(theme::panelLabel());
     customRow->addWidget(customWidth);
     customRow->addWidget(colon);
     customRow->addWidget(customHeight);
@@ -256,14 +326,14 @@ void Inspector::buildCrop()
     auto *second = new QWidget;
     auto *secondRow = new QHBoxLayout(second);
     secondRow->setContentsMargins(0, 1, 0, 1);
-    secondRow->setSpacing(6);
-    auto *left = button(QStringLiteral("↺"), QStringLiteral("Turn a quarter to the left (Ctrl+[)."));
-    auto *right = button(QStringLiteral("↻"), QStringLiteral("Turn a quarter to the right (Ctrl+])."));
-    auto *mirror = button(QStringLiteral("↔"), QStringLiteral("Mirror left to right."));
-    auto *mirrorUp = button(QStringLiteral("↕"), QStringLiteral("Mirror top to bottom."));
+    secondRow->setSpacing(theme::px(6));
+    auto *left = button(QString(), QStringLiteral("Turn a quarter to the left (Ctrl+[)."), icons::Icon::RotateLeft);
+    auto *right = button(QString(), QStringLiteral("Turn a quarter to the right (Ctrl+])."), icons::Icon::RotateRight);
+    auto *mirror = button(QString(), QStringLiteral("Mirror left to right."), icons::Icon::FlipAcross);
+    auto *mirrorUp = button(QString(), QStringLiteral("Mirror top to bottom."), icons::Icon::FlipUpDown);
     auto *level = button(QStringLiteral("Level"),
                          QStringLiteral("Draw a line on the picture along a horizon, or along an upright, and the "
-                                        "picture is levelled to it."), true);
+                                        "picture is levelled to it."), icons::Icon::Level, true);
     connect(left, &QToolButton::clicked, this, [this] { m_doc.turn(false); });
     connect(right, &QToolButton::clicked, this, [this] { m_doc.turn(true); });
     connect(mirror, &QToolButton::clicked, this, [this] { m_doc.flip(true); });
@@ -338,7 +408,7 @@ void Inspector::buildStocks()
     body->addWidget(instantNote);
     auto *processingRow = new QWidget;
     auto *processingLayout = new QVBoxLayout(processingRow);
-    processingLayout->setContentsMargins(0, 0, 0, 0);
+    processingLayout->setContentsMargins(0, theme::px(0), 0, 0);
     body->addWidget(processingRow);
     auto processingBuilt = std::make_shared<std::vector<float>>();
     auto processing = std::make_shared<Segmented *>(nullptr);
@@ -376,6 +446,8 @@ void Inspector::buildStocks()
 
     m_refreshers.push_back([=, this] {
         const Recipe &r = m_doc.recipe();
+        // the films Settings leaves in the menu, and the one in use
+        film->setGroups(stockGroups(filmmenu::shown(m_doc.packs().filmEntries(), hiddenFilms(), r.filmStock), true));
         film->setCurrent(QString::fromStdString(r.filmStock));
         format->setCurrent(r.filmFormat == "35 mm" ? 0 : 1);
         sharpness->setCurrent(r.keepsCameraSharpness() ? 1 : 0);
@@ -498,7 +570,7 @@ void Inspector::buildExposure()
     body->addWidget(wb);
 
     auto *summary = new QLabel;
-    summary->setFont(theme::mono(10));
+    summary->setFont(theme::panelMono(10));
     body->addWidget(summary);
 
     auto *temperature = new ParamSlider(QStringLiteral("Temperature"), 2000, 12000, 5500, 0, QStringLiteral(" K"));
@@ -538,12 +610,16 @@ void Inspector::buildExposure()
                                  "progressively; red lightens skin and darkens foliage; green does the opposite; blue "
                                  "lightens skies and haze and deepens reds. Exposure is opened up by the filter "
                                  "factor shown, as a photographer would, so a grey card prints the same.")
-                : QStringLiteral("A warming or conversion filter on the lens, measured from its maker's transmission "
-                                 "curves (Kodak's Wratten 81C, 85 and 85B, Tiffen's 812): the film sees the scene "
-                                 "through it, wavelength by wavelength, with its own sensitivities. The 81C holds "
-                                 "back blue and some green, a plain amber warmth; the 812 holds back violet and a "
-                                 "little blue and lets blue and green through alike, so its warmth leans pink: both "
-                                 "for daylight film's cool shade, overcast light and flash. The 85 and 85B hold back "
+                : QStringLiteral("A warming, cooling or conversion filter on the lens, measured from its maker's "
+                                 "transmission curves (Kodak's Wratten 81C, 82A, 82C, 85 and 85B, Tiffen's 812): the "
+                                 "film sees the scene through it, wavelength by wavelength, with its own "
+                                 "sensitivities. The 81C holds back blue and some green, a plain amber warmth; the "
+                                 "812 holds back violet and a little blue and lets blue and green through alike, so "
+                                 "its warmth leans pink: both for daylight film's cool shade, overcast light and "
+                                 "flash. The 82A and 82C hold back red and some green, the 82C about twice as much: "
+                                 "they cool warm light, morning and evening sun on daylight film, or lamps warmer "
+                                 "than a tungsten film's 3200 K, the 82A taking 3000 K and the 82C 2800 K to about "
+                                 "3200 K. The 85 and 85B hold back "
                                  "blue and much of the green and pass the red: they convert daylight for tungsten "
                                  "film, rated 5500 K to 3400 K and to 3200 K. Measured, both go further than rated, "
                                  "to about 3300 K and 2800 K, and a tungsten film's own layers see the same: balanced "
@@ -559,7 +635,7 @@ void Inspector::buildExposure()
         wb->setCurrent(int(m_doc.whiteBalance()));
         summary->setText(m_doc.whiteBalanceSummary());
         QPalette p = summary->palette();
-        p.setColor(QPalette::WindowText, m_doc.isDecoding() ? QColor(255, 159, 10) : theme::tertiary());
+        p.setColor(QPalette::WindowText, m_doc.isBusy() && m_doc.isDecoding() ? QColor(255, 159, 10) : theme::tertiary());
         summary->setPalette(p);
         const bool custom = m_doc.whiteBalance() == WhiteBalance::Custom;
         temperature->setVisible(custom);
@@ -587,20 +663,22 @@ void Inspector::buildGradients()
     body->addWidget(empty);
     auto *rows = new QWidget;
     auto *rowsLayout = new QVBoxLayout(rows);
-    rowsLayout->setContentsMargins(0, 0, 0, 0);
-    rowsLayout->setSpacing(2);
+    rowsLayout->setContentsMargins(0, theme::px(0), 0, 0);
+    rowsLayout->setSpacing(theme::px(2));
     body->addWidget(rows);
     auto *add = new QWidget;
     auto *addRow = new QHBoxLayout(add);
-    addRow->setContentsMargins(0, 4, 0, 0);
-    addRow->setSpacing(6);
-    auto *addLinear = addButton(QStringLiteral("Add gradient"));
+    addRow->setContentsMargins(0, theme::px(4), 0, 0);
+    addRow->setSpacing(theme::px(6));
+    auto *addLinear = addButton(QStringLiteral("Add gradient"), icons::Icon::Gradient);
     connect(addLinear, &QPushButton::clicked, this, [this] { m_doc.addGradient(false); });
-    auto *addOval = addButton(QStringLiteral("Add oval"));
+    auto *addOval = addButton(QStringLiteral("Add oval"), icons::Icon::Oval);
     connect(addOval, &QPushButton::clicked, this, [this] { m_doc.addGradient(true); });
     addRow->addWidget(addLinear);
     addRow->addWidget(addOval);
     addRow->addStretch(1);
+    auto *gradientLines = linesButton(m_doc, this, m_refreshers);
+    addRow->addWidget(gradientLines);
     body->addWidget(add);
 
     // the rows, built again when the gradients or the selection change
@@ -609,7 +687,10 @@ void Inspector::buildGradients()
     m_refreshers.push_back([=, this] {
         const Recipe &r = m_doc.recipe();
         empty->setVisible(r.gradients.empty());
-        add->setVisible(int(r.gradients.size()) < kMaxExposureGradients);
+        const bool more = int(r.gradients.size()) < kMaxExposureGradients;
+        addLinear->setVisible(more);
+        addOval->setVisible(more);
+        gradientLines->setVisible(!r.gradients.empty());
         QString signature = QString::fromStdString(m_doc.selected());
         for (const ExposureGradient &g : r.gradients)
             signature += QLatin1Char('|') + QString::fromStdString(g.id);
@@ -625,14 +706,14 @@ void Inspector::buildGradients()
                 const bool selected = id == m_doc.selected();
                 auto *row = new ItemRow(selected, [this, id] { m_doc.setSelected(id); });
                 auto *head = new QHBoxLayout;
-                head->setSpacing(5);
+                head->setSpacing(theme::px(5));
                 auto *enabled = new QCheckBox;
                 auto *name = new QLabel(QString::fromStdString(g.name));
-                QFont f = theme::label();
+                QFont f = theme::panelLabel();
                 f.setWeight(selected ? QFont::DemiBold : QFont::Normal);
                 name->setFont(f);
                 auto *ev = new QLabel;
-                ev->setFont(theme::mono(10));
+                ev->setFont(theme::panelMono(10));
                 QPalette p = ev->palette();
                 p.setColor(QPalette::WindowText, theme::tertiary());
                 ev->setPalette(p);
@@ -670,7 +751,7 @@ void Inspector::buildGradients()
                         connect(feather, &ParamSlider::valueChanged, this,
                                 [edit](double v) { edit([&](ExposureGradient &x) { x.feather = v; }); });
                         invert = new QCheckBox(QStringLiteral("Invert"));
-                        invert->setFont(theme::small());
+                        invert->setFont(theme::panelSmall());
                         invert->setToolTip(QStringLiteral("The compensation outside the oval instead of inside it."));
                         connect(invert, &QCheckBox::toggled, this, [edit](bool on) {
                             edit([&](ExposureGradient &x) { x.inverted = on ? std::optional<bool>(true) : std::nullopt; });
@@ -727,10 +808,10 @@ void Inspector::buildPrint()
     // follow every frame
     auto *histogram = new HistogramView;
     body->addWidget(histogram);
-    body->addSpacing(6);
+    body->addSpacing(theme::px(6));
     auto *curves = new CurvesEditor;
     body->addWidget(curves);
-    body->addSpacing(6);
+    body->addSpacing(theme::px(6));
     connect(curves, &CurvesEditor::curvesChanged, this, [this](const std::optional<PrintCurves> &c) {
         edit([&](Recipe &r) { r.curves = c; });
     });
@@ -798,7 +879,7 @@ void Inspector::buildPrint()
         [this] { return m_doc.defaultGrade(); }));
 
     auto *split = note({});
-    QFont f = theme::small();
+    QFont f = theme::panelSmall();
     f.setWeight(QFont::Medium);
     split->setFont(f);
     body->addWidget(split);
@@ -954,21 +1035,24 @@ void Inspector::buildMasks()
     body->addWidget(empty);
     auto *rows = new QWidget;
     auto *rowsLayout = new QVBoxLayout(rows);
-    rowsLayout->setContentsMargins(0, 0, 0, 0);
-    rowsLayout->setSpacing(2);
+    rowsLayout->setContentsMargins(0, theme::px(0), 0, 0);
+    rowsLayout->setSpacing(theme::px(2));
     body->addWidget(rows);
     auto *adds = new QWidget;
     auto *addsRow = new QHBoxLayout(adds);
-    addsRow->setContentsMargins(0, 4, 0, 0);
-    addsRow->setSpacing(6);
-    for (const auto &[label, shape] : {std::pair{QStringLiteral("Polygon"), MaskShape::Polygon},
-                                       std::pair{QStringLiteral("Oval"), MaskShape::Oval},
-                                       std::pair{QStringLiteral("Gradient"), MaskShape::Gradient}}) {
-        auto *b = addButton(label);
+    addsRow->setContentsMargins(0, theme::px(4), 0, 0);
+    addsRow->setSpacing(theme::px(6));
+    for (const auto &[label, shape, icon] :
+         {std::tuple{QStringLiteral("Polygon"), MaskShape::Polygon, icons::Icon::Polygon},
+          std::tuple{QStringLiteral("Oval"), MaskShape::Oval, icons::Icon::Oval},
+          std::tuple{QStringLiteral("Gradient"), MaskShape::Gradient, icons::Icon::Gradient}}) {
+        auto *b = addButton(label, icon);
         connect(b, &QPushButton::clicked, this, [this, shape] { m_doc.addMask(shape); });
         addsRow->addWidget(b);
     }
     addsRow->addStretch(1);
+    auto *maskLines = linesButton(m_doc, this, m_refreshers);
+    addsRow->addWidget(maskLines);
     body->addWidget(adds);
 
     auto built = std::make_shared<QString>();
@@ -976,6 +1060,7 @@ void Inspector::buildMasks()
     m_refreshers.push_back([=, this] {
         const Recipe &r = m_doc.recipe();
         empty->setVisible(r.masks.empty());
+        maskLines->setVisible(!r.masks.empty());
         QString signature = QString::fromStdString(m_doc.selected()) + QLatin1Char('#') + vocabularyName(m_vocabulary);
         for (const LocalMask &m : r.masks)
             signature += QLatin1Char('|') + QString::fromStdString(m.id);
@@ -991,10 +1076,10 @@ void Inspector::buildMasks()
                 const bool selected = id == m_doc.selected();
                 auto *row = new ItemRow(selected, [this, id] { m_doc.setSelected(id); });
                 auto *head = new QHBoxLayout;
-                head->setSpacing(5);
+                head->setSpacing(theme::px(5));
                 auto *enabled = new QCheckBox;
                 auto *name = new QLabel(QString::fromStdString(m.name));
-                QFont f = theme::label();
+                QFont f = theme::panelLabel();
                 f.setWeight(selected ? QFont::DemiBold : QFont::Normal);
                 name->setFont(f);
                 auto *remove = deleteButton(QStringLiteral("Delete this mask."));
@@ -1030,7 +1115,7 @@ void Inspector::buildMasks()
                         edit([&](LocalMask &x) { x.grade = controls::maskContrast.toPhysical(v); });
                     });
                     invert = new QCheckBox(QStringLiteral("Invert"));
-                    invert->setFont(theme::small());
+                    invert->setFont(theme::panelSmall());
                     connect(invert, &QCheckBox::toggled, this, [edit](bool on) { edit([&](LocalMask &x) { x.inverted = on; }); });
                     for (QWidget *w : {static_cast<QWidget *>(stops), static_cast<QWidget *>(feather),
                                        static_cast<QWidget *>(grade), static_cast<QWidget *>(invert)})
@@ -1111,8 +1196,8 @@ void Inspector::buildEffects()
     body->addWidget(bloom);
     auto *bloomControls = new QWidget;
     auto *bloomLayout = new QVBoxLayout(bloomControls);
-    bloomLayout->setContentsMargins(0, 0, 0, 0);
-    bloomLayout->setSpacing(5);
+    bloomLayout->setContentsMargins(0, theme::px(0), 0, 0);
+    bloomLayout->setSpacing(theme::px(5));
     bloomLayout->addWidget(lookSlider(QStringLiteral("Amount"), 0, 200, 100, QStringLiteral(" %"), &GlowLook::Bloom::amount,
                                       nullptr, QStringLiteral("Layer opacity. Above 100 % it stacks like duplicated layers.")));
     bloomLayout->addWidget(lookSlider(QStringLiteral("Size"), 0, 100, 45, {}, &GlowLook::Bloom::size, nullptr,
@@ -1145,8 +1230,8 @@ void Inspector::buildEffects()
     body->addWidget(glow);
     auto *glowControls = new QWidget;
     auto *glowLayout = new QVBoxLayout(glowControls);
-    glowLayout->setContentsMargins(0, 0, 0, 0);
-    glowLayout->setSpacing(5);
+    glowLayout->setContentsMargins(0, theme::px(0), 0, 0);
+    glowLayout->setSpacing(theme::px(5));
     glowLayout->addWidget(lookSlider(QStringLiteral("Amount"), 0, 100, 30, {}, nullptr, &GlowLook::Glow::amount, {}));
     glowLayout->addWidget(lookSlider(QStringLiteral("Size"), 0, 100, 40, {}, nullptr, &GlowLook::Glow::size, {}));
     glowLayout->addWidget(lookSlider(QStringLiteral("Threshold"), 0, 100, 50, {}, nullptr, &GlowLook::Glow::threshold,
@@ -1183,8 +1268,8 @@ void Inspector::buildFilmCharacter()
     // back the same way; the engine runs it as one layer's own inhibition.
     auto *edges = new QWidget;
     auto *edgesLayout = new QVBoxLayout(edges);
-    edgesLayout->setContentsMargins(0, 0, 0, 0);
-    edgesLayout->setSpacing(5);
+    edgesLayout->setContentsMargins(0, theme::px(0), 0, 0);
+    edgesLayout->setSpacing(theme::px(5));
     edgesLayout->addWidget(toggle(
         QStringLiteral("Edge effects"), &Recipe::couplersEnabled,
         QStringLiteral("Development's by-products spread out of dense areas and hold back development beside them, so "
@@ -1205,8 +1290,8 @@ void Inspector::buildFilmCharacter()
 
     auto *couplers = new QWidget;
     auto *couplersLayout = new QVBoxLayout(couplers);
-    couplersLayout->setContentsMargins(0, 0, 0, 0);
-    couplersLayout->setSpacing(5);
+    couplersLayout->setContentsMargins(0, theme::px(0), 0, 0);
+    couplersLayout->setSpacing(theme::px(5));
     couplersLayout->addWidget(toggle(
         QStringLiteral("DIR couplers"), &Recipe::couplersEnabled,
         QStringLiteral("Inhibitors released as density forms, cutting density in neighbouring layers. This is where a "
@@ -1286,31 +1371,11 @@ void Inspector::buildOutput()
                            QStringLiteral("Pulls colours the film reached that the output space cannot show back "
                                           "inside it, moving chroma rather than clipping channels.")));
 
-    auto *names = new Choice(QStringLiteral("Control names"));
-    names->addItem(vocabularyName(Vocabulary::Photographic), int(Vocabulary::Photographic));
-    names->addItem(vocabularyName(Vocabulary::Darkroom), int(Vocabulary::Darkroom));
-    names->setHelp(QStringLiteral(
-        "Photographic uses the names Capture One and Lightroom use, where positive always means brighter. Darkroom "
-        "shows the underlying print controls. Either way the tooltip names the other."));
-    connect(names, &Choice::chosen, this, [this](const QVariant &v) {
-        m_vocabulary = Vocabulary(v.toInt());
-        appSettings().setValue("vocabulary", vocabularyName(m_vocabulary));
-        refresh();
-    });
-    body->addWidget(names);
+    m_refreshers.push_back([=, this] { space->setCurrent(QString::fromStdString(m_doc.recipe().outputColorSpace)); });
+}
 
-    auto *preview = new Choice(QStringLiteral("Preview size"));
-    for (int size : Document::previewSizes())
-        preview->addItem(QStringLiteral("%1 px").arg(size), size);
-    preview->setHelp(QStringLiteral(
-        "The preview's long side. Larger is sharper on screen and slower to redraw. A file smaller than this is "
-        "shown at its own size, never enlarged, and export is always at full size. Kept between launches."));
-    connect(preview, &Choice::chosen, this, [this](const QVariant &v) { m_doc.setPreviewSize(v.toInt()); });
-    body->addWidget(preview);
-
-    m_refreshers.push_back([=, this] {
-        space->setCurrent(QString::fromStdString(m_doc.recipe().outputColorSpace));
-        names->setCurrent(int(m_vocabulary));
-        preview->setCurrent(m_doc.previewSize());
-    });
+void Inspector::setVocabulary(Vocabulary vocabulary)
+{
+    m_vocabulary = vocabulary;
+    refresh();
 }

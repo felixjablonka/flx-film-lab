@@ -5,7 +5,7 @@
 FLX Film Lab is a Mac and Windows app for shooting digital photos as if they
 were film.
 
-**Its films are physical models, not presets.** Each of its 55 film stocks,
+**Its films are physical models, not presets.** Each of its 58 film stocks,
 whether colour negative, slide, cinema, black and white or instant, is modelled
 from its manufacturer's datasheet. That means the spectral sensitivity of each
 layer, its characteristic curves and the dyes it forms, with the development
@@ -16,15 +16,17 @@ light table, or, for a Polaroid, seen as the print it develops into.
 **Around them sits a hybrid workflow, half digital camera and half darkroom.**
 - **Before the negative:** exposure correction, white balance set by the film,
   auto exposure that keeps the stock's highlights, graduated filters, and
-  camera filters: Wratten filters for black and white, warming and conversion
-  filters for colour.
+  camera filters: Wratten filters for black and white, warming, cooling and
+  conversion filters for colour.
 - **After it:** a print on paper, or on a motion picture film's own print film,
   with paper grades and split grade, tone and colour controls, dodge and burn,
   and a crop.
+- **Across a shoot:** a folder sidebar to cull, edit and batch-export pictures
+  and clips, each keeping its settings between launches.
 - **Beyond stills:** the same looks grade log video, and bake into LUTs for a
   Lumix camera's Real Time LUT or an iPhone camera app.
 
-![FLX Film Lab: a RAW photo on Kodak Ektar 100, printed on Portra Endura](docs/images/overview.jpg)
+![FLX Film Lab: a folder of pictures in the sidebar, and a lake on Kodak Ektar 100, printed on Portra Endura, with a graduated exposure over the sky and the print's curves](docs/images/overview.jpg)
 
 It is a native SwiftUI + Metal app. There is no Python at runtime, no LibRaw, no
 bundled interpreter: it opens RAW files from any camera macOS supports through
@@ -34,8 +36,8 @@ it is the same engine in C++ and Qt, with a RAW decoder of its own (*Windows*).
 - **The physics** is a port of [agx-emulsion / spektrafilm][agx] — real spectral
   sensitivities, characteristic curves and dye absorption spectra read off
   manufacturer datasheets, plus DIR couplers, halation and a stochastic grain
-  model. FLX Film Lab ships with 55 film stocks and 14 print stocks, among them
-  eleven black-and-white films, a black-and-white paper, a black-and-white
+  model. FLX Film Lab ships with 58 film stocks and 14 print stocks, among them
+  fourteen black-and-white films, a black-and-white paper, a black-and-white
   print film and three Polaroid instant prints. Slides are read off a virtual
   light table rather than printed, white-balanced on the film base, as a
   projector or a scanner treats clear film.
@@ -47,7 +49,7 @@ it is the same engine in C++ and Qt, with a RAW decoder of its own (*Windows*).
 Both are GPLv3; so is this. See `NOTICE.md` for attribution and for the list of
 places where this deliberately departs from either reference.
 
-![The film menu: every stock, by kind](docs/images/film-menu.jpg)
+![The film menu: every stock, by kind, over a bridge in Lofoten on Kodak Vericolor III 160](docs/images/film-menu.jpg)
 
 ## Download
 
@@ -100,7 +102,7 @@ a video mode. That is where most of the work in this repository went.
   colour to within 6e-4 (`tests/parity`). Its grain model, a count of the
   particles that develop in each emulsion layer, is where the app's grain starts
   (*Grain*).
-- **spektrafilm's data.** 14 of the 55 film stocks are spektrafilm's: Kodak
+- **spektrafilm's data.** 14 of the 58 film stocks are spektrafilm's: Kodak
   Portra 160, 400 and 800 (and Portra 800's two pushes), Ektar 100, Gold 200,
   Ultramax 400, the four Vision3 stocks, Verita 200D, and Fujifilm C200, Pro
   400H and X-TRA 400. They are used as they are, but for one change: Vision3
@@ -136,8 +138,8 @@ a video mode. That is where most of the work in this repository went.
   - **Graduated exposure** stacks plus-or-minus gradients and ovals on the
     negative, like grad filters on the lens.
   - **Camera filters**, measured, with their filter factors: Kodak's Wratten
-    filters for black and white; for colour film Kodak's Wratten 81C, 85 and
-    85B and Tiffen's 812, each applied through the film's own spectral
+    filters for black and white; for colour film Kodak's Wratten 81C, 82A, 82C,
+    85 and 85B and Tiffen's 812, each applied through the film's own spectral
     sensitivities. The 85 and 85B convert daylight for tungsten film, their
     factor and print time set in daylight, the light they are made for.
 - **A darkroom, after the negative.** This follows NegPy's design:
@@ -164,17 +166,19 @@ a video mode. That is where most of the work in this repository went.
     of what they are given.
   - A loupe that shows the print at 100%, its pixels the export's.
 - **Undo and redo**, one step per gesture, with a history for each image.
-- **44 more stocks, each from its own datasheet.**
-  - 37 film stocks spektrafilm does not have: Fujifilm Astia 100F, Provia
+- **Folders of pictures and clips**, with culling, batch paste and export, and
+  settings kept between launches (*A folder of pictures*).
+- **47 more stocks, each from its own datasheet.**
+  - 40 film stocks spektrafilm does not have: Fujifilm Astia 100F, Provia
     400X, Velvia 50, Superia 1600, Superia Reala 100, Eterna Vivid 160T,
-    Eterna 500T, Reala 500D and Neopan 1600; Kodak Kodachrome 25 and 200,
-    Elite Chrome Extra Color 100, Elite Chrome 200, Royal Gold 100, Vericolor
-    III 160, EXR 50D, EXR 200T, 5251 50T, Tri-X 400, T-Max 100 and Double-X
-    5222; Agfa Optima II 100, Portrait XPS 160 and APX 25; Ilford HP5
-    Plus, Delta 100, Delta 400, FP4 Plus, Pan F Plus and Ortho Plus; Konica
-    Centuria Super 100, Centuria Super 1600 and Impresa 50; HARMAN Phoenix
-    200; and Polaroid's peel-apart prints, 553, Polapan Pro 100 and Polacolor
-    559.
+    Eterna 500T, Reala 500D, Neopan 100 Acros II and Neopan 1600; Kodak
+    Kodachrome 25 and 200, Elite Chrome Extra Color 100, Elite Chrome 200,
+    Royal Gold 100, Vericolor III 160, EXR 50D, EXR 200T, 5251 50T, Tri-X 400,
+    T-Max 100 and Double-X 5222; Agfa Optima II 100, Portrait XPS 160, APX 25,
+    APX 100 and APX 400; Ilford HP5 Plus, Delta 100, Delta 400, FP4 Plus, Pan F
+    Plus and Ortho Plus; Konica Centuria Super 100, Centuria Super 1600 and
+    Impresa 50; HARMAN Phoenix 200; and Polaroid's peel-apart prints, 553,
+    Polapan Pro 100 and Polacolor 559.
   - Tri-X pushed two stops, and Ilford Multigrade paper.
   - Five motion picture print films to print on, beside Kodak's 2383 and
     2393: Fujifilm's F-CP 3519, F-CP 3510 and Eterna-CP 3513DI, Kodak's
@@ -194,7 +198,7 @@ a video mode. That is where most of the work in this repository went.
     engine changes, a share of the inhibitor that diffuses and a cap on its edge
     gain, and a grid sixteen times finer for inverting the couplers.
 - **Black and white.** spektrafilm's main line is colour only; its
-  black-and-white work sits on an unmerged branch. Here eleven black-and-white
+  black-and-white work sits on an unmerged branch. Here fourteen black-and-white
   films, Tri-X's two-stop push, a silver paper and a silver print film are built
   from datasheets alone, as noted above. They run neutral through the
   three-layer engine, with grain and sharpness from Kodak's and Agfa's published
@@ -243,7 +247,7 @@ Scene light in, print out. Each stage names its origin in the shader source.
 
 | Stage | What happens |
 |---|---|
-| RAW decode | `CIRAWFilter`, scene-referred and linear — no tone curve, no highlight boost, no gamut mapping, and none of the "shadow bias" Apple otherwise subtracts, which put the darkest light the sensor recorded below zero. No luminance noise reduction, so the film's grain is the texture; colour noise reduction and sharpening stay at Apple's defaults for the camera. White-balanced for the *film's* reference illuminant, not as-shot |
+| RAW decode | `CIRAWFilter`, scene-referred and linear — no tone curve, no highlight boost, no gamut mapping, and none of the "shadow bias" Apple otherwise subtracts, which put the darkest light the sensor recorded below zero. No luminance noise reduction, so the film's grain is the texture; colour noise reduction and sharpening stay at Apple's defaults for the camera. White-balanced for the *film's* reference illuminant, not as-shot. Kept on Core Image's version 8 decoder should a newer one become its choice: macOS 27's version 9, offered for some cameras so far, turns this linear decode cyan |
 | Film exposure | RGB → XYZ (CAT16 to the stock's reference illuminant) → chromaticity → a baked 192×192 LUT that carries the whole spectral upsampling *and* the film's 81-band sensitivity projection; through a camera filter, the film's own LUT for it, its sensitivities times the filter's transmittance |
 | Scatter & halation | linear irradiance propagated through the emulsion and reflected off the base — the red bloom around bright edges. Sharpness, under Film & Paper, set to Camera leaves the scatter out, and the couplers' spread with it, so a picture keeps the camera file's own detail with the film's colour, halation and grain |
 | Development | characteristic curves plus DIR couplers: inhibitor released as density forms, diffused, then re-developed against the pre-coupler curves |
@@ -265,7 +269,9 @@ FLX Film Lab has two modes, switched in the middle of the toolbar or with ⌘1
 and ⌘2: **Stills**, for a RAW photograph, and **Motion**, for a log video clip
 (*Motion mode*). Each keeps its own file open while the other is in front, and
 a file opened from Finder goes to the mode that reads it. In Stills, drop a RAW
-on the window, or use Open.
+on the window, or use Open. On the Mac, Stills opens every RAW file macOS
+opens, compressed modes included (Nikon's HE and HE★, Canon's C-RAW, Sony's
+lossless compressed); the Windows app reads fewer (*Windows*).
 
 Export writes a 16-bit TIFF, a JPEG or a PNG with the output profile embedded,
 and carries the photograph's metadata over from the source — when it was taken,
@@ -278,6 +284,40 @@ filter: Red, Wratten 25; paper: Ilford Multigrade RC Deluxe*, or for a slide
 The same line is the image description, where Photos and Lightroom find a
 caption, unless the camera or an editor left one.
 
+## A folder of pictures
+
+**Open Folder** (⇧⌘O, or a folder dropped on the window) lists a folder's
+pictures down the left of the Stills window, in the sidebar (⌃⌘S shows or
+hides it); opening one picture lists its folder too. Click a picture to work
+on it. ↑ and ↓ in the sidebar, or ⌘↑ and ⌘↓ anywhere, step through them, and
+the pictures either side are decoded ahead, so the next is on screen at once.
+
+- **Culling.** P picks, X rejects and U unflags the pictures selected, as the
+  sidebar's right-click menu does, which shows the keys. With the pointer
+  over a row, a flag and a cross show at its end: they pick and reject its
+  picture, or the selection it is in, and unflag it again. The sidebar shows
+  all of them, only the picks, or all but the rejects. A reject is dimmed and
+  left out of the batch actions; nothing is ever deleted.
+- **Several at once.** ⌘-click and ⇧-click select several, ⌘A all of them.
+  **Paste Settings to Selected** puts the copied settings on each, as Paste
+  Settings puts them on one: each keeps its own masks, gradients and crop,
+  and has the paste as a step of its own undo history. **Export Selected**
+  (⇧⌘E) prints each at full size into a folder, one after another, in the
+  format Export writes and under the name Export gives it. Each is metered
+  on its own, so it prints as it would on screen, and a picture never opened
+  gets the look on screen, its autos as opening it would set them.
+- **Kept between launches.** Each picture's settings and flag are kept in the
+  app's library, in Application Support, and nothing is written into the
+  folder. A folder moved or renamed is found again by its files' names and
+  sizes. With **Save settings beside images** on (in Settings, ⌘,), each
+  picture's settings and flag also go into a small file beside it,
+  `DSC_0871.NEF.flx`, which travels with the folder to another drive, another
+  Mac or the Windows app. Of the two, the newer counts; a sidecar is read
+  wherever there is one.
+- **Thumbnails.** A picture shows the camera's own preview until it has
+  settings of its own, then its print. Only the pictures in view are read, so a
+  folder of hundreds lists at once.
+
 ## Opening another image
 
 The image on screen stays, with everything you did to it, until the new one has
@@ -285,8 +325,9 @@ actually decoded — a file that will not open changes nothing, and Export waits
 until loading is done so it never mixes one image's file with another's
 settings.
 
-Each image's edits are remembered for the session: going back to one restores
-it exactly. An image opened for the first time keeps the *look* — film, paper,
+Each image's edits are remembered: going back to one restores it exactly,
+and the settings it has of its own are kept between launches (*A folder of
+pictures*). An image opened for the first time keeps the *look* — film, paper,
 print or transparency, the film character and the output settings — while
 everything dialled for one frame starts fresh: exposure, white balance, tone,
 colour, gradients, dodge-and-burn masks and the crop. So do the autos, whatever
@@ -299,10 +340,10 @@ a handle, a crop edge or a curve point dragged on the picture, a click on a
 switch, a choice from a menu, a reset or a paste. A double-click that resets a
 slider is one step with its two clicks, so ⌘Z puts the slider back where it
 was. The Edit menu names the step it would take back: Undo Exposure, Redo Add
-Mask. Each image keeps its own history for the session, and a cancelled crop
-leaves none behind. A text field being typed in keeps its own typing's undo.
-Motion keeps a history for each clip the same way; how its files are written is
-a preference, not part of it.
+Mask. Each image keeps its own history for the session, the last 30 visited,
+and a cancelled crop leaves none behind. A text field being typed in keeps its
+own typing's undo. Motion keeps a history for each clip the same way; how its
+files are written is a preference, not part of it.
 
 **Copy Settings** and **Paste Settings**, in the toolbar or ⇧⌘C and ⇧⌘V, take
 one image's settings onto another: film, paper, print or transparency, camera
@@ -310,8 +351,8 @@ filter, every slider and auto, and white balance. Masks, gradients and the crop
 belong to the frame they were made for, so the image pasted onto keeps its own.
 
 **Presets** keep settings for later sessions. Save Settings as Preset…, in the
-toolbar's Presets menu next to Copy and Paste, saves what Copy Settings would
-copy under a name. Choosing the preset puts it on the image on screen, as Paste
+toolbar's Presets menu beside Crop, saves what Copy Settings would copy under a
+name. Choosing the preset puts it on the image on screen, as Paste
 Settings does. Each preset is a small JSON file in
 `~/Library/Application Support/FLX Film Lab/Presets` (Show Presets in Finder),
 so it can be shared by copying the file. A file copied in appears when the app
@@ -361,24 +402,26 @@ Exposure comes first and is authoritative: Auto Brightness meters the result of
 whatever exposure you set and corrects what is left, rather than trying to undo
 it.
 
-**Warming and conversion filters for colour film.** Every colour film, slide,
-negative or motion picture, can be shot through Kodak's Wratten 81C warming
-filter or Tiffen's 812, or Kodak's Wratten 85 or 85B conversion filter, chosen
-under Negative Exposure (Exposure on a slide), each read off its maker's own
-transmission curves. A filter is applied as what it is: the film's own spectral
-sensitivities, wavelength by wavelength, times its transmittance, so each layer
-sees the scene's light through it as the film would on the camera, rather than
-as a shift of white balance. Exposure opens up by the filter factor the film's
-green layer measures, so the picture keeps its brightness: about half a stop
-for the 81C and 812 and about one for the 85 and 85B, more than their ratings,
+**Warming, cooling and conversion filters for colour film.** Every colour film,
+slide, negative or motion picture, can be shot through Kodak's Wratten 81C
+warming filter or Tiffen's 812, Kodak's Wratten 82A or 82C cooling filter, or
+its 85 or 85B conversion filter, chosen under Negative Exposure (Exposure on a
+slide), each read off its maker's own transmission curves. A filter is applied
+as what it is: the film's own spectral sensitivities, wavelength by wavelength,
+times its transmittance, so each layer sees the scene's light through it as the
+film would on the camera, rather than as a shift of white balance. Exposure
+opens up by the filter factor the film's green layer measures, so the picture
+keeps its brightness: about half a stop for the 81C, 812 and 82A, three
+quarters for the 82C and about one for the 85 and 85B, more than their ratings,
 a third and two thirds, which are a meter's luminous readings. The 812 adds
-about the 81C's red with half its yellow, and leans pink. The 85 and 85B
-convert daylight for tungsten film, so their factor and the print time are set
-in daylight, the light they are made for. Measured, both go further than rated,
-taking daylight to about 3300 K and 2800 K rather than 3400 K and 3200 K: a
-tungsten film in daylight prints a grey a little cool through the 85, the
-filter Kodak names for its tungsten stocks, and a little warm through the 85B.
-On a daylight film they warm strongly.
+about the 81C's red with half its yellow, and leans pink. The 82A and 82C cool
+warm light: morning and evening sun on a daylight film, or lamps warmer than a
+tungsten film's 3200 K. The 85 and 85B convert daylight for tungsten film, so
+their factor and the print time are set in daylight, the light they are made
+for. Measured, both go further than rated, taking daylight to about 3300 K and
+2800 K rather than 3400 K and 3200 K: a tungsten film in daylight prints a grey
+a little cool through the 85, the filter Kodak names for its tungsten stocks,
+and a little warm through the 85B. On a daylight film they warm strongly.
 
 ## Metering
 
@@ -455,7 +498,8 @@ like the masks, and stay out of LUTs.
 
 **Kodak Tri-X 400**, also pushed two stops, **Kodak T-Max 100**, **Ilford HP5
 Plus**, **Ilford Delta 100** and **Delta 400**, **Ilford FP4 Plus**, **Ilford Pan F
-Plus**, **Ilford Ortho Plus**, **Fujifilm Neopan 1600** and **Agfa APX 25** print
+Plus**, **Ilford Ortho Plus**, **Fujifilm Neopan 100 Acros II** and **Neopan
+1600**, and **Agfa APX 25**, **APX 100** and **APX 400** print
 on **Ilford Multigrade RC Deluxe**, and **Kodak Double-X 5222**, Kodak's
 motion picture negative, on its release print film, **Kodak 2302**, each built
 from its maker's datasheet (`docs/profiles.md`). Picking
@@ -463,14 +507,16 @@ one moves the print onto Multigrade, or Double-X onto 2302, and picking a
 colour film again moves it back; a paper chosen on purpose for the kind of film
 already loaded stays.
 
-- **The film is panchromatic, and bluer than the eye.** Each film sees the scene
-  through its own measured spectral sensitivity, so an unfiltered blue sky
-  prints lighter and a red darker than their luminance — what yellow and red
-  filters exist to correct. Of equal-luminance patches, Tri-X prints the blue
-  at L* 75 and the red at 57. HP5 Plus leans less blue. Ilford Ortho Plus is
-  orthochromatic, blue and green sensitive only: it sees nothing past 565 nm,
-  so reds print dark and skin darker than on a panchromatic film, and it takes
-  only the filters Ilford gives it factors for, blue, green and yellow.
+- **The film is panchromatic, and bluer than the eye.** Each film sees the
+  scene through its own measured spectral sensitivity, so an unfiltered blue
+  sky prints lighter and a red darker than their luminance — what yellow and
+  red filters exist to correct. Of equal-luminance patches, Tri-X prints the
+  blue at L* 75 and the red at 57. HP5 Plus leans less blue. Ilford Ortho Plus
+  is orthochromatic, blue and green sensitive only: it sees nothing past 565
+  nm, so reds print dark and skin darker than on a panchromatic film, and it
+  takes only the filters Ilford gives it factors for, blue, green and yellow.
+  Neopan 100 Acros II sees red up to 650 nm about as strongly as green, and
+  nothing past 660, so its red filter does less than on other films.
 - **Camera filters**, under Negative Exposure: blue, green, yellow, orange and
   red — Kodak Wratten 47, 58, 8, 22 and 25, read off Kodak's own transmission
   curves. Each film has its own exposure LUT per filter, its sensitivity times
@@ -490,8 +536,9 @@ already loaded stays.
   the picture is neutral however it is filtered, and the colour controls are
   hidden. Pre-flash still holds the highlights.
 - **Grain is the datasheet's, where the sheet gives it.** Kodak gives Tri-X a
-  diffuse RMS granularity of 17, T-Max 100 one of 8 and Double-X one of 14, and
-  Agfa gives APX 25 one of 7, read the way the datasheets read it: net density 1.0 through a
+  diffuse RMS granularity of 17, T-Max 100 one of 8 and Double-X one of 14,
+  Agfa gives APX 25, 100 and 400 7, 9 and 14, and Fujifilm gives Neopan 100
+  Acros II 7, read the way the datasheets read it: net density 1.0 through a
   48 um aperture. Ilford publishes none for any of its films, so each takes
   the Kodak film of its own class: HP5 Plus Tri-X's 17; Delta 100 and Delta
   400, Ilford's tabular-grain emulsions, T-Max 100's and T-Max 400's 8 and 10;
@@ -501,22 +548,22 @@ already loaded stays.
   below. It is one
   silver layer, so the grain is neutral, and its clumps are smaller and
   crisper than a colour film's dye clouds (*Grain*).
-- **So is the sharpness.** Kodak publishes Tri-X's modulation transfer in
-  D-76: above 100% at coarse detail, 112% at 8 cycles/mm, back to 101% at 24
-  and 55% at 50. The hump is development's edge effect — its by-products
-  spread out of dense areas and hold development back beside them — which the
-  engine runs as the one silver layer's own inhibition, through the stage that
-  runs a colour film's DIR couplers. It and the scatter under it are fitted to
-  Kodak's curve (`tools/bake/bw_mtf.py`), within 4% from 2.4 to 71 cycles/mm;
-  Ilford's films, for which Ilford publishes none, take the same response,
-  each with the edge effect its own curve's slope gives it; APX 25,
-  T-Max 100 and Double-X are fitted to their makers' own curves, up to 50
-  cycles/mm (T-Max 109% at 5, 114% at 20, 112% at 30; Double-X 126% at 5,
-  92% at 20, 68% at 30, a broad hump and a steep fall that takes the
-  scatter's tail as well as its core). A colour
-  film's scatter without the couplers' sharpening had left Tri-X at 36% at 24
-  cycles/mm, visibly softer than any colour stock on the same file. Edge
-  effects, under Film Character, sets how strong it is.
+- **So is the sharpness.** Kodak publishes Tri-X's modulation transfer in D-76:
+  above 100% at coarse detail, 112% at 8 cycles/mm, back to 101% at 24 and 55%
+  at 50. The hump is development's edge effect — its by-products spread out of
+  dense areas and hold development back beside them — which the engine runs as
+  the one silver layer's own inhibition, through the stage that runs a colour
+  film's DIR couplers. It and the scatter under it are fitted to Kodak's curve
+  (`tools/bake/bw_mtf.py`), within 4% from 2.4 to 71 cycles/mm; Ilford's films,
+  for which Ilford publishes none, take the same response, each with the edge
+  effect its own curve's slope gives it; APX 25, 100 and 400, T-Max 100 and
+  Double-X are fitted to their makers' own curves, up to 50 cycles/mm (T-Max
+  109% at 5, 114% at 20, 112% at 30; Double-X 126% at 5, 92% at 20, 68% at 30,
+  a broad hump and a steep fall that takes the scatter's tail as well as its
+  core). Acros II, for which Fujifilm publishes none, takes T-Max 100's, which
+  resolves the same. A colour film's scatter without the couplers' sharpening
+  had left Tri-X at 36% at 24 cycles/mm, visibly softer than any colour stock
+  on the same file. Edge effects, under Film Character, sets how strong it is.
 - **Neopan 1600 is shot at its rating.** Fujifilm's D-76 time for EI 1600,
   7 1/2 minutes, gives a curve whose own ISO speed point is 721: the rating is
   a push of about a stop, with the contrast that brings (average gradient
@@ -597,8 +644,9 @@ default, so a slider at zero is provably doing nothing.
 The sliders are named the way Capture One and Lightroom name them — Brightness,
 Contrast, Shadows, Highlights, Blacks, Whites, Temperature, Tint — and positive
 always means brighter. Underneath, each one drives a darkroom quantity, and the
-tooltip always tells you which and shows its current physical value. Output →
-**Control names → Darkroom** relabels everything to the underlying controls.
+tooltip always tells you which and shows its current physical value.
+**Settings (⌘,) → Control names → Darkroom** relabels everything to the
+underlying controls.
 
 | Slider | What it really is |
 |---|---|
@@ -692,9 +740,12 @@ Each mask carries stops, feather, and a **local grade** in ISO-R points —
 burning through a different filter, which on variable-contrast paper is what a
 hard-filter burn actually is.
 
+![Dodge & burn: an oval that brightens a taxi at night, on Fujifilm Superia 1600 with glow](docs/images/dodge-burn.jpg)
+
 ## Mask lines
 
-**Hide Mask Lines** (⇧⌘H, in the toolbar) takes the lines of the Dodge & Burn
+The eye at the end of Graduated Exposure's buttons and of Dodge & Burn's, or
+**Show or Hide Mask Lines** (⇧⌘H, in the View menu), takes the lines of the
 masks and the gradients off the print, to judge it without them: they go on
 acting, and only their lines go. Choosing a mask or gradient to edit, or adding
 one, shows them again.
@@ -727,7 +778,7 @@ pixels at their size, so it enlarges the grain as cropping a print does.
 The grain is drawn after the levelling, on the print's own pixels, so it is as
 crisp between the frame's pixels as on them. Levelling is bicubic, and goes no
 further than the four nearest pixels, so edges do not ring. The preview of a tight crop is the
-preview's own pixels enlarged; Preview size, under Output, goes to 4096.
+preview's own pixels enlarged; Preview size, in Settings, goes to 4096.
 
 The meters read only what the crop keeps, turned back upright, so turning or
 mirroring a print never changes how it is printed. While a crop is being drawn
@@ -747,7 +798,7 @@ granularity — the density fluctuation through a 48 um aperture, times 1000:
 |---|---|
 | visual density 1.0 over the minimum | Fujifilm's, Agfa's and Konica's colour negatives and Fujifilm's slides, from their sheets |
 | gross visual density 1.0 | Kodak's slides |
-| net silver density 1.0 | Tri-X, T-Max 100, Double-X, APX 25 |
+| net silver density 1.0 | Tri-X, T-Max 100, Double-X, APX 25, 100 and 400, Neopan 100 Acros II |
 | Print Grain Index | Kodak's colour negatives for stills: four units are a just-noticeable step, and doubling the enlargement adds 22, so a difference of d is a factor of 2 to the power d/22. The scale is set at Portra 400 = 4, where Kodak's own curves put Vision3 250D and 500T and Fujifilm puts Pro 400H |
 | per layer, against density | Kodak Vision3 50D, 250D and 500T, and EXR 50D and 200T. Vision3 200T's sheet repeats 500T's plot, so 200T sits between 50D and 250D at the 100-speed grain Kodak claims for it, and Verita 200D between them at its own speed |
 
@@ -820,6 +871,15 @@ and travel with the look to the next image. The Motion mode adds a halation
 effect; Stills leaves it out, since the film model's own halation, the physical
 one, does that job here.
 
+## Before / After
+
+**Original** (`\`, in the toolbar) shows the picture before film and paper: the
+RAW as macOS renders it by default, as Preview and Photos show it, as shot. It
+takes the print's place, turned, levelled and cropped as the print is, so
+switching between the two moves nothing; a label says which is on screen. It is
+decoded the first time it is asked for, about 0.3 s for a 45 MP frame, and
+switching is immediate after that.
+
 ## The loupe
 
 **Loupe** (⌘L, in the toolbar) lays a square over the print that shows it at
@@ -827,6 +887,8 @@ one, does that job here.
 over the print. It shows what the export will: the grain, the halation, the
 couplers' edges and the sharpness at the size they come out at, which a
 fitted preview cannot.
+
+![The loupe at 100% over Venice in fog, on Kodak EXR 200T printed on Fujifilm F-CP 3519](docs/images/loupe.jpg)
 
 While the loupe is open the picture is held at full size on the GPU, decoded
 as the export decodes it: 0.44 s for a 45 MP Nikon Z 7 frame, which then
@@ -852,6 +914,31 @@ that only looks dark.
 
 It changes nothing about the render — it is a viewing preference, kept out of
 `Recipe` so it never lands in a sidecar.
+
+## Settings
+
+**Settings** (⌘,) holds what belongs to the app rather than to a picture, and
+keeps it between launches. Its General tab:
+
+- **Text size.** Standard, Larger or Largest: the inspector and the sidebar,
+  in both modes, grow as a whole by 15 or 30 %, their text, controls and width
+  together, so nothing is cut short. The toolbar keeps the system's size.
+- **Control names.** Photographic or Darkroom, for the Stills sliders (*How
+  shadows and highlights are controlled*).
+- **Preview size.** The Stills preview's long side, 1024 to 4096 px
+  (*Performance*).
+- **Save settings beside images.** A `.flx` file beside each picture or clip
+  (*A folder of pictures*).
+
+Its Films tab chooses which films the Film menu lists, in Stills and Motion:
+every film, in the menu's groups and order, ticked or not, with Show All and
+Hide All for each group. A film left out keeps working: a picture, clip or
+preset that uses it opens with it, and the menu shows it while it is in use.
+Films a later version adds are shown.
+
+A picture's colour space and gamut compression stay in the inspector's Output
+section: they belong to the picture, and travel with its settings and
+presets.
 
 ## Motion mode: log video
 
@@ -923,6 +1010,18 @@ format shown under Log Input says which it was, and can be overridden for
 that clip: the next one is read from its own tags. Read as N-Log, an Apple Log
 clip's grey card would print at L* 71 instead of 49.
 
+**A folder of clips.** Open Folder (⇧⌘O) in the Motion mode lists a folder's
+clips in the same sidebar as the Stills mode's pictures, each shown by a frame
+of it (*A folder of pictures*): graded with its look, for a clip with a look of
+its own, and otherwise log footage as QuickTime shows it. The flags work as
+there, and so does keeping each clip's look and flag between launches, in the
+library and, by the same setting, beside the clip. **Copy Look** and **Paste
+Look** (⇧⌘C, ⇧⌘V) take a grade from one clip to another, and from the sidebar
+to every clip selected; each keeps how its own footage is read. **Export
+Selected** (⇧⌘E) writes each clip selected, one after another, with its own
+look, in the format and for the displays chosen in the toolbar; a clip never
+opened gets the look on screen, metered for itself.
+
 **Exposure, and slides.** At Exposure 0 a clip prints the way it was
 exposed. That suits a negative, which holds seven to nine stops above an 18%
 grey, but a slide runs to clear film about one and a half stops above it, and
@@ -945,8 +1044,8 @@ daylight goes blue unless it is shot through an 85. Temperature and Tint
 correct it the way a lab would, with the enlarger's filters.
 
 **Black and white.** Tri-X, Tri-X Push 2, T-Max 100, HP5 Plus, Ilford's
-Delta 100 and 400, FP4 Plus, Pan F Plus and Ortho Plus, Neopan 1600 and APX 25
-print on Multigrade, as in Stills: picking one moves the print onto
+Delta 100 and 400, FP4 Plus, Pan F Plus and Ortho Plus, Neopan 100 Acros II
+and Neopan 1600, and APX 25, 100 and 400 print on Multigrade, as in Stills: picking one moves the print onto
 silver paper, which has no colour to balance, and the same camera filters
 (Wratten 47, 58, 8, 22 and 25) sit under Film & Paper. Double-X 5222, Kodak's
 black-and-white motion picture negative, prints on its release print film,
@@ -954,8 +1053,9 @@ black-and-white motion picture negative, prints on its release print film,
 glows grey in a black-and-white picture.
 
 **Motion picture film, filters and instant prints, as in Stills.** A motion
-picture film prints on its own print film, colour films take the 81C, 812, 85
-and 85B under Film & Paper, and Polaroid's instant prints are seen as the
+picture film prints on its own print film, colour films take the 81C, 812,
+82A, 82C, 85 and 85B under Film & Paper, and Polaroid's instant prints are
+seen as the
 prints they are, processed at 70 F.
 
 **What a frame cannot carry.** Grain, the film's own halation, coupler
@@ -1090,13 +1190,21 @@ on that clip reading it as BT.2020 instead moves the graded picture by dE2000
 same engine and the same film data, ported to C++20 and GLSL compute on Qt
 6.12, and checked against the Mac app's engine stage by stage: its prints are
 within ΔE2000 0.09 of the Mac's, on Direct3D 12 and 11 as on Metal. It decodes
-RAW files itself, with RawSpeed and, for what RawSpeed lacks, LibRaw, and
-gives each camera Apple's colour, measured from macOS's own decoding, so a
-picture's colour is the Mac app's; lens correction comes from the camera's
-own file, or from Lensfun's database. `windows/README.md` says how it is built
-and checked. The Mac remains the main development platform: the Windows app
-receives limited testing, on a single configuration, Windows 11 with an
-NVIDIA RTX graphics card.
+RAW files itself, with RawSpeed and, for what RawSpeed lacks, LibRaw, and gives
+each camera Apple's colour, measured from macOS's own decoding, so a picture's
+colour is the Mac app's; lens correction comes from the camera's own file, or
+from Lensfun's database. `windows/README.md` says how it is built and checked.
+The Mac remains the main development platform: the Windows app receives limited
+testing, on a single configuration, Windows 11 with an NVIDIA RTX graphics
+card.
+
+Two compressed RAW modes it cannot read, and says so when one is opened:
+Nikon's High Efficiency RAW (HE and HE★), which no open decoder reads yet, and
+Sony's lossless compressed RAW at M and S size. Shoot Lossless compressed on
+the Nikon, or convert its files to DNG with Adobe DNG Converter; on the Sony,
+the L size opens. A camera whose colour has not been measured from macOS yet,
+the Sony A7R V and A7R VI among them, gets Adobe's colour matrix instead:
+close, not the same.
 
 It asks Windows how much of the graphics card's memory it may use, and fits
 in it: a 45 MP picture decodes on the GPU in about 7 GB, so where the card has
@@ -1210,10 +1318,12 @@ before the fix it guards.
   balances decode at the CIE daylights, and Tungsten 3200 K at the Planckian
   3200 K; graduated exposure, linear or oval and inside or out, changes what the
   film receives, and only where it covers.
-- **Filters:** every colour film takes the 81C, 812, 85 and 85B; on a slide a
-  grey card keeps its lightness as they warm it; the tungsten films, balanced
-  for a 3200 K lamp, print daylight blue, through the 85 a little cool and
-  through the 85B a little warm and as light as in their own light;
+- **Filters:** every colour film takes the 81C, 812, 82A, 82C, 85 and 85B; on a
+  slide a grey card keeps its lightness as they warm or cool it; the tungsten
+  films, balanced for a 3200 K lamp, print daylight blue, through the 85 a
+  little cool and through the 85B a little warm and as light as in their own
+  light, and a 3000 K and a 2800 K lamp warm, near neutral through the 82A and
+  the 82C;
   black-and-white films print a grey card the same through every filter.
 - **Tone:** Brightness, Shadows and Highlights stay in their own bands; Auto
   Contrast fits the frame instead of crushing it; Temperature and Tint move
@@ -1263,7 +1373,7 @@ On an M4 Pro, a 45 MP Nikon NEF:
 | Loupe, reading the picture at full size (once) | 0.44 s |
 | Loupe, each move or slider tick (600 × 600 px) | ~7 ms |
 
-The preview is 2560 pixels on its long side. Preview size, under Output, also
+The preview is 2560 pixels on its long side. Preview size, in Settings, also
 offers 1024, 2048, 3072 and 4096, and the choice is kept between launches. At
 2048 the two sliders take about 19 and 33 ms, at 3072 about 42 and 71, and at
 4096 about 73 and 122, for a Mac with the GPU for it. A file smaller than the
@@ -1343,11 +1453,13 @@ python tools/icon/make_icon.py        # -> FLXFilmLab/Resources/AppIcon.icns, an
 
 ```
 FLXFilmLab/
-  App/         SwiftUI entry point and mode switch, the document model, and the off-main render engine
+  App/         SwiftUI entry point and mode switch, the document model, the folder, its library and
+               thumbnails, and the off-main render engine
   Engine/      Metal renderer, CPU-side model evaluation, RAW decode, export
   Effects/     bloom, glow and halation, used by both modes
   Model/       data-pack decoding, the recipe, shared constants
-  UI/          canvas, inspector and its controls, curves, crop, mask and loupe overlays
+  UI/          canvas, inspector and its controls, the sidebar, Settings, curves, crop, mask and
+               loupe overlays
   Resources/   baked packs + flx.metal (compiled at runtime)
   Motion/      the Motion mode
     App/       the clip model

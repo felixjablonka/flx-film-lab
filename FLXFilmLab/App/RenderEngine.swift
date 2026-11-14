@@ -145,6 +145,26 @@ actor RenderEngine {
         return (resolved, metered)
     }
 
+    /// `recipe` as it prints `pixels`, each control whose auto is on carrying
+    /// its meter's reading of them: what `resolve` gives the image on screen,
+    /// without the readings it keeps, for a picture that is not on screen (a
+    /// batch export, a sidebar print). Metered on what the crop keeps, as
+    /// there.
+    static func resolved(_ recipe: Recipe, pixels: [Float], width: Int, height: Int) throws -> Recipe {
+        var working = recipe
+        let area = recipe.geometry.upright.metered(pixels, width: width, height: height)
+        if recipe.autoExposure, let film = try? PackLibrary.shared.pack(recipe.filmStock) {
+            working.exposureEV = Double(RenderSetupBuilder.autoExposureEV(pixels: area.pixels, width: area.width,
+                                                                          height: area.height, film: film))
+        }
+        guard working.autoDensity || working.autoGrade,
+              let reading = try RenderSetupBuilder.readPrint(recipe: working, pixels: area.pixels, width: area.width,
+                                                             height: area.height,
+                                                             exposureEV: Float(working.exposureEV))
+        else { return working }
+        return RenderSetupBuilder.applyAuto(recipe: working, reading: reading)
+    }
+
     /// The part of the frame an upright crop keeps, cut once per crop.
     private func meteredArea(_ upright: FrameGeometry) -> (pixels: [Float], width: Int, height: Int) {
         guard let source else { return ([], 0, 0) }

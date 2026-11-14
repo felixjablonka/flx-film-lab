@@ -7,6 +7,8 @@ struct MotionInspector: View {
     @ObservedObject var model: ClipModel
     var onExport: () -> Void
     var onExportLUT: () -> Void
+    /// The films left out of the Film menu (Settings, Films).
+    @AppStorage(FilmMenu.hiddenKey) private var hiddenFilms = ""
 
     private let vocabulary = Vocabulary.photographic
 
@@ -21,10 +23,10 @@ struct MotionInspector: View {
                 inputSection
                 exportSection
             }
-            .padding(.horizontal, 12)
+            .padding(.horizontal, pt(12))
             .padding(.bottom, 24)
         }
-        .frame(width: 296)
+        .frame(width: pt(296))
         // Not under the toolbar, as in Stills.
         .background(.ultraThinMaterial, ignoresSafeAreaEdges: [])
     }
@@ -57,7 +59,10 @@ struct MotionInspector: View {
 
     private var stockSection: some View {
         Section("Film & Paper", subtitle: "The look is the film's and the paper's own spectral data, baked into the clip's colours.") {
-            StockPicker(title: "Film", entries: PackLibrary.shared.filmStocks, selection: filmStock)
+            StockPicker(title: "Film",
+                        entries: FilmMenu.shown(PackLibrary.shared.filmStocks, hidden: hiddenFilms,
+                                                inUse: model.look.recipe.filmStock),
+                        selection: filmStock)
             // An instant print is the print: there is no paper to put it on.
             if film?.isInstantPrint != true {
                 ToggleRow(title: "Print on paper", isOn: printsOnPaper,
@@ -71,7 +76,7 @@ struct MotionInspector: View {
                     Button {
                         model.look.recipe.printStock = suggested
                     } label: {
-                        Label("Use this film's reference paper", systemImage: "wand.and.stars").font(.system(size: 10))
+                        Label("Use this film's reference paper", systemImage: "wand.and.stars").font(.panel(10))
                     }
                     .buttonStyle(.link)
                 }
@@ -93,14 +98,14 @@ struct MotionInspector: View {
                 Text(model.isMetering ? "Metering the clip…"
                      : model.meteredExposure.map { $0 == 0 ? "The clip fits this film's highlights as shot" : String(format: "Pulled %.2f EV to hold the clip's highlights", $0) }
                      ?? "Meters when a clip is open")
-                    .font(.system(size: 9, design: .monospaced))
+                    .font(.panel(9, design: .monospaced))
                     .foregroundStyle(.tertiary)
             }
             if let filters = film?.lensFilters, !filters.isEmpty {
                 LensFilterPicker(filters: filters, selection: $model.look.recipe.lensFilter)
             }
             Button("Reset exposure") { model.resetExposure() }
-                .buttonStyle(.link).font(.system(size: 10)).padding(.top, 2)
+                .buttonStyle(.link).font(.panel(10)).padding(.top, 2)
         }
     }
 
@@ -143,7 +148,7 @@ struct MotionInspector: View {
             SpecSlider(spec: Controls.shadows, physical: $model.look.recipe.shadows, vocabulary: vocabulary)
             SpecSlider(spec: Controls.highlights, physical: $model.look.recipe.highlights, vocabulary: vocabulary)
             Button("Reset tone") { model.resetTone() }
-                .buttonStyle(.link).font(.system(size: 10)).padding(.top, 2)
+                .buttonStyle(.link).font(.panel(10)).padding(.top, 2)
         }
     }
 
@@ -158,7 +163,7 @@ struct MotionInspector: View {
                 SpecSlider(spec: Controls.temperature, physical: $model.look.recipe.filterShiftY, vocabulary: vocabulary)
                 SpecSlider(spec: Controls.tint, physical: $model.look.recipe.filterShiftM, vocabulary: vocabulary)
                 Button("Reset colour") { model.resetColour() }
-                    .buttonStyle(.link).font(.system(size: 10)).padding(.top, 2)
+                    .buttonStyle(.link).font(.panel(10)).padding(.top, 2)
             }
         }
     }
@@ -184,12 +189,12 @@ struct MotionInspector: View {
                         Picker("Blend", selection: $model.look.effects.bloom.blend) {
                             ForEach(BloomBlend.allCases, id: \.self) { Text($0.title).tag($0) }
                         }
-                        .controlSize(.small).font(.system(size: 11))
+                        .controlSize(.panel(.small)).font(.panel(11))
                         ParamSlider(title: "Haze", value: $model.look.effects.bloom.haze, range: 0...100, defaultValue: 0,
                                     decimals: 0, help: "A wide veil over the whole frame, like a physical mist filter: it lifts the shadows and lowers contrast.")
                     }
                 }
-                .font(.system(size: 11))
+                .font(.panel(11))
             }
 
             ToggleRow(title: "Glow", isOn: $model.look.effects.glow.enabled,
@@ -212,7 +217,7 @@ struct MotionInspector: View {
                           help: "Keeps halation off the highlight itself, so it shows only as a ring around it.")
             }
             Button("Reset effects") { model.resetEffects() }
-                .buttonStyle(.link).font(.system(size: 10)).padding(.top, 2)
+                .buttonStyle(.link).font(.panel(10)).padding(.top, 2)
         }
     }
 
@@ -225,19 +230,19 @@ struct MotionInspector: View {
                      ?? "From the file").tag(LogFormat?.none)
                 ForEach(LogFormat.allCases) { Text($0.rawValue).tag(LogFormat?.some($0)) }
             }
-            .controlSize(.small).font(.system(size: 11))
+            .controlSize(.panel(.small)).font(.panel(11))
             .help("Every curve but Apple Log is defined on the code values the camera records; Apple Log and Apple Log 2 (iPhone) on the 0–1 signal. Apple tags its log footage and a Sony camera names its curve in its own metadata. For a Lumix, Fujifilm, Canon or Insta360 file the camera's make decides: V-Log, F-Log2 where the camera has it (else F-Log), Canon Log 3, I-Log. Anything else is taken for N-Log. A choice here holds for this clip; the next one is read from its own tags.")
             Picker("Levels", selection: $model.look.input.levels) {
                 ForEach(InputSettings.Levels.allCases) { Text($0.rawValue).tag($0) }
             }
-            .controlSize(.small).font(.system(size: 11))
+            .controlSize(.panel(.small)).font(.panel(11))
             Picker("Matrix", selection: $model.look.input.matrix) {
                 ForEach(InputSettings.Matrix.allCases) { Text($0.rawValue).tag($0) }
             }
-            .controlSize(.small).font(.system(size: 11))
+            .controlSize(.panel(.small)).font(.panel(11))
             if let r = model.reading {
                 Text("Reading \(r.format.shortName) · \(r.bitDepth)-bit \(r.chroma.rawValue) · \(r.fullRange ? "full" : "video") range · \(r.matrixName)")
-                    .font(.system(size: 9, design: .monospaced)).foregroundStyle(.tertiary)
+                    .font(.panel(9, design: .monospaced)).foregroundStyle(.tertiary)
             }
         }
     }
@@ -251,11 +256,11 @@ struct MotionInspector: View {
                 Text("Apple displays").tag(LookLUT.Output.appleDisplay)
                 Text("Rec.709 broadcast").tag(LookLUT.Output.bt1886)
             }
-            .controlSize(.small).font(.system(size: 11))
+            .controlSize(.panel(.small)).font(.panel(11))
             Text(model.look.export.display == .appleDisplay
                  ? "Looks as it does here in QuickTime, Photos and Safari on a Mac, iPhone or iPad, which decode Rec.709 video with a 1.961 power."
                  : "For a BT.1886 reference monitor or TV, which decode with a 2.4 power. On a Mac it will look lighter and flatter than here.")
-                .font(.system(size: 10)).foregroundStyle(.tertiary)
+                .font(.panel(10)).foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
             HStack {
                 Button("Export…", action: onExport)
@@ -264,7 +269,7 @@ struct MotionInspector: View {
                 Button("Export LUT…", action: onExportLUT)
                     .help("The print as a 65-point .cube for DaVinci Resolve and other editors, Rec.709 (BT.1886) out, taking the clip's log the way Resolve reads it: N-Log and V-Log as data levels for a full-range file like a Zf's and video levels otherwise, Apple Log on its signal. Effects are not in it.")
             }
-            .controlSize(.small)
+            .controlSize(.panel(.small))
             .padding(.top, 4)
         }
     }

@@ -1,0 +1,112 @@
+{
+  "app" : "FLX Film Lab",
+  "edits" : {
+    "customTemperature" : 4300,
+    "customTint" : 7,
+    "recipe" : {
+      "autoDensity" : false,
+      "autoExposure" : false,
+      "autoGrade" : false,
+      "brightness" : 0.1,
+      "couplersAmount" : 1,
+      "couplersDiffusion" : 1,
+      "couplersEnabled" : true,
+      "density" : 0,
+      "densityCurveGamma" : 1,
+      "exposureEV" : 1.25,
+      "exposureGradients" : [
+        {
+          "enabled" : true,
+          "exposureEV" : -0.7,
+          "id" : "27FD3461-0ED0-477A-82A8-C35738C8CA4A",
+          "name" : "Sky",
+          "points" : [
+            [
+              0.5,
+              0.3
+            ],
+            [
+              0.5,
+              0.55
+            ]
+          ]
+        }
+      ],
+      "filmFormat" : "120",
+      "filmStock" : "kodak_ektar_100",
+      "filterShiftM" : 0,
+      "filterShiftY" : 2,
+      "frameGeometry" : {
+        "aspect" : "Original",
+        "customHeight" : 1,
+        "customWidth" : 1,
+        "mirrored" : false,
+        "quarterTurns" : 1,
+        "straighten" : 1.5
+      },
+      "gamutCompress" : true,
+      "glareAmount" : 0.03,
+      "glareEnabled" : true,
+      "grade" : 115,
+      "gradeTrim" : {
+        "blue" : 0,
+        "green" : 0,
+        "red" : 0
+      },
+      "grainAmount" : 1,
+      "grainEnabled" : true,
+      "grainScale" : 1,
+      "halationAmount" : 1,
+      "halationEnabled" : true,
+      "halationScale" : 1,
+      "highlightCMY" : {
+        "cyan" : 0,
+        "magenta" : 0,
+        "yellow" : 0
+      },
+      "highlightGrade" : 0,
+      "highlights" : 0,
+      "masks" : [
+
+      ],
+      "normalizeToBase" : true,
+      "outputColorSpace" : "sRGB",
+      "preflashExposure" : 0,
+      "preflashM" : 0,
+      "preflashY" : 0,
+      "printStock" : "kodak_portra_endura",
+      "scatterAmount" : 1,
+      "scatterScale" : 1,
+      "shadowCMY" : {
+        "cyan" : 0,
+        "magenta" : 0,
+        "yellow" : 0
+      },
+      "shadowGrade" : 0,
+      "shadows" : 0,
+      "shoulder" : 0,
+      "shoulderTrim" : {
+        "blue" : 0,
+        "green" : 0,
+        "red" : 0
+      },
+      "shoulderWidth" : 1,
+      "snap" : 0,
+      "snapTrim" : {
+        "blue" : 0,
+        "green" : 0,
+        "red" : 0
+      },
+      "toe" : 0,
+      "toeTrim" : {
+        "blue" : 0,
+        "green" : 0,
+        "red" : 0
+      },
+      "toeWidth" : 1
+    },
+    "whiteBalance" : "Custom"
+  },
+  "flag" : "pick",
+  "modified" : "2026-11-11T17:16:19Z"
+}

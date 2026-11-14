@@ -30,6 +30,10 @@ public:
     explicit Inspector(Document &document, QWidget *parent = nullptr);
 
     Vocabulary vocabulary() const { return m_vocabulary; }
+    // Control names, chosen in Settings: the sliders named again.
+    void setVocabulary(Vocabulary vocabulary);
+    // The films Settings leaves in the Film menu changed: listed again.
+    void listFilms() { refresh(); }
 
 private:
     void refresh();
