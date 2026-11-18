@@ -70,11 +70,11 @@ struct MotionInspector: View {
             }
             if printsOnPaper.wrappedValue {
                 StockPicker(title: "Paper", entries: PackLibrary.shared.printStocks, films: false,
-                            selection: $model.look.recipe.printStock)
+                            selection: Binding(get: { model.look.recipe.printStock }, set: { model.selectPaper($0) }))
                 if let suggested = film?.targetPrint, suggested != model.look.recipe.printStock,
                    PackLibrary.shared.printStocks.contains(where: { $0.stock == suggested }) {
                     Button {
-                        model.look.recipe.printStock = suggested
+                        model.selectPaper(suggested)
                     } label: {
                         Label("Use this film's reference paper", systemImage: "wand.and.stars").font(.panel(10))
                     }

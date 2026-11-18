@@ -105,8 +105,8 @@ public:
     // sidebar, an Open dialog, Explorer or a drop compares equal.
     static QString canonical(const QString &path);
     // A folder's pictures (or its movies, for clips), by name as Explorer
-    // sorts them: the RAW files the decoders read and pictures already
-    // rendered, none hidden; sidecars (.flx) are not pictures.
+    // sorts them: the RAW files the decoders read, not a JPEG or TIFF beside
+    // them, none hidden; sidecars (.flx) are not pictures.
     static std::vector<Item> listing(const QString &folder, Kind kind);
     static bool isPicture(const QString &path);
 

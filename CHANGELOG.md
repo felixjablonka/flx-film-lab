@@ -1,5 +1,53 @@
 # Changelog
 
+## 2.1.0 (2026-11-18)
+
+Version 2.1 adds a default film and paper, a choice of export size and a
+faster preview, on the Mac and on Windows.
+
+### New
+- **Settings: Film & Paper,** a new tab:
+  - **A default film and paper** for new pictures, in place of Portra 400
+    always.
+  - **What a new picture opens with:** the look of the picture before, as
+    until now, or the default film and paper.
+  - **How the paper follows the film:** each film bringing its own paper, or
+    the paper staying while the film changes within its kind (colour, motion
+    picture, black and white) and coming back when you return to that kind.
+    In Stills and Motion.
+- **Export size:** Full Size, or a long edge in pixels, chosen beside the
+  format in the toolbar, for Export and Export Selected. A smaller file is
+  made from the full-size print and keeps its brightness, detail and grain,
+  with clean hard edges. A picture is never enlarged.
+
+### Faster
+- **The preview follows a slider faster.** A print control such as
+  Brightness or Contrast redraws in about 45% less time on the Mac and in
+  about half the time on Windows; Exposure in 16% and 23% less. The larger
+  preview sizes gain as much.
+- **Opening a picture** takes about 15% less time on the Mac, and the loupe
+  follows the pointer in about 30% less.
+- **Stepping through a folder** at a quick pace: a picture still being
+  decoded ahead is shown when that decode is done, instead of being decoded a
+  second time beside it. Clicking on every half second or so takes about half
+  the time on the Mac.
+- **Sliders stay smooth** right after a picture opens, on the Mac: the picture
+  beside it is decoded ahead in four bands, which wait while a slider moves.
+- **The first launch after an install or an update** no longer compiles the
+  shaders, on the Mac.
+
+### Changed
+- **The folder sidebar lists RAW files only.** JPEG and TIFF files beside
+  them, often exports or edits of the same RAWs, are left out; a JPEG or TIFF
+  still opens on its own.
+- **A Liquid Glass icon** on macOS 26, with dark, clear and tinted forms.
+
+### Fixed
+- **No black specks in the preview beside bright lights,** such as lamps at
+  night or the sun through branches. Exports at full size never had them.
+- **No magenta specks round bright lights on Windows,** in the preview and in
+  exports.
+
 ## 2.0.0 (2026-11-14)
 
 Version 2.0 adds a multi-image workflow: a folder sidebar to cull, edit and

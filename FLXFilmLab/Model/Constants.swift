@@ -13,7 +13,8 @@ enum Constants {
     static let couplerOversampling = 16
     static let couplerCurveSamples = (curveSamples - 1) * couplerOversampling + 1
 
-    // Offsets into the packed spectral-table buffer handed to `print_and_scan`.
+    // Offsets into the spectral tables (`RenderSetup.spectralTables`), which
+    // reach `print_and_scan` repacked by band (`Renderer.bands`).
     static let offFilmChannelDensity = 0
     static let offFilmBaseDensity = 243
     static let offFilmValid = 324

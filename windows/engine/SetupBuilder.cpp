@@ -745,42 +745,89 @@ EffectsParams effectsFor(const std::optional<GlowLook> &look, int longEdge)
     return e;
 }
 
-Recipe loadingFilm(const Recipe &recipe, const std::string &stock, PackLibrary &packs)
+namespace {
+
+bool isPaper(PackLibrary &packs, const std::string &stock)
+{
+    const auto &papers = packs.paperEntries();
+    return std::any_of(papers.begin(), papers.end(), [&](const PackIndexEntry &e) { return e.stock == stock; });
+}
+
+const ProfilePack *tryPack(PackLibrary &packs, const std::string &name)
+{
+    try {
+        return &packs.pack(name);
+    } catch (const std::exception &) {
+        return nullptr;
+    }
+}
+
+} // namespace
+
+Recipe loadingFilm(const Recipe &recipe, const std::string &stock, PackLibrary &packs, PaperRule papers,
+                   const PaperMemory &remembered)
 {
     Recipe r = recipe;
     if (stock == r.filmStock)
         return r;
-    auto tryPack = [&](const std::string &name) -> const ProfilePack * {
-        try {
-            return &packs.pack(name);
-        } catch (const std::exception &) {
-            return nullptr;
-        }
-    };
-    const ProfilePack *film = tryPack(stock);
-    const ProfilePack *previous = tryPack(r.filmStock);
+    const ProfilePack *film = tryPack(packs, stock);
+    const ProfilePack *previous = tryPack(packs, r.filmStock);
     r.filmStock = stock;
     if (film && previous) {
         if (film->isPositive() != previous->isPositive())
             r.scanFilm.reset();
         if (r.grade == double(previous->defaultGrade()))
             r.grade = double(film->defaultGrade());
-        const ProfilePack *paper = tryPack(r.printStock);
-        const auto &papers = packs.paperEntries();
-        if (paper && !film->targetPrint.empty()
-            && std::any_of(papers.begin(), papers.end(),
-                           [&](const PackIndexEntry &e) { return e.stock == film->targetPrint; })) {
-            const bool otherColour = film->isMonochrome() != previous->isMonochrome()
-                                     && film->isMonochrome() != paper->isMonochrome();
-            // a motion picture film always onto its own print film, as a lab
-            // prints it, and a still film picked after one off the print film
-            // onto its own paper; a print film chosen for a still film stays
-            const bool printFilm = film->isMotionPicture() || (previous->isMotionPicture() && paper->isMotionPicture());
-            if (otherColour || printFilm)
-                r.printStock = film->targetPrint;
+    }
+    if (film && !film->targetPrint.empty() && isPaper(packs, film->targetPrint)) {
+        if (papers == PaperRule::FollowsFilm) {
+            r.printStock = film->targetPrint;
+        } else {
+            const std::optional<FilmKind> kind = filmKind(*film);
+            const std::optional<FilmKind> before = previous ? filmKind(*previous) : std::nullopt;
+            if (kind && kind != before) {
+                const auto last = remembered.find(*kind);
+                r.printStock = last != remembered.end() && isPaper(packs, last->second) ? last->second
+                                                                                       : film->targetPrint;
+            }
         }
     }
     if (r.lensFilter && (!film || !film->lensFilter(r.lensFilter)))
         r.lensFilter.reset();
+    return r;
+}
+
+Recipe pickingFilm(const Recipe &recipe, const std::string &stock, PackLibrary &packs, PaperRule papers,
+                   PaperMemory &memory)
+{
+    rememberPaper(memory, recipe.printStock, recipe.filmStock, packs);
+    return loadingFilm(recipe, stock, packs, papers, memory);
+}
+
+void rememberPaper(PaperMemory &memory, const std::string &paper, const std::string &film, PackLibrary &packs)
+{
+    if (const ProfilePack *pack = tryPack(packs, film))
+        if (const std::optional<FilmKind> kind = filmKind(*pack))
+            memory[*kind] = paper;
+}
+
+std::optional<std::string> ownPaper(PackLibrary &packs, const std::string &film)
+{
+    if (const ProfilePack *pack = tryPack(packs, film))
+        if (!pack->targetPrint.empty() && isPaper(packs, pack->targetPrint))
+            return pack->targetPrint;
+    return std::nullopt;
+}
+
+Recipe startingRecipe(PackLibrary &packs, const std::string &film, const std::string &paper)
+{
+    Recipe r;
+    const auto &films = packs.filmEntries();
+    const bool known = std::any_of(films.begin(), films.end(), [&](const PackIndexEntry &e) { return e.stock == film; });
+    if (known && film != r.filmStock)
+        r = loadingFilm(r, film, packs, PaperRule::FollowsFilm);
+    if (const ProfilePack *pack = tryPack(packs, r.filmStock))
+        r.grade = double(pack->defaultGrade());
+    r.printStock = isPaper(packs, paper) ? paper : ownPaper(packs, r.filmStock).value_or(Recipe().printStock);
     return r;
 }

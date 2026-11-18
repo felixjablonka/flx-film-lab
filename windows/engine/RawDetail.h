@@ -35,10 +35,11 @@ constexpr int kNoiseStep = 4;
 void noiseSamples(const std::vector<float> &y, int w, int h, std::vector<float2> &samples);
 Noise fitNoise(std::vector<float2> &samples);
 
-// A pixel without light amid well-lit ones, as the demosaic leaves beside a
-// point of light (its interpolation's negative lobes): it takes its eight
-// neighbours' median, channel by channel. The colour steps would otherwise
-// take its false colour and leave it black. Where the neighbours' median is
+// A pixel without light amid well-lit ones, or with a channel more than four
+// times the noise below black, as the demosaic leaves beside a point of light
+// (its interpolation's negative lobes): it takes its eight neighbours'
+// median, channel by channel. The colour steps would otherwise take its false
+// colour and leave it black, or spread it. Where the neighbours' median is
 // within four times the noise, the shadows' noise, nothing is touched.
 void repairOvershoot(std::vector<float3> &rgb, int w, int h, const Noise &noise);
 
@@ -51,7 +52,9 @@ void suppressFalseColour(std::vector<float3> &rgb, int w, int h);
 // guided filter (He, Sun and Tang) whose guide is the luminance, so that the
 // chroma keeps to the luminance's edges and is evened out between them, over
 // some 10 x 10 pixels on a 24 MP picture. Its threshold for an edge is three
-// times the noise at the level.
+// times the noise at the level. It never takes a channel below black, or
+// below where the pixel had it: the colour is drawn in towards the pixel's
+// grey first.
 void reduceColourNoise(std::vector<float3> &rgb, int w, int h, const Noise &half);
 
 // Capture sharpening: Richardson-Lucy deconvolution of the luminance by a

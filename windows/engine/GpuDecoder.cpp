@@ -375,7 +375,7 @@ DecodedPicture GpuDecoder::decode(DecodePlan &&plan, double *seconds)
         pass("raw_cnr_ab", {input(0, meanFirst), input(1, meanSecond), output(2, ab),
                             B::uniformBuffer(3, kCompute, uniform(NoiseBlock{noiseOf(noise.half)}))}, halfSize);
         boxMean(ab, meanAb, scratch, r);
-        pass("raw_cnr_apply", {input(0, meanAb), input(1, guide), output(2, spare)}, full);
+        pass("raw_cnr_apply", {input(0, meanAb), input(1, guide), output(2, spare), input(3, current)}, full);
         done();
     }
     if (detail && options.sharpening) {
@@ -449,6 +449,17 @@ DecodedPicture GpuDecoder::decode(DecodePlan &&plan, double *seconds)
                              B::bufferLoad(2, kCompute, storage(weightsY.data(), weightsY.size() * sizeof(float))),
                              B::bufferLoad(3, kCompute, storage(firstY.data(), firstY.size() * sizeof(int))),
                              B::uniformBuffer(4, kCompute, uniform(ScaleBlock{{tapsY, 1, 0, 0}}))}, final->pixelSize());
+        // each pixel held to the light under the main lobe (lobeWindows)
+        std::vector<int> windowsX, windowsY;
+        lobeWindows(plan.turnedWidth, plan.outWidth, plan.scale, 0, windowsX);
+        lobeWindows(plan.turnedHeight, plan.outHeight, plan.scale, plan.turnedHeight * plan.scale - plan.outHeight,
+                    windowsY);
+        QRhiTexture *held = texture(RGBA, QSize(plan.outWidth, plan.outHeight), true);
+        pass("raw_hold", {input(0, turned), input(1, final), output(2, held),
+                          B::bufferLoad(3, kCompute, storage(windowsX.data(), windowsX.size() * sizeof(int))),
+                          B::bufferLoad(4, kCompute, storage(windowsY.data(), windowsY.size() * sizeof(int)))},
+             held->pixelSize());
+        final = held;
     }
     QRhiReadbackResult picture;
     run({{final, &picture}});

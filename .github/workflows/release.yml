@@ -24,6 +24,11 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: The Metal compiler, for the shaders compiled ahead
+        # Xcode 26 and later fetch it as a component of its own; build.sh
+        # compiles the shaders from source at launch without it
+        run: xcrun -sdk macosx metal --version || xcodebuild -downloadComponent MetalToolchain
+
       - name: Build the disk image
         run: |
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then export VERSION="${GITHUB_REF_NAME#v}"; fi

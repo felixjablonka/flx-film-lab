@@ -308,8 +308,10 @@ void Document::open(const QString &given)
     emit changed();
 }
 
-// The edits an image opens with: its own if it was open before this session,
-// otherwise the current look with a fresh start for the rest.
+// The edits an image opens with: its own if it has any, otherwise, as
+// Settings say (NewPictures), the look of the picture on screen with a fresh
+// start for the rest, or the default film and paper. With no picture on
+// screen, the defaults.
 Look Document::edits(const QString &path)
 {
     if (path == m_file)
@@ -319,7 +321,9 @@ Look Document::edits(const QString &path)
     if (const auto kept = m_library.record(path); kept && kept->edits)
         return *kept->edits;
     Look fresh;
-    fresh.recipe = carryingLook(m_edits.recipe, defaultGrade());
+    fresh.recipe = !m_file.isEmpty() && newPictures() == NewPictures::CarryLook
+                       ? carryingLook(m_edits.recipe, defaultGrade())
+                       : startingRecipe(*m_packs, defaultFilmSetting(), defaultPaperSetting());
     return fresh;
 }
 
@@ -369,9 +373,21 @@ void Document::syncSource()
             });
             return;
         }
+    if (m_decodingAhead && *m_decodingAhead == key) {
+        // being decoded ahead right now: wait for that decode, which is
+        // further on than a new one would be (prefetchNext hands it over)
+        m_awaitingAhead = generation;
+        return;
+    }
     // A short settle, so dragging the temperature decodes once at the end
     // rather than once a tick: a decode is far longer than a slider's frame.
-    QTimer::singleShot(120, this, [this, key, generation] {
+    decodeNow(key, generation, 120);
+}
+
+// Decode `key` on the engine for the request `generation`, after `settle` ms.
+void Document::decodeNow(const DecodeKey &key, int generation, int settle)
+{
+    QTimer::singleShot(settle, this, [this, key, generation] {
         if (generation != m_generation)
             return;
         onEngine([this, key, generation] {
@@ -484,6 +500,8 @@ void Document::adopt(const RenderEngine::Source &source, const DecodeKey &key)
         m_browser.setCurrent(key.path);
         if (m_pending == key.path)
             m_pending.clear();
+        m_firstFrameDue = true;
+        m_sinceFrame.invalidate();
         // The previous image's readings stay on the sliders until this one's
         // first frame brings its own, a few ms later: blanked, the auto
         // sliders jumped twice at every picture stepped to.
@@ -517,8 +535,24 @@ QString Document::statusLine() const
 
 void Document::selectFilm(const std::string &stock)
 {
-    if (stock != m_edits.recipe.filmStock)
-        setRecipe(loadingFilm(m_edits.recipe, stock, *m_packs));
+    if (stock == m_edits.recipe.filmStock)
+        return;
+    PaperMemory memory = paperMemory();
+    const Recipe next = pickingFilm(m_edits.recipe, stock, *m_packs, paperRule(), memory);
+    setPaperMemory(memory);
+    setRecipe(next);
+}
+
+void Document::selectPaper(const std::string &stock)
+{
+    if (stock == m_edits.recipe.printStock)
+        return;
+    PaperMemory memory = paperMemory();
+    rememberPaper(memory, stock, m_edits.recipe.filmStock, *m_packs);
+    setPaperMemory(memory);
+    Recipe next = m_edits.recipe;
+    next.printStock = stock;
+    setRecipe(next);
 }
 
 // MARK: - Copy and paste, presets
@@ -717,6 +751,13 @@ void Document::scheduleRender()
 void Document::finishRender(std::optional<RenderEngine::Output> output, const QString &error, int sourceID)
 {
     m_renderInFlight = false;
+    // an edit's frame, or the picture's first (a frame of one replaced since counts as neither)
+    if (m_loaded && sourceID == m_loaded->sourceID) {
+        if (m_firstFrameDue)
+            m_firstFrameDue = false;
+        else
+            m_sinceFrame.start();
+    }
     if (!m_renderAgain && !(m_loaded && sourceID != m_loaded->sourceID)) {
         m_renderSlowTimer.stop();
         m_renderSlow = false;
@@ -876,7 +917,7 @@ void Document::placeOriginal()
 
 // MARK: - Export
 
-void Document::exportTo(const QString &path, ExportFormat format)
+void Document::exportTo(const QString &path, ExportFormat format, int longEdge)
 {
     if (!canExport()) {
         m_error = QStringLiteral("Wait for the image to finish loading, then export.");
@@ -884,20 +925,23 @@ void Document::exportTo(const QString &path, ExportFormat format)
         return;
     }
     m_isExporting = true;
-    m_status = QStringLiteral("Exporting at full resolution…");
+    m_status = longEdge > 0 ? QStringLiteral("Exporting at %1 px…").arg(longEdge)
+                            : QStringLiteral("Exporting at full size…");
     const Recipe recipe = m_edits.recipe;
     const DecodeKey key = m_loaded->key;
-    onEngine([this, recipe, key, path, format] {
+    onEngine([this, recipe, key, path, format, longEdge] {
         QString error;
+        QSize written;
         try {
-            m_engine->exportTo(recipe, key, path, format);
+            written = m_engine->exportTo(recipe, key, path, format, longEdge);
         } catch (const std::exception &e) {
             error = QString::fromUtf8(e.what());
         }
-        QMetaObject::invokeMethod(this, [this, error, path] {
+        QMetaObject::invokeMethod(this, [this, error, path, written] {
             m_isExporting = false;
             if (error.isEmpty()) {
-                m_status = QStringLiteral("Exported %1").arg(QFileInfo(path).fileName());
+                m_status = QStringLiteral("Exported %1, %2 × %3")
+                               .arg(QFileInfo(path).fileName()).arg(written.width()).arg(written.height());
             } else {
                 m_error = error;
                 m_status = statusLine();
@@ -1488,43 +1532,64 @@ void Document::prefetchNeighbours()
             missing.push_back(key);
     if (missing.empty())
         return;
-    QTimer::singleShot(150, this, [this, missing, generation] { prefetchNext(missing, generation); });
+    QTimer::singleShot(50, this, [this, missing, generation] { prefetchNext(missing, generation); });
 }
 
-// One at a time, on the prefetch engine, once the picture on screen has had
-// its first frame; anything asked for meanwhile drops the rest.
+// One at a time, the next first, on the prefetch engine, once the picture on
+// screen has had its first frame and its edits' frames have paused for half a
+// second: a decode holds the GPU for a while, and a slider moving behind it
+// stalled (the Mac app's cce4175). Anything asked for meanwhile drops the
+// rest; a step to the picture being decoded waits for it (m_awaitingAhead).
 void Document::prefetchNext(std::vector<DecodeKey> keys, int generation)
 {
     if (generation != m_prefetchGeneration || keys.empty())
         return;
-    if (m_isDecoding || m_renderInFlight || !m_pending.isEmpty()) {
-        QTimer::singleShot(150, this, [this, keys, generation] { prefetchNext(keys, generation); });
+    if (m_isDecoding || framesComing() || !m_pending.isEmpty()) {
+        QTimer::singleShot(50, this, [this, keys, generation] { prefetchNext(keys, generation); });
         return;
     }
     const DecodeKey key = keys.front();
     keys.erase(keys.begin());
+    if (std::any_of(m_decoded.begin(), m_decoded.end(), [&](const auto &d) { return d.first == key; })) {
+        prefetchNext(keys, generation);
+        return;
+    }
+    m_decodingAhead = key;
     const AppData data = m_data;
     QMetaObject::invokeMethod(m_prefetchContext, [this, key, keys, generation, data] {
-        if (generation != m_prefetchGeneration)
-            return;
-        if (!m_prefetchEngine)
-            m_prefetchEngine = std::make_unique<RenderEngine>(data);
         std::shared_ptr<const DecodedPicture> picture;
-        try {
-            picture = std::make_shared<const DecodedPicture>(m_prefetchEngine->decode(key));
-        } catch (const std::exception &) {
+        if (generation == m_prefetchGeneration) {
+            if (!m_prefetchEngine)
+                m_prefetchEngine = std::make_unique<RenderEngine>(data);
+            try {
+                picture = std::make_shared<const DecodedPicture>(m_prefetchEngine->decode(key));
+            } catch (const std::exception &) {
+            }
+            // the engine let go once nothing has been decoded ahead for a while
+            QTimer::singleShot(30000, m_prefetchContext, [this, generation] {
+                if (generation == m_prefetchGeneration)
+                    m_prefetchEngine.reset();
+            });
         }
-        // the engine let go once nothing has been decoded ahead for a while
-        QTimer::singleShot(30000, m_prefetchContext, [this, generation] {
-            if (generation == m_prefetchGeneration)
-                m_prefetchEngine.reset();
-        });
+        // back on the main thread, whether decoded or dropped: a step waiting
+        // for it must hear either way
         QMetaObject::invokeMethod(this, [this, key, keys, generation, picture] {
+            if (m_decodingAhead && *m_decodingAhead == key)
+                m_decodingAhead.reset();
+            if (m_awaitingAhead && m_awaitingAhead == m_generation && m_requested && *m_requested == key) {
+                // a step to it waited for this decode; adopting it prefetches anew
+                m_awaitingAhead = 0;
+                if (picture)
+                    finishDecode(picture, {}, key, m_generation);
+                else
+                    decodeNow(key, m_generation, 0);
+                return;
+            }
             if (generation != m_prefetchGeneration)
                 return;
             if (picture)
                 m_decoded.emplace_back(key, picture);
-            QTimer::singleShot(150, this, [this, keys, generation] { prefetchNext(keys, generation); });
+            QTimer::singleShot(50, this, [this, keys, generation] { prefetchNext(keys, generation); });
         }, Qt::QueuedConnection);
     }, Qt::QueuedConnection);
 }
@@ -1614,7 +1679,7 @@ void Document::pasteSettingsToSelected()
     emit changed();
 }
 
-void Document::exportSelected(const QString &folder, ExportFormat format)
+void Document::exportSelected(const QString &folder, ExportFormat format, int longEdge)
 {
     if (m_browser.batch())
         return;
@@ -1650,7 +1715,7 @@ void Document::exportSelected(const QString &folder, ExportFormat format)
     m_browser.setBatch(FolderBrowser::Batch{0, int(jobs.size()), QFileInfo(jobs.front().path).fileName(), folder});
     QPointer<Document> self(this);
     const AppData data = m_data;
-    QThread *worker = QThread::create([self, jobs, cancel, format, folder, data] {
+    QThread *worker = QThread::create([self, jobs, cancel, format, longEdge, folder, data] {
         // an engine of its own, so the picture on screen prints as before
         RenderEngine engine(data);
         QStringList failures;
@@ -1668,7 +1733,7 @@ void Document::exportSelected(const QString &folder, ExportFormat format)
             });
             try {
                 engine.setPicture(engine.decode(job.proxy), job.path);
-                engine.exportTo(job.edits.recipe, job.proxy, job.target, format);
+                engine.exportTo(job.edits.recipe, job.proxy, job.target, format, longEdge);
             } catch (const std::exception &e) {
                 failures << QStringLiteral("%1: %2").arg(QFileInfo(job.path).fileName(), QString::fromUtf8(e.what()));
             }

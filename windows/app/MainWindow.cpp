@@ -41,6 +41,7 @@
 #include <QPainter>
 #include <QPushButton>
 #include <QShortcut>
+#include <QSpinBox>
 #include <QStackedWidget>
 #include <QStandardPaths>
 #include <QToolBar>
@@ -76,8 +77,14 @@ QAction *menuAction(QMenu *menu, const QString &text, const QKeySequence &shortc
     return a;
 }
 
-// The toolbar's menus, the export format and the clip's codec: the choice
-// in words on a capsule with a chevron, as the Mac's toolbar menus.
+// An item's words on the capsule while it is chosen, where they differ from
+// its line in the list ("2048 px" for "2048 px Long Edge"), and an item that
+// does something instead of being chosen ("Set Long Edge…").
+constexpr int kShownRole = Qt::UserRole + 1;
+constexpr int kActionRole = Qt::UserRole + 2;
+
+// The toolbar's menus, the export format and size and the clip's codec: the
+// choice in words on a capsule with a chevron, as the Mac's toolbar menus.
 class ToolMenu : public QComboBox
 {
 public:
@@ -91,8 +98,14 @@ public:
     {
         int widest = 0;
         for (int i = 0; i < count(); ++i)
-            widest = std::max(widest, fontMetrics().horizontalAdvance(itemText(i)));
+            if (!itemData(i, kActionRole).toBool())
+                widest = std::max(widest, fontMetrics().horizontalAdvance(shown(i)));
         return QSize(widest + 12 + 30 + 6, 34);   // a few pixels for the text's own rounding
+    }
+    QString shown(int i) const
+    {
+        const QString words = itemData(i, kShownRole).toString();
+        return words.isEmpty() ? itemText(i) : words;
     }
     QSize minimumSizeHint() const override { return sizeHint(); }
 
@@ -109,7 +122,7 @@ protected:
         p.setPen(ink);
         const QRectF text = r.adjusted(12, 0, -30, 0);
         p.drawText(text, Qt::AlignVCenter | Qt::AlignLeft,
-                   fontMetrics().elidedText(currentText(), Qt::ElideRight, int(text.width())));
+                   fontMetrics().elidedText(shown(currentIndex()), Qt::ElideRight, int(text.width())));
         icons::paint(p, QRectF(r.right() - 25, r.center().y() - 6.5, 13, 13), icons::Icon::Chevron, ink);
     }
 };
@@ -579,6 +592,13 @@ MainWindow::MainWindow(Document &document, MotionDocument &motion, QWidget *pare
     m_format->setToolTip(QStringLiteral("The format Export writes."));
     m_format->setCurrentIndex(std::clamp(appSettings().value("exportFormat", 0).toInt(), 0, 2));
     connect(m_format, &QComboBox::activated, this, [](int i) { appSettings().setValue("exportFormat", i); });
+    m_size = new ToolMenu;
+    m_size->setToolTip(QStringLiteral(
+        "How large Export writes the print: at its full size, or with its long edge a number of pixels and the short "
+        "edge in proportion. It is printed at full size and then made smaller; a picture smaller than the long edge "
+        "is never enlarged."));
+    rebuildSizeMenu();
+    connect(m_size, &QComboBox::activated, this, [this](int i) { chooseSize(m_size->itemData(i).toInt()); });
 
     m_codec = new ToolMenu;
     for (ExportCodec c : {ExportCodec::ProRes422HQ, ExportCodec::HEVC10})
@@ -593,7 +613,7 @@ MainWindow::MainWindow(Document &document, MotionDocument &motion, QWidget *pare
 
     m_stillsItems = {m_copy, m_paste, m_crop, m_original, m_loupe};
     m_motionItems = {m_copyLook, m_pasteLook, m_logFootage};
-    m_stillsBar = {settingsGroup, viewGroup, place(m_format)};
+    m_stillsBar = {settingsGroup, viewGroup, place(m_format), place(m_size)};
     m_motionBar = {lookGroup, logGroup, place(m_codec)};
 
     m_export = new QAction(QStringLiteral("Export"), this);
@@ -894,15 +914,75 @@ void MainWindow::exportSelectedDialog()
 {
     const bool motion = m_mode == Mode::Motion;
     const char *key = motion ? "exportClipsFolder" : "exportFolder";
-    const QString folder = QFileDialog::getExistingDirectory(
-        this, QStringLiteral("Export the selection to"), appSettings().value(key).toString());
+    const ExportFormat format = ExportFormat(m_format->currentData().toInt());
+    const ExportSize size = exportSize();
+    // in the format and at the size Export writes, which the caption says
+    const QString caption = motion ? QStringLiteral("Export the selection to")
+                                   : QStringLiteral("Export the selection as %1%2 to").arg(formatName(format), size.phrase());
+    const QString folder = QFileDialog::getExistingDirectory(this, caption, appSettings().value(key).toString());
     if (folder.isEmpty())
         return;
     appSettings().setValue(key, folder);
     if (motion)
         m_motion.exportSelected(folder);
     else
-        m_doc.exportSelected(folder, ExportFormat(m_format->currentData().toInt()));
+        m_doc.exportSelected(folder, format, size.limit());
+}
+
+void MainWindow::rebuildSizeMenu()
+{
+    const ExportSize size = exportSize();
+    const QSignalBlocker quiet(m_size);
+    m_size->clear();
+    m_size->addItem(QStringLiteral("Full Size"), 0);
+    m_size->addItem(QStringLiteral("%1 px Long Edge").arg(size.longEdge), 1);
+    m_size->setItemData(1, QStringLiteral("%1 px").arg(size.longEdge), kShownRole);
+    m_size->insertSeparator(2);
+    m_size->addItem(QStringLiteral("Set Long Edge…"), 2);
+    m_size->setItemData(3, true, kActionRole);
+    m_size->setCurrentIndex(size.fullSize ? 0 : 1);
+    m_size->updateGeometry();
+}
+
+void MainWindow::chooseSize(int choice)
+{
+    ExportSize size = exportSize();
+    if (choice == 2) {
+        // Set Long Edge…: the number asked for, as the Mac's sheet asks
+        QDialog dialog(this);
+        dialog.setWindowTitle(QStringLiteral("Long Edge"));
+        auto *layout = new QVBoxLayout(&dialog);
+        auto *row = new QHBoxLayout;
+        auto *edge = new QSpinBox;
+        edge->setRange(ExportSize::kFewest, ExportSize::kMost);
+        edge->setValue(size.longEdge);
+        edge->setSuffix(QStringLiteral(" px"));
+        edge->setMinimumWidth(110);
+        row->addWidget(edge);
+        row->addStretch(1);
+        layout->addLayout(row);
+        auto *note = new QLabel(QStringLiteral(
+            "Export prints the picture at full size, then makes it smaller: its long edge this many pixels, the short "
+            "edge in proportion. A picture smaller than this is exported at its own size, never enlarged. From %1 to "
+            "%2 px.").arg(ExportSize::kFewest).arg(ExportSize::kMost));
+        note->setWordWrap(true);
+        note->setMinimumWidth(320);
+        layout->addWidget(note);
+        auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+        buttons->button(QDialogButtonBox::Ok)->setText(QStringLiteral("Set"));
+        connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+        connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        layout->addWidget(buttons);
+        edge->selectAll();
+        if (dialog.exec() == QDialog::Accepted) {
+            size.fullSize = false;
+            size.longEdge = edge->value();
+        }
+    } else {
+        size.fullSize = choice == 0;
+    }
+    setExportSize(size);
+    rebuildSizeMenu();
 }
 
 QString MainWindow::exportFilename() const
@@ -943,13 +1023,15 @@ void MainWindow::exportDialog()
     const ExportFormat format = ExportFormat(m_format->currentData().toInt());
     const QString folder = appSettings().value("exportFolder", QFileInfo(m_doc.filePath()).absolutePath()).toString();
     const QString suggested = QDir(folder).filePath(exportFilename() + QLatin1Char('.') + formatExtension(format));
+    const ExportSize size = exportSize();
+    // the size in the caption, as the Mac's panel says it
     const QString path = QFileDialog::getSaveFileName(
-        this, QStringLiteral("Export"), suggested,
+        this, QStringLiteral("Export as %1%2").arg(formatName(format), size.phrase()), suggested,
         QStringLiteral("%1 (*.%2)").arg(formatName(format), formatExtension(format)));
     if (path.isEmpty())
         return;
     appSettings().setValue("exportFolder", QFileInfo(path).absolutePath());
-    m_doc.exportTo(path, format);
+    m_doc.exportTo(path, format, size.limit());
 }
 
 void MainWindow::exportLUTDialog()

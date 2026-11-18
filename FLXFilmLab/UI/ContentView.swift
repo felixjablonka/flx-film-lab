@@ -48,8 +48,11 @@ enum CanvasBackground: String, CaseIterable, Identifiable {
 struct ContentView: View {
     @ObservedObject var model: DocumentModel
     @State private var selectedMask: UUID?
-    /// The format Export and Export Selected write, kept between launches.
+    /// The format Export and Export Selected write, and how large, kept
+    /// between launches.
     @AppStorage("exportFormat") private var exportFormat: Exporter.Format = .tiff16
+    @AppStorage(ExportSize.key) private var exportSizeMode = ExportSize.fullSize
+    @AppStorage(ExportSize.longEdgeKey) private var exportLongEdge = ExportSize.standardLongEdge
     /// The folder's pictures down the left (⌃⌘S).
     @AppStorage("showSidebar") private var showSidebar = true
     /// Settings' Text size: the side panels are made again when it changes.
@@ -72,7 +75,7 @@ struct ContentView: View {
                               flag: { model.flagSelection($0) },
                               flagOne: { model.flag($1, for: [$0]) },
                               pasteToSelected: { model.pasteSettingsToSelected() },
-                              exportSelected: { FolderPanels.exportSelected(model, format: exportFormat) },
+                              exportSelected: { FolderPanels.exportSelected(model) },
                               cancelBatch: { model.cancelBatch() })
                     .equatable()
                     .id(textSize)
@@ -104,6 +107,17 @@ struct ContentView: View {
         }
         // a new preset is first named after the film
         .onChange(of: model.showsPresetNaming) { if model.showsPresetNaming { presetName = model.filmPack?.name ?? "" } }
+        .fileExporter(isPresented: $model.showsExportPanel,
+                      document: PlaceholderDocument(),
+                      contentType: exportFormat.utType,
+                      defaultFilename: exportFilename) { result in
+            if case .success(let url) = result {
+                Task { await model.export(to: url, format: exportFormat, longEdge: exportSize.limit) }
+            }
+        }
+        // The save panel's alone: the message is for the panels within it,
+        // and Open's is put up outside it.
+        .fileDialogMessage(Text("Saved as \(exportFormat.rawValue)\(exportSize.phrase)"))
         .fileImporter(isPresented: $model.showsOpenPanel,
                       allowedContentTypes: [.rawImage, .image, UTType(filenameExtension: "dng") ?? .image],
                       allowsMultipleSelection: false) { result in
@@ -112,12 +126,10 @@ struct ContentView: View {
                 model.open(url: url)
             }
         }
-        .fileExporter(isPresented: $model.showsExportPanel,
-                      document: PlaceholderDocument(),
-                      contentType: exportFormat.utType,
-                      defaultFilename: exportFilename) { result in
-            if case .success(let url) = result {
-                Task { await model.export(to: url, format: exportFormat) }
+        .sheet(isPresented: $model.showsLongEdgeSheet) {
+            LongEdgeSheet(longEdge: exportSize.longEdge) { chosen in
+                if let chosen { ExportSize(isFullSize: false, longEdge: chosen).save(.standard) }
+                model.showsLongEdgeSheet = false
             }
         }
         .background {
@@ -152,6 +164,8 @@ struct ContentView: View {
             return true
         })
     }
+
+    private var exportSize: ExportSize { ExportSize(stored: exportSizeMode, longEdge: exportLongEdge) }
 
     private var exportFilename: String {
         let stem = model.fileURL?.deletingPathExtension().lastPathComponent ?? "FLX Film Lab"
@@ -207,7 +221,7 @@ enum StillsBar {
                 Toggle(isOn: $model.loupeOn) { Label("Loupe", systemImage: "magnifyingglass") }
                     .keyboardShortcut("l", modifiers: .command)
                     .disabled(!model.hasImage)
-                    .help("The print at 100% (⌘L), as the export will have it: drag the loupe over the print. While it is open the picture is held at full size.")
+                    .help("The print at 100% (⌘L), as a full-size export has it: drag the loupe over the print. While it is open the picture is held at full size.")
             }
         }
 
@@ -241,11 +255,19 @@ enum StillsBar {
         }
     }
 
+    /// The format Export writes, and how large. The model only to ask for the
+    /// long edge's sheet: not observed, so a change to the picture leaves the
+    /// two alone.
     struct FormatItem: View {
+        let model: DocumentModel
         @AppStorage("exportFormat") private var exportFormat: Exporter.Format = .tiff16
         var body: some View {
-            ToolbarChoice(selection: $exportFormat)
-                .help("The format Export writes.")
+            HStack(spacing: 6) {
+                ToolbarChoice(selection: $exportFormat)
+                    .help("The format Export writes.")
+                ExportSizeChoice(setLongEdge: { model.showsLongEdgeSheet = true })
+                    .help("How large Export writes the print: at its full size, or with its long edge a number of pixels and the short edge in proportion. It is printed at full size and then made smaller; a picture smaller than the long edge is never enlarged.")
+            }
         }
     }
 
@@ -254,7 +276,7 @@ enum StillsBar {
         var body: some View {
             Button { model.showsExportPanel = true } label: { Label("Export", systemImage: "square.and.arrow.up") }
                 .disabled(!model.hasImage || model.isBusy)
-                .help("Render at full resolution and write to disk. Waits until the image on screen has finished loading.")
+                .help("Print at full resolution and write to disk, in the format and at the size beside this. Waits until the image on screen has finished loading.")
         }
     }
 }
@@ -474,16 +496,65 @@ enum FolderPanels {
         if panel.runModal() == .OK, let url = panel.url { model.openFolder(url) }
     }
 
-    static func exportSelected(_ model: DocumentModel, format: Exporter.Format) {
+    /// In the format and at the size Export writes, as the toolbar shows them.
+    static func exportSelected(_ model: DocumentModel) {
         let count = model.browser.selectedForBatch.count
         guard count > 0, model.browser.batch == nil else { return }
+        let defaults = UserDefaults.standard
+        let format = defaults.string(forKey: "exportFormat").flatMap(Exporter.Format.init) ?? .tiff16
+        let size = ExportSize.current(defaults)
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.canCreateDirectories = true
         panel.prompt = "Export Here"
-        panel.message = "Choose where the \(count) print\(count == 1 ? "" : "s") go, as \(format.rawValue)"
-        if panel.runModal() == .OK, let url = panel.url { model.exportSelected(to: url, format: format) }
+        panel.message = "Choose where the \(count) print\(count == 1 ? "" : "s") go, as \(format.rawValue)\(size.phrase)"
+        if panel.runModal() == .OK, let url = panel.url {
+            model.exportSelected(to: url, format: format, longEdge: size.limit)
+        }
+    }
+}
+
+/// Set Long Edge…: the long edge Export writes a print at, in pixels.
+struct LongEdgeSheet: View {
+    let done: (Int?) -> Void
+    @State private var text: String
+
+    init(longEdge: Int, done: @escaping (Int?) -> Void) {
+        self.done = done
+        _text = State(initialValue: String(longEdge))
+    }
+
+    /// The number typed, if it is one of the long edges that can be set.
+    private var chosen: Int? {
+        Int(text.trimmingCharacters(in: .whitespaces)).flatMap { ExportSize.longEdges.contains($0) ? $0 : nil }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Long Edge").font(.headline)
+            HStack(spacing: 6) {
+                TextField("", text: $text)
+                    .frame(width: 90)
+                    .multilineTextAlignment(.trailing)
+                    .onSubmit { if let chosen { done(chosen) } }
+                Text("px")
+            }
+            Text(verbatim: "Export prints the picture at full size, then makes it smaller: its long edge this many pixels, the short edge in proportion. A picture smaller than this is exported at its own size, never enlarged. From \(ExportSize.longEdges.lowerBound) to \(ExportSize.longEdges.upperBound) px.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Spacer()
+                Button("Cancel") { done(nil) }
+                    .keyboardShortcut(.cancelAction)
+                Button("Set") { done(chosen) }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(chosen == nil)
+            }
+        }
+        .padding(20)
+        .frame(width: 360)
     }
 }
 

@@ -48,6 +48,10 @@ public:
     void openFolderDialog();
     // Every picture or clip selected but the rejects, into a folder.
     void exportSelectedDialog();
+    // The export's size beside its format (ExportSize): the menu made again
+    // for the long edge kept, and a choice in it taken.
+    void rebuildSizeMenu();
+    void chooseSize(int choice);
     // File > Settings… (Ctrl+,): open, or brought to the front.
     SettingsDialog *showSettings();
 
@@ -96,7 +100,7 @@ private:
     bool m_followingScreen = false;
     SettingsDialog *m_settings = nullptr;
     QMenu *m_presets;
-    QComboBox *m_format, *m_codec;
+    QComboBox *m_format, *m_size, *m_codec;
     QButtonGroup *m_surround, *m_modes;
     QToolButton *m_presetsButton;
     // each half's own actions, and its groups on the toolbar

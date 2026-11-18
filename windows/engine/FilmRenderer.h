@@ -3,6 +3,7 @@
 #include "GpuGraph.h"
 #include "Setup.h"
 
+#include <QByteArray>
 #include <rhi/qrhi.h>
 
 #include <map>
@@ -68,6 +69,9 @@ public:
     // print (RGBA float32) and the histogram, each where asked for; the
     // histogram only when measured (setMeasuresHistogram).
     double render(std::vector<uint8_t> *display, std::vector<float> *linear, Histogram *histogram = nullptr);
+    // The same for the app's screen: its 8-bit image as read back, not copied
+    // (a QImage can wrap it), with the histogram.
+    double render(QByteArray *display, Histogram *histogram);
     // Whether the passes laid out from now on measure the histogram: the
     // preview's do.
     void setMeasuresHistogram(bool measures) { m_measuresHistogram = measures; }
@@ -80,6 +84,20 @@ public:
     // last render's (only the print's controls moved), it is not run again,
     // as the Mac's renderer skips it. Off, every render runs every pass.
     void setSkipsUnchangedFilm(bool skips) { m_skipsUnchangedFilm = skips; }
+    // The print's exposure, kept between the app's renders (the Mac's
+    // Renderer.keptExposure): the light each of the print's negatives (the
+    // grainy one, its mirror, the grain-free one) passes in the enlarger, 12
+    // bytes a pixel each, kept while it fits in `bytes`; 0, the default,
+    // keeps none. Only the film stage, the print's shape and the enlarger's
+    // light change it; Brightness, Density, Contrast, Shadows, Highlights,
+    // preflash and the masks act after it. So while only they move, a render
+    // prints from it: no spectral integral and no grain mirror, and for a
+    // shaped print no shaping and no grain drawn again. With
+    // setSkipsUnchangedFilm only.
+    void setKeptExposureBudget(qint64 bytes) { m_keptBudget = bytes; }
+    // Whether the last render printed from the exposure the one before kept,
+    // for the checks.
+    bool printedFromKeptExposure() const { return m_printedFromKept; }
 
     // Dodge & burn's map (MaskRasterizer: RGBA, stops and local grade, on the
     // frame), or none when empty. Uploaded with the next load, only when it
@@ -103,7 +121,9 @@ private:
     };
     void drawGrain(QRhiTexture *clean, QRhiTexture *target, QRhiTexture *scratch1, QRhiTexture *scratch2,
                    Origin origin);
-    void printNegative(QRhiTexture *negative, QRhiTexture *into);
+    // one of the layout's prints: `kept` the kept exposure it keeps or reads,
+    // 0 the grainy negative's, 1 its mirror's, 2 the grain-free one's
+    void printNegative(QRhiTexture *negative, QRhiTexture *into, int kept);
 
     Blur m_blurKind;
     const RenderSetup *m_setup = nullptr;           // during load()
@@ -122,6 +142,20 @@ private:
     // What every print pass reads.
     QRhiTexture *m_toneLut = nullptr, *m_dodgeBurn = nullptr;
     QRhiBuffer *m_spectral = nullptr, *m_toneShift = nullptr, *m_printU = nullptr, *m_shapeU = nullptr;
+    QRhiBuffer *m_countsU = nullptr;    // the bands' counts and what the prints do with the kept exposure
+    // The kept exposure (setKeptExposureBudget): a buffer a print, one empty
+    // where none is kept, what the kept one was made from once the render
+    // that made it completed, and the layout's.
+    std::vector<std::unique_ptr<QRhiBuffer>> m_keptExposure;
+    // Replaced ones live until the next layout: the bindings are cached by
+    // the resource's address, and a new buffer at a freed one's address must
+    // not find the old buffer's bindings (they go at the end of the layout
+    // that no longer uses them).
+    std::vector<std::unique_ptr<QRhiBuffer>> m_keptRetired;
+    std::unique_ptr<QRhiBuffer> m_noKeptExposure;
+    std::optional<uint64_t> m_keptKey, m_layoutKeptKey;
+    qint64 m_keptBudget = 0;
+    bool m_layoutKeeps = false, m_layoutPrintsFromKept = false, m_printedFromKept = false;
     // The picture's textures.
     QRhiTexture *m_source = nullptr, *m_raw = nullptr, *m_rawB = nullptr, *m_scratchA = nullptr,
                 *m_scratchB = nullptr, *m_logEMap = nullptr, *m_cmy = nullptr, *m_cmyB = nullptr,

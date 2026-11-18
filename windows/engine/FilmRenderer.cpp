@@ -73,6 +73,50 @@ struct Hash {
     void floats(const std::vector<float> &v) { bytes(v.data(), v.size() * 4); }
 };
 
+// The packed spectral tables (Constants.swift's layout, 81 bands from 380 nm)
+// as print_and_scan's two integrals step through them (Renderer.bands): each
+// band the film's tables are valid in, then each the print's are, as two
+// vectors: the band's density per layer and its base's, then its light and
+// three weights, the paper's sensitivities or the observer's. Two vector
+// reads a band in place of nine, and no bands to pass over.
+struct SpectralBands {
+    std::vector<Vec4> data;
+    int film = 0, print = 0;
+};
+
+SpectralBands spectralBands(const std::vector<float> &t)
+{
+    constexpr int kBands = 81, offFilmChannelDensity = 0, offFilmBaseDensity = 243, offFilmValid = 324,
+                  offPrintIlluminant = 405, offPaperSensitivity = 486, offPrintChannelDensity = 729,
+                  offPrintBaseDensity = 972, offPrintValid = 1053, offViewingIlluminant = 1134, offCMFs = 1215;
+    if (t.size() < size_t(offCMFs + kBands * 3))
+        throw std::runtime_error("the spectral tables are short");
+    SpectralBands b;
+    for (int l = 0; l < kBands; ++l)
+        if (t[size_t(offFilmValid + l)] != 0) {
+            b.data.push_back({t[size_t(offFilmChannelDensity + l * 3)], t[size_t(offFilmChannelDensity + l * 3 + 1)],
+                              t[size_t(offFilmChannelDensity + l * 3 + 2)], t[size_t(offFilmBaseDensity + l)]});
+            b.data.push_back({t[size_t(offPrintIlluminant + l)], t[size_t(offPaperSensitivity + l * 3)],
+                              t[size_t(offPaperSensitivity + l * 3 + 1)], t[size_t(offPaperSensitivity + l * 3 + 2)]});
+            ++b.film;
+        }
+    for (int l = 0; l < kBands; ++l)
+        if (t[size_t(offPrintValid + l)] != 0) {
+            b.data.push_back({t[size_t(offPrintChannelDensity + l * 3)], t[size_t(offPrintChannelDensity + l * 3 + 1)],
+                              t[size_t(offPrintChannelDensity + l * 3 + 2)], t[size_t(offPrintBaseDensity + l)]});
+            b.data.push_back({t[size_t(offViewingIlluminant + l)], t[size_t(offCMFs + l * 3)],
+                              t[size_t(offCMFs + l * 3 + 1)], t[size_t(offCMFs + l * 3 + 2)]});
+            ++b.print;
+        }
+    if (b.data.empty())
+        b.data.push_back({0, 0, 0, 0});          // a buffer is always bound
+    return b;
+}
+
+struct CountsBlock {
+    IVec4 values;           // the film's bands, the print's, what the prints do with the kept exposure
+};
+
 } // namespace
 
 // Everything the film stage reads, from the exposure to the grain.
@@ -259,12 +303,19 @@ void FilmRenderer::drawGrain(QRhiTexture *clean, QRhiTexture *target, QRhiTextur
 }
 
 // 3 — printing.expose + printing.develop + scanning.scan, fused.
-void FilmRenderer::printNegative(QRhiTexture *negative, QRhiTexture *into)
+void FilmRenderer::printNegative(QRhiTexture *negative, QRhiTexture *into, int kept)
 {
+    if (!m_noKeptExposure) {
+        m_noKeptExposure.reset(m_rhi->newBuffer(QRhiBuffer::Static, QRhiBuffer::StorageBuffer, 16));
+        if (!m_noKeptExposure->create())
+            fail("cannot make a buffer");
+    }
+    QRhiBuffer *exposure = m_layoutKeeps ? m_keptExposure[size_t(kept)].get() : m_noKeptExposure.get();
     pass("print_and_scan", {input(0, negative), B::imageStore(1, kCompute, into, 0), input(2, m_toneLut),
                             B::sampledTexture(3, kCompute, m_dodgeBurn, m_linear), B::bufferLoad(4, kCompute, m_spectral),
                             B::uniformBuffer(5, kCompute, m_printU), B::bufferLoad(6, kCompute, m_toneShift),
-                            B::uniformBuffer(7, kCompute, m_shapeU)});
+                            B::uniformBuffer(7, kCompute, m_shapeU), B::uniformBuffer(8, kCompute, m_countsU),
+                            B::bufferLoadStore(9, kCompute, exposure)});
 }
 
 void FilmRenderer::setPicture(const float *rgba, int width, int height, qint64 framePixels)
@@ -306,6 +357,7 @@ void FilmRenderer::setPicture(const float *rgba, int width, int height, qint64 f
         clearLayout();
     }
     m_renderedFilmKey.reset();
+    m_keptKey.reset();
     QRhiResourceUpdateBatch *batch = m_rhi->nextResourceUpdateBatch();
     batch->uploadTexture(m_source, QRhiTextureUploadDescription(
         {0, 0, QRhiTextureSubresourceUploadDescription(rgba, quint32(size_t(width) * height * 16))}));
@@ -361,6 +413,7 @@ void FilmRenderer::load(const RenderSetup &s)
     const bool shaped = s.shape.active.x != 0;
     m_passSize = m_size;
     beginLayout();
+    m_keptRetired.clear();              // their bindings went with the last layout
     m_blurs.clear();
     m_setup = &s;
     m_passSize = m_size;
@@ -422,7 +475,8 @@ void FilmRenderer::load(const RenderSetup &s)
     QRhiBuffer *curves = storage(s.curves.floats.data(), s.curves.floats.size() * 4);
     QRhiBuffer *curves0 = storage(s.curves0.floats.data(), s.curves0.floats.size() * 4);
     QRhiBuffer *edgeScale = storage(s.edgeScale.floats.data(), s.edgeScale.floats.size() * 4);
-    m_spectral = storage(s.spectral.floats.data(), s.spectral.floats.size() * 4);
+    const SpectralBands bands = spectralBands(s.spectral.floats);
+    m_spectral = storage(bands.data.data(), bands.data.size() * sizeof(Vec4));
     m_toneShift = storage(s.toneShift.floats.data(), s.toneShift.floats.size() * 4);
     QRhiBuffer *filmU = uniform(s.film);
     QRhiBuffer *developU = uniform(s.develop);
@@ -482,18 +536,69 @@ void FilmRenderer::load(const RenderSetup &s)
     //      as cropping a print does; the grain is drawn after, on the print's
     //      own pixels (Renderer.render).
     QRhiTexture *printScratch = scratchA, *printScratchB = scratchB, *grainyBlur = rawB;
+    const QSize out(std::max(s.outputWidth, 1), std::max(s.outputHeight, 1));
+
+    // 3a — the print's exposure, kept from the last render if only the
+    //      controls after it have moved, else kept now for the next, while
+    //      it fits (setKeptExposureBudget). What it is made from: the film
+    //      stage, which must be skipped, the print's shape and size, how many
+    //      prints, and the film's side of the spectral tables.
+    const int prints = s.stages.grain ? 3 : 1;
+    const QSize printSize = shaped ? out : m_size;
+    const qint64 keptBytes = qint64(printSize.width()) * printSize.height() * 12;
+    m_layoutKeeps = m_skipsUnchangedFilm && s.print.flags.w == 0 && keptBytes * prints <= m_keptBudget;
+    Hash kept;
+    kept.value(m_filmKey);
+    kept.value(printSize.width());
+    kept.value(printSize.height());
+    kept.value(prints);
+    kept.value(bands.film);
+    kept.bytes(bands.data.data(), size_t(bands.film) * 2 * sizeof(Vec4));
     if (shaped) {
-        const QSize out(std::max(s.outputWidth, 1), std::max(s.outputHeight, 1));
+        kept.value(s.shape);
+        if (s.part) {
+            kept.value(s.part->held);
+            kept.value(s.part->printX);
+            kept.value(s.part->printY);
+        }
+    }
+    const auto retire = [&] {
+        for (auto &b : m_keptExposure)
+            m_keptRetired.push_back(std::move(b));
+        m_keptExposure.clear();
+        m_keptKey.reset();
+    };
+    if (m_layoutKeeps && (m_keptExposure.size() != size_t(prints) || m_keptExposure[0]->size() != quint32(keptBytes))) {
+        retire();
+        for (int i = 0; i < prints; ++i) {
+            m_keptExposure.emplace_back(m_rhi->newBuffer(QRhiBuffer::Static, QRhiBuffer::StorageBuffer, quint32(keptBytes)));
+            if (!m_keptExposure.back()->create())
+                fail("cannot make the kept exposure's buffer");
+        }
+    }
+    if (!m_layoutKeeps)
+        retire();
+    const bool reuses = m_layoutKeeps && m_renderedFilmKey == m_filmKey && m_keptKey == kept.h;
+    if (m_layoutKeeps && !reuses)
+        m_keptKey.reset();                  // this render overwrites it
+    m_layoutKeptKey = m_layoutKeeps ? std::optional<uint64_t>(kept.h) : std::nullopt;
+    m_layoutPrintsFromKept = reuses;
+    m_countsU = uniform(CountsBlock{{bands.film, bands.print, m_layoutKeeps ? (reuses ? 2 : 1) : 0, 0}});
+
+    if (shaped) {
         ensureShaped(out);
         m_passSize = out;
-        // a part's pixels from where they lie in the box held
-        pass("apply_geometry", {input(0, negative), B::imageStore(1, kCompute, m_shapedNegative, 0),
-                                B::uniformBuffer(2, kCompute, s.part ? uniform(s.part->held) : m_shapeU)});
+        // a part's pixels from where they lie in the box held; printed from
+        // the kept exposure, the shaped negative is not needed
+        if (!reuses)
+            pass("apply_geometry", {input(0, negative), B::imageStore(1, kCompute, m_shapedNegative, 0),
+                                    B::uniformBuffer(2, kCompute, s.part ? uniform(s.part->held) : m_shapeU)});
         negative = m_shapedNegative;
         grainFree = nullptr;
         if (s.stages.grain) {
-            drawGrain(m_shapedNegative, m_shapedGrainy, m_shapedScratchA, m_shapedScratchB,
-                      s.part ? Origin{uint32_t(s.part->printX), uint32_t(s.part->printY)} : Origin{0, 0});
+            if (!reuses)
+                drawGrain(m_shapedNegative, m_shapedGrainy, m_shapedScratchA, m_shapedScratchB,
+                          s.part ? Origin{uint32_t(s.part->printX), uint32_t(s.part->printY)} : Origin{0, 0});
             negative = m_shapedGrainy;
             grainFree = m_shapedNegative;
         }
@@ -506,16 +611,18 @@ void FilmRenderer::load(const RenderSetup &s)
     }
 
     // 3 — the print
-    printNegative(negative, printed);
+    printNegative(negative, printed, 0);
     // 3b — grain as texture only: the grain's mirror printed too, and each
     // pixel scaled so its neighbourhood of the two prints' mean holds the
-    // grain-free light (Renderer.render)
+    // grain-free light (Renderer.render). The mirror's print from the kept
+    // exposure needs no mirror.
     if (grainFree) {
-        pass("grain_mirror", {input(0, grainFree), input(1, negative), B::imageStore(2, kCompute, printScratchB, 0)});
-        printNegative(printScratchB, printScratch);
+        if (!reuses)
+            pass("grain_mirror", {input(0, grainFree), input(1, negative), B::imageStore(2, kCompute, printScratchB, 0)});
+        printNegative(printScratchB, printScratch, 1);
         pass("grain_even_mean", {input(0, printed), input(1, printScratch), B::imageStore(2, kCompute, printScratchB, 0)});
         blur(printScratchB, grainyBlur, 3);
-        printNegative(grainFree, printScratch);
+        printNegative(grainFree, printScratch, 2);
         blur(printScratch, printScratchB, 3);
         pass("grain_restore_mean", {B::imageLoadStore(0, kCompute, printed, 0), input(1, grainyBlur),
                                     input(2, printScratchB)});
@@ -619,6 +726,37 @@ double FilmRenderer::render(std::vector<uint8_t> *display, std::vector<float> *l
     return seconds;
 }
 
+double FilmRenderer::render(QByteArray *display, Histogram *histogram)
+{
+    QRhiReadbackResult screen, after, before;
+    std::vector<std::pair<QRhiTexture *, QRhiReadbackResult *>> readbacks{{m_display, &screen}};
+    std::vector<std::pair<QRhiBuffer *, QRhiReadbackResult *>> buffers;
+    if (histogram && m_binsAfter) {
+        buffers.push_back({m_binsAfter, &after});
+        if (m_binsBefore)
+            buffers.push_back({m_binsBefore, &before});
+    }
+    const double seconds = runPasses(readbacks, buffers);
+    const auto bins = [](const QRhiReadbackResult &r) {
+        std::vector<uint32_t> out(768, 0);
+        if (size_t(r.data.size()) >= out.size() * sizeof(uint32_t))
+            std::memcpy(out.data(), r.data.constData(), out.size() * sizeof(uint32_t));
+        return out;
+    };
+    if (histogram) {
+        *histogram = {};
+        if (m_binsAfter)
+            histogram->after = bins(after);
+        if (m_binsBefore)
+            histogram->before = bins(before);
+    }
+    const size_t pixels = size_t(m_display->pixelSize().width()) * m_display->pixelSize().height();
+    if (size_t(screen.data.size()) != pixels * 4)
+        fail(QStringLiteral("the display readback has %1 bytes, expected %2").arg(screen.data.size()).arg(pixels * 4));
+    *display = std::move(screen.data);
+    return seconds;
+}
+
 // the film stage again only where its inputs moved
 double FilmRenderer::runPasses(const std::vector<std::pair<QRhiTexture *, QRhiReadbackResult *>> &readbacks,
                                const std::vector<std::pair<QRhiBuffer *, QRhiReadbackResult *>> &buffers)
@@ -626,5 +764,8 @@ double FilmRenderer::runPasses(const std::vector<std::pair<QRhiTexture *, QRhiRe
     const size_t first = m_skipsUnchangedFilm && m_renderedFilmKey == m_filmKey ? m_filmPasses : 0;
     const double seconds = run(readbacks, first, buffers);
     m_renderedFilmKey = m_filmKey;
+    // the kept exposure is what this render kept, now that it has completed
+    m_keptKey = m_layoutKeptKey;
+    m_printedFromKept = m_layoutPrintsFromKept;
     return seconds;
 }

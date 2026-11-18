@@ -3,6 +3,7 @@
 #include "Packs.h"
 
 #include <QCoreApplication>
+#include <QVariantMap>
 
 #include <memory>
 #include <optional>
@@ -41,4 +42,110 @@ void setHiddenFilms(const std::string &stored)
         appSettings().remove(filmmenu::kHiddenKey);
     else
         appSettings().setValue(filmmenu::kHiddenKey, QString::fromStdString(stored));
+}
+
+namespace {
+constexpr const char *kNewPicturesKey = "newPictures";      // "carry" or "default", as the Mac keeps it
+constexpr const char *kDefaultFilmKey = "defaultFilm";
+constexpr const char *kDefaultPaperKey = "defaultPaper";
+
+void setOrRemove(const char *key, const std::string &value)
+{
+    if (value.empty())
+        appSettings().remove(key);
+    else
+        appSettings().setValue(key, QString::fromStdString(value));
+}
+} // namespace
+
+NewPictures newPictures()
+{
+    return appSettings().value(kNewPicturesKey).toString() == QStringLiteral("default") ? NewPictures::DefaultStocks
+                                                                                         : NewPictures::CarryLook;
+}
+
+void setNewPictures(NewPictures choice)
+{
+    appSettings().setValue(kNewPicturesKey,
+                           choice == NewPictures::DefaultStocks ? QStringLiteral("default") : QStringLiteral("carry"));
+}
+
+std::string defaultFilmSetting()
+{
+    return appSettings().value(kDefaultFilmKey).toString().toStdString();
+}
+
+std::string defaultPaperSetting()
+{
+    return appSettings().value(kDefaultPaperKey).toString().toStdString();
+}
+
+void setDefaultFilm(const std::string &stock)
+{
+    setOrRemove(kDefaultFilmKey, stock);
+}
+
+void setDefaultPaper(const std::string &stock)
+{
+    setOrRemove(kDefaultPaperKey, stock);
+}
+
+PaperRule paperRule()
+{
+    return paperRuleNamed(appSettings().value(kPaperRuleKey).toString().toStdString());
+}
+
+void setPaperRule(PaperRule rule)
+{
+    appSettings().setValue(kPaperRuleKey, QString::fromLatin1(paperRuleName(rule)));
+}
+
+PaperMemory paperMemory()
+{
+    PaperMemory memory;
+    const QVariantMap stored = appSettings().value(kPapersByKindKey).toMap();
+    for (auto it = stored.begin(); it != stored.end(); ++it)
+        if (const std::optional<FilmKind> kind = filmKindNamed(it.key().toStdString()))
+            memory[*kind] = it.value().toString().toStdString();
+    return memory;
+}
+
+void setPaperMemory(const PaperMemory &memory)
+{
+    QVariantMap stored;
+    for (const auto &[kind, paper] : memory)
+        stored.insert(QString::fromLatin1(filmKindName(kind)), QString::fromStdString(paper));
+    if (stored == appSettings().value(kPapersByKindKey).toMap())
+        return;
+    appSettings().setValue(kPapersByKindKey, stored);
+}
+
+namespace {
+constexpr const char *kExportSizeKey = "exportSize";
+constexpr const char *kExportLongEdgeKey = "exportLongEdge";
+} // namespace
+
+QString ExportSize::title() const
+{
+    return fullSize ? QStringLiteral("Full Size") : QStringLiteral("%1 px").arg(longEdge);
+}
+
+QString ExportSize::phrase() const
+{
+    return fullSize ? QStringLiteral(" at full size") : QStringLiteral(", %1 px on the long edge").arg(longEdge);
+}
+
+ExportSize exportSize()
+{
+    const int stored = appSettings().value(kExportLongEdgeKey).toInt();
+    ExportSize size;
+    size.fullSize = appSettings().value(kExportSizeKey).toString() != QStringLiteral("long");
+    size.longEdge = stored >= ExportSize::kFewest && stored <= ExportSize::kMost ? stored : ExportSize::kStandardLongEdge;
+    return size;
+}
+
+void setExportSize(const ExportSize &size)
+{
+    appSettings().setValue(kExportSizeKey, size.fullSize ? QStringLiteral("full") : QStringLiteral("long"));
+    appSettings().setValue(kExportLongEdgeKey, size.longEdge);
 }

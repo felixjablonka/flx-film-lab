@@ -67,6 +67,6 @@ struct LoupeView: View {
         )
         .onAppear { size() }
         .onChange(of: displayScale) { size() }
-        .help("The print at 100%, as the export will have it: grain, halation, sharpness and all. Drag it over the print; ⌘L puts it away.")
+        .help("The print at 100%, as a full-size export has it: grain, halation, sharpness and all. Drag it over the print; ⌘L puts it away.")
     }
 }

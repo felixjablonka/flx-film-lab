@@ -83,10 +83,17 @@ enum Exporter {
     /// `linear` is RGBA float in the output colour space, straight off the GPU.
     /// `metadata` is the source file's (`RawLoader.metadata(of:)`); what in it
     /// describes the photograph is written into the file too, and with
-    /// `provenance`, what made the print.
-    static func write(linear: [Float], width: Int, height: Int, to url: URL,
+    /// `provenance`, what made the print. With `longEdge`, the print is shrunk
+    /// to that long edge first (`Resampler`), unless it is no larger. Returns
+    /// the size written.
+    @discardableResult
+    static func write(linear full: [Float], width fullWidth: Int, height fullHeight: Int, to url: URL,
                       format: Format, colorSpace: String,
-                      metadata: [CFString: Any]? = nil, provenance: Provenance? = nil) throws {
+                      metadata: [CFString: Any]? = nil, provenance: Provenance? = nil,
+                      longEdge: Int? = nil) throws -> (width: Int, height: Int) {
+        let (width, height) = Resampler.size(width: fullWidth, height: fullHeight, longEdge: longEdge)
+        let linear = width == fullWidth && height == fullHeight
+            ? full : Resampler.shrink(full, width: fullWidth, height: fullHeight, to: (width, height))
         let cs = Renderer.cgColorSpace(named: colorSpace)
         let encode = transferFunction(for: colorSpace)
 
@@ -122,6 +129,7 @@ enum Exporter {
         if format == .jpeg { properties[kCGImageDestinationLossyCompressionQuality] = 0.95 }
         CGImageDestinationAddImage(destination, image, properties as CFDictionary)
         guard CGImageDestinationFinalize(destination) else { throw ExportError.destinationFailed }
+        return (width, height)
     }
 
     /// The source's description of the photograph, for the exported file:

@@ -8,6 +8,7 @@
 #include "Recipe.h"
 #include "RenderEngine.h"
 
+#include <QElapsedTimer>
 #include <QImage>
 #include <QPointF>
 #include <QSize>
@@ -111,9 +112,12 @@ public:
     double defaultGrade();
 
     void open(const QString &path);
-    // The film picker's choice: crossing between colour and black and white
-    // also moves the print onto the new film's own paper (Recipe.loadingFilm).
+    // The film picker's choice, the paper following as Settings say
+    // (Recipe.pickingFilm, PaperRule).
     void selectFilm(const std::string &stock);
+    // The paper picker's: the paper is then the one last used with this kind
+    // of film (PaperMemory).
+    void selectPaper(const std::string &stock);
 
     void copySettings();
     void pasteSettings();
@@ -133,7 +137,10 @@ public:
     bool printsOnPaper();
     bool printsInSilver();
 
-    void exportTo(const QString &path, ExportFormat format);
+    // Print the picture on screen at full size and write it to `path`, its
+    // long edge shrunk to `longEdge` when that is smaller (0: the full size;
+    // ExportSize).
+    void exportTo(const QString &path, ExportFormat format, int longEdge = 0);
 
     // MARK: crop, turn and level
     // While on, the canvas shows the whole frame, turned and levelled, with
@@ -240,14 +247,17 @@ public:
     void pasteSettingsToSelected();
     // Every picture selected but the rejects printed at full size into
     // `folder`, one after another, each with its own settings, or, never
-    // opened, the look on screen with its autos as opening it would give it.
-    void exportSelected(const QString &folder, ExportFormat format);
+    // opened, the look on screen with its autos as opening it would give it,
+    // each written at Export's size (`longEdge`, 0 the full size).
+    void exportSelected(const QString &folder, ExportFormat format, int longEdge = 0);
     void cancelBatch();
     bool isBatchExporting() const { return m_browser.batch().has_value(); }
     // The edits on screen into the library, and the library onto the disk.
     void prepareToQuit();
     // For the tests: the pictures decoded ahead, and the undo histories kept.
     std::set<QString> prefetchedPictures() const;
+    // whether a decode ahead would wait for the frames to pause now: for the self-test
+    bool holdsDecodesAhead() const { return framesComing(); }
     int historiesHeld() const { return int(m_historyByImage.size()); }
     // Only the last 30 pictures visited keep their undo history, so a session
     // through hundreds of pictures does not hold hundreds of histories.
@@ -306,6 +316,7 @@ private:
     // no other decodes.
     void prefetchNeighbours();
     void prefetchNext(std::vector<DecodeKey> keys, int generation);
+    void decodeNow(const DecodeKey &key, int generation, int settle);
     void updateBusy();
     void finishBatch(const QStringList &failures, int total, bool cancelled, const QString &folder);
     // Runs `work` on the engine's thread.
@@ -334,6 +345,22 @@ private:
     bool m_isExporting = false;
     bool m_renderInFlight = false;
     bool m_renderAgain = false;
+    // since the last frame of an edit to the picture on screen: with
+    // m_renderInFlight, whether its frames are coming, as they do while a
+    // slider moves. A picture's first frame is not an edit's: the picture
+    // after it is decoded as soon as it has been drawn, so that stepping on a
+    // second later finds it ready (m_firstFrameDue).
+    QElapsedTimer m_sinceFrame;
+    bool m_firstFrameDue = false;               // from a picture's arrival to its first frame
+    bool framesComing() const
+    {
+        return m_renderInFlight || m_firstFrameDue || (m_sinceFrame.isValid() && m_sinceFrame.elapsed() < 500);
+    }
+    // The neighbour being decoded ahead, and the request of a step to it that
+    // waits for that decode rather than starting another of the same picture
+    // beside it, which slowed both.
+    std::optional<DecodeKey> m_decodingAhead;
+    int m_awaitingAhead = 0;
     bool m_applyingEdits = false;
     double m_lastMilliseconds = 0;
     QString m_lastBreakdown;

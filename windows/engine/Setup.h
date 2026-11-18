@@ -52,7 +52,7 @@ struct ShapeBlock {
     IVec4 active;
 };
 struct EncodeBlock {
-    IVec4 modes;                    // encoding, coverage
+    IVec4 modes;                    // encoding, coverage, blue first
     Vec4 columns;
     Vec4 offsetSize;
     IVec4 active;

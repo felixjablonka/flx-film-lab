@@ -353,6 +353,9 @@ std::vector<float> lanczosWeights(int source, int target, double scale, std::vec
     return weights;
 }
 
+float3 lower(float3 a, float3 b) { return {std::min(a.x, b.x), std::min(a.y, b.y), std::min(a.z, b.z)}; }
+float3 upper(float3 a, float3 b) { return {std::max(a.x, b.x), std::max(a.y, b.y), std::max(a.z, b.z)}; }
+
 std::vector<float3> scaleDown(const std::vector<float3> &in, int w, int h, int ow, int oh, double scale)
 {
     std::vector<int> firstX, firstY;
@@ -361,7 +364,11 @@ std::vector<float3> scaleDown(const std::vector<float3> &in, int w, int h, int o
     // Core Image counts rows from the bottom: where the scaled height has a
     // fraction, RawLoader's crop to whole pixels drops it at the top
     const std::vector<float> wy = lanczosWeights(h, oh, scale, firstY, tapsY, h * scale - oh);
-    std::vector<float3> rows(size_t(ow) * h), out(size_t(ow) * oh);
+    // each pixel held to the light under the main lobe (lobeWindows)
+    std::vector<int> windowX, windowY;
+    lobeWindows(w, ow, scale, 0, windowX);
+    lobeWindows(h, oh, scale, h * scale - oh, windowY);
+    std::vector<float3> rows(size_t(ow) * h), rowsLow(size_t(ow) * h), rowsHigh(size_t(ow) * h), out(size_t(ow) * oh);
     parallelRows(h, [&](int begin, int end) {
         for (int y = begin; y < end; ++y)
             for (int o = 0; o < ow; ++o) {
@@ -371,6 +378,13 @@ std::vector<float3> scaleDown(const std::vector<float3> &in, int w, int h, int o
                     sum += wx[size_t(o) * tapsX + i] * in[size_t(y) * w + x];
                 }
                 rows[size_t(y) * ow + o] = sum;
+                float3 low = in[size_t(y) * w + size_t(windowX[size_t(o) * 2])], high = low;
+                for (int x = windowX[size_t(o) * 2] + 1; x <= windowX[size_t(o) * 2 + 1]; ++x) {
+                    low = lower(low, in[size_t(y) * w + x]);
+                    high = upper(high, in[size_t(y) * w + x]);
+                }
+                rowsLow[size_t(y) * ow + o] = low;
+                rowsHigh[size_t(y) * ow + o] = high;
             }
     });
     parallelRows(oh, [&](int begin, int end) {
@@ -381,7 +395,13 @@ std::vector<float3> scaleDown(const std::vector<float3> &in, int w, int h, int o
                     const int y = std::min(std::max(firstY[size_t(o)] + i, 0), h - 1);
                     sum += wy[size_t(o) * tapsY + i] * rows[size_t(y) * ow + x];
                 }
-                out[size_t(o) * ow + x] = sum;
+                const size_t top = size_t(windowY[size_t(o) * 2]) * ow + x;
+                float3 low = rowsLow[top], high = rowsHigh[top];
+                for (int y = windowY[size_t(o) * 2] + 1; y <= windowY[size_t(o) * 2 + 1]; ++y) {
+                    low = lower(low, rowsLow[size_t(y) * ow + x]);
+                    high = upper(high, rowsHigh[size_t(y) * ow + x]);
+                }
+                out[size_t(o) * ow + x] = upper(lower(sum, high), low);
             }
     });
     return out;
@@ -393,6 +413,17 @@ void lanczosTaps(int target, double scale, double offset, std::vector<int> &firs
                  int &taps)
 {
     weights = lanczosWeights(0, target, scale, first, taps, offset);
+}
+
+void lobeWindows(int source, int target, double scale, double offset, std::vector<int> &windows)
+{
+    const int reach = int(std::ceil(1 / scale)) + 1;
+    windows.assign(size_t(target) * 2, 0);
+    for (int o = 0; o < target; ++o) {
+        const int nearest = int(std::floor((o + 0.5 + offset) / scale));
+        windows[size_t(o) * 2] = std::clamp(nearest - reach, 0, source - 1);
+        windows[size_t(o) * 2 + 1] = std::clamp(nearest + reach, 0, source - 1);
+    }
 }
 
 DecodePlan planDecode(const std::string &path, const DecodeOptions &options)

@@ -3,7 +3,8 @@ import SwiftUI
 /// The app's own settings (⌘,): how it looks and works, the same for every
 /// picture and clip. What belongs to a picture, its output colour space among
 /// it, stays in the inspector and travels with its settings and presets.
-/// Two tabs: General, and Films, which the Film menu lists.
+/// Three tabs: General; Film & Paper, what a picture opens with and how the
+/// paper follows the film; and Films, which the Film menu lists.
 struct SettingsView: View {
     @ObservedObject var stills: DocumentModel
     let library: ImageLibrary
@@ -12,6 +13,8 @@ struct SettingsView: View {
         TabView {
             GeneralSettings(stills: stills, library: library)
                 .tabItem { Label("General", systemImage: "gearshape") }
+            FilmAndPaperSettings()
+                .tabItem { Label("Film & Paper", systemImage: "camera.filters") }
             FilmSettings()
                 .tabItem { Label("Films", systemImage: "film.stack") }
         }
@@ -50,7 +53,7 @@ private struct GeneralSettings: View {
                 Picker("Preview size", selection: $stills.proxyMaxDimension) {
                     ForEach(DocumentModel.previewSizes, id: \.self) { Text(verbatim: "\($0) px").tag($0) }
                 }
-                note("The Stills preview's long side. Larger is sharper on screen and slower to redraw: on an M4 Pro a print control redraws 2560 px in about 29 ms and 4096 px in about 73. A file smaller than this is shown at its own size, never enlarged, and export is always at full size.")
+                note("The Stills preview's long side. Larger is sharper on screen and slower to redraw: on an M4 Pro a print control redraws 2560 px in about 16 ms and 4096 px in about 37. A file smaller than this is shown at its own size, never enlarged. Export always prints at full size, whatever the preview's.")
             }
             SwiftUI.Section("Library") {
                 Toggle("Save settings beside images", isOn: $savesSidecars)
@@ -63,6 +66,85 @@ private struct GeneralSettings: View {
         // turned on, the records already kept are written beside their files too
         .onChange(of: savesSidecars) { _, on in
             if on { library.savesSidecars = true }
+        }
+    }
+}
+
+/// What a picture with no settings of its own opens with, in Stills, and how
+/// the paper follows a change of film, in Stills and Motion
+/// (`NewPictures`, `PaperRule`).
+struct FilmAndPaperSettings: View {
+    @AppStorage(NewPictures.key) private var newPictures = NewPictures.carryLook.rawValue
+    @AppStorage(NewPictures.filmKey) private var defaultFilmStored = ""
+    @AppStorage(NewPictures.paperKey) private var defaultPaperStored = ""
+    @AppStorage(PaperRule.key) private var paperRule = PaperRule.staysWithKind.rawValue
+    @AppStorage(FilmMenu.hiddenKey) private var hiddenFilms = ""
+
+    var body: some View {
+        Form {
+            SwiftUI.Section("New Pictures") {
+                Picker("Open with", selection: $newPictures) {
+                    Text("The look of the picture before").tag(NewPictures.carryLook.rawValue)
+                    Text("The default film and paper").tag(NewPictures.defaultStocks.rawValue)
+                }
+                .pickerStyle(.radioGroup)
+                note("For a picture with no settings of its own. The look of the picture before is its film, paper and film character, with the exposure, tone and colour fresh; the first picture after launch has none before it and opens with the default film and paper. A picture with settings of its own always opens with them.")
+                Picker("Default film", selection: defaultFilm) {
+                    stocks(FilmMenu.shown(PackLibrary.shared.filmStocks, hidden: hiddenFilms,
+                                          inUse: defaultFilm.wrappedValue), films: true)
+                }
+                if printsOnPaper(defaultFilm.wrappedValue) {
+                    Picker("Default paper", selection: defaultPaper) {
+                        stocks(PackLibrary.shared.printStocks, films: false)
+                    }
+                } else {
+                    note("A slide is seen on the light table, and an instant print is the print: neither is printed on paper.")
+                }
+            }
+            SwiftUI.Section("Changing the Film") {
+                Picker("The paper", selection: $paperRule) {
+                    Text("Follows the film").tag(PaperRule.followsFilm.rawValue)
+                    Text("Stays with the kind of film").tag(PaperRule.staysWithKind.rawValue)
+                }
+                .pickerStyle(.radioGroup)
+                note("Follows the film: each film brings the paper it is printed on by reference, and a motion picture film its own print film. Stays with the kind of film: the paper stays while you change from one colour negative to another, as do the print film of motion picture negatives and the paper of black-and-white ones; a film of another kind brings back the paper last used with that kind, the first time its own. In Stills and Motion.")
+            }
+        }
+        .formStyle(.grouped)
+        .frame(width: 500)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// The default film; a new one brings its own paper, which the paper
+    /// picker can then change.
+    private var defaultFilm: Binding<String> {
+        Binding(get: { NewPictures.film(.standard) },
+                set: { film in
+                    defaultFilmStored = film
+                    if let own = NewPictures.ownPaper(of: film) { defaultPaperStored = own }
+                })
+    }
+
+    private var defaultPaper: Binding<String> {
+        Binding(get: { NewPictures.paper(.standard) }, set: { defaultPaperStored = $0 })
+    }
+
+    /// Whether `film` is printed on paper when a picture opens with it: not
+    /// a slide, seen on the light table, nor an instant print, the print itself.
+    private func printsOnPaper(_ film: String) -> Bool {
+        guard let pack = try? PackLibrary.shared.pack(film) else { return true }
+        return !pack.isViewedDirectly(scanFilm: nil)
+    }
+
+    /// `entries` in the stock pickers' sections.
+    @ViewBuilder
+    private func stocks(_ entries: [PackIndexEntry], films: Bool) -> some View {
+        ForEach(PackIndexEntry.groups(entries, films: films), id: \.title) { group in
+            SwiftUI.Section(group.title) {
+                ForEach(group.entries) { entry in
+                    Text(entry.name).tag(entry.stock)
+                }
+            }
         }
     }
 }

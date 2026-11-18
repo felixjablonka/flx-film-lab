@@ -100,6 +100,14 @@ std::vector<float> highlightColours(const std::vector<float> &sums, int bw, int 
 void lanczosTaps(int target, double scale, double offset, std::vector<int> &first, std::vector<float> &weights,
                  int &taps);
 
+// Each output pixel's window of the source, first and last, along one axis
+// (`offset` as lanczosTaps'): the pixels it is held within, the darkest and
+// the lightest of them, as RawLoader holds the Mac's (its downscale): within
+// a reduction, and a pixel more, of the source pixel nearest its centre.
+// Lanczos rings at a hard edge, and before the film the dark side of a bright
+// light rang below black, which the film printed as a black speck.
+void lobeWindows(int source, int target, double scale, double offset, std::vector<int> &windows);
+
 DecodePlan planDecode(const std::string &path, const DecodeOptions &options);
 DecodedPicture decodePlan(DecodePlan &&plan);   // on the CPU
 DecodedPicture decodeRaw(const std::string &path, const DecodeOptions &options);

@@ -227,14 +227,14 @@ struct InspectorView: View {
 
             if printsOnPaper.wrappedValue {
                 StockPicker(title: "Paper", entries: model.paperEntries, films: false,
-                            selection: $model.recipe.printStock)
+                            selection: Binding(get: { model.recipe.printStock }, set: { model.selectPaper($0) }))
             }
 
             if printsOnPaper.wrappedValue, let film = model.filmPack, let suggested = film.targetPrint,
                suggested != model.recipe.printStock,
                model.paperEntries.contains(where: { $0.stock == suggested }) {
                 Button {
-                    model.recipe.printStock = suggested
+                    model.selectPaper(suggested)
                 } label: {
                     Label("Use this film's reference paper", systemImage: "wand.and.stars")
                         .font(.panel(10))

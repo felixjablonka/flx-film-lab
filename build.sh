@@ -23,7 +23,7 @@ cd "$(dirname "$0")"
 
 APP_NAME="FLX Film Lab"
 # The version a release is built as; the release workflow sets it from the tag.
-VERSION="${VERSION:-2.0.0}"
+VERSION="${VERSION:-2.1.0}"
 # The binary inside the bundle, which refuse_if_running looks for.
 EXECUTABLE="FLXFilmLab"
 # The oldest macOS this is built to run on, on Apple Silicon only (since 1.1.2;
@@ -31,6 +31,12 @@ EXECUTABLE="FLXFilmLab"
 # targets whatever the build machine runs, which once quietly produced a binary
 # that refused to launch on anything older while the Info.plist advertised it.
 DEPLOYMENT_TARGET="26.0"
+# The SDK GitHub builds the releases with (Xcode 26.6 on its macos-26
+# runners). A build here uses the same one when it is installed, from Xcode or
+# the Command Line Tools, so both record the same SDK and run the same way:
+# 1.1.0's and 1.1.1's release-only bugs came from a newer SDK here. With Xcode
+# 27 selected, the default SDK is 27.2. RELEASE_SDK= overrides it.
+RELEASE_SDK="${RELEASE_SDK:-26.5}"
 # The first launch under this identifier takes over the settings saved under
 # the app's previous one, studio.agx.AgXStudio (FLXFilmLabApp.takeOverSettings).
 BUNDLE_ID="lab.flx.FLXFilmLab"
@@ -41,15 +47,20 @@ ENGINE_SOURCES=(
   FLXFilmLab/Model/Constants.swift
   FLXFilmLab/Model/ProfilePack.swift
   FLXFilmLab/Model/Recipe.swift
+  FLXFilmLab/Model/StockChoice.swift
+  FLXFilmLab/Model/ExportSize.swift
   FLXFilmLab/Model/PrintCurves.swift
   FLXFilmLab/Model/FrameGeometry.swift
   FLXFilmLab/Engine/FilmMath.swift
   FLXFilmLab/Engine/ToneCurve.swift
   FLXFilmLab/Engine/PackLibrary.swift
   FLXFilmLab/Engine/Renderer.swift
+  FLXFilmLab/Engine/ShaderLibrary.swift
+  FLXFilmLab/Engine/PassTimer.swift
   FLXFilmLab/Engine/RenderSetupBuilder.swift
   FLXFilmLab/Engine/MaskRasterizer.swift
   FLXFilmLab/Engine/RawLoader.swift
+  FLXFilmLab/Engine/Resampler.swift
   FLXFilmLab/Engine/Exporter.swift
   FLXFilmLab/Effects/GlowLook.swift
   FLXFilmLab/Effects/GlowPipeline.swift
@@ -126,6 +137,7 @@ CORE_SOURCES=(
   FLXFilmLab/UI/ControlVocabulary.swift
 )
 CORE_DIR="$BUILD_DIR/core"
+SHADERS_DIR="$BUILD_DIR/shaders"
 
 # Replacing the bundle of an app that is running breaks it: macOS can no
 # longer match the running copy's code signature to the files on disk, and
@@ -152,8 +164,13 @@ resolve_sdk() {
   mkdir -p "$BUILD_DIR"
   local probe="$BUILD_DIR/sdk-probe.swift"
   printf 'import SwiftUI\nstruct Probe: View { @State var n = 0; var body: some View { Text("\\(n)") } }\n' > "$probe"
-  local default_sdk candidates=()
+  local default_sdk candidates=() sdk
   default_sdk="$(xcrun --show-sdk-path)"
+  # the releases' SDK first, wherever it is installed
+  for sdk in "$(dirname "$default_sdk")/MacOSX$RELEASE_SDK.sdk" \
+             "/Library/Developer/CommandLineTools/SDKs/MacOSX$RELEASE_SDK.sdk"; do
+    [[ -d "$sdk" ]] && candidates+=("$sdk")
+  done
   candidates+=("$default_sdk")
   while IFS= read -r sdk; do candidates+=("$sdk"); done \
     < <(ls -d "$(dirname "$default_sdk")"/MacOSX[0-9]*.sdk 2>/dev/null | sort -V -r)
@@ -169,7 +186,11 @@ resolve_sdk() {
     echo "error: no installed macOS SDK can compile SwiftUI with this toolchain" >&2
     exit 1
   fi
-  [[ "$SDK" != "$default_sdk" ]] && echo "    using $(basename "$SDK") (the default SDK needs Xcode's SwiftUI macro plugin)"
+  if [[ "$(basename "$SDK")" == "MacOSX$RELEASE_SDK.sdk" ]]; then
+    [[ "$SDK" != "$default_sdk" ]] && echo "    using $(basename "$SDK"), the SDK the releases are built with"
+  else
+    echo "    using $(basename "$SDK"): MacOSX$RELEASE_SDK.sdk, the releases' SDK, is not installed or does not compile"
+  fi
   # The linker records the SDK a binary was built with, and macOS runs SwiftUI
   # and AppKit as that SDK's version behaves. Given only -sdk, it recorded the
   # default SDK (27.0) here while compiling against 26.5, so this Mac's builds
@@ -183,10 +204,40 @@ resolve_sdk() {
 # newer than it, or the SDK has changed. It is built for testing, so the tools
 # and suites `@testable import FLXCore` and reach its internal API, as they did
 # when each compiled the sources into itself.
+# The engine's and Motion's shaders, compiled ahead into Metal libraries when
+# the Metal compiler is installed (Xcode, with its Metal Toolchain component:
+# xcodebuild -downloadComponent MetalToolchain). The app and the tools load
+# them; without them they compile the source as they start, about half a
+# second each the first time, which macOS then caches. Fast math, as the
+# source's compile has it.
+build_shaders() {
+  if ! xcrun -sdk macosx metal --version >/dev/null 2>&1; then
+    echo "    (no Metal compiler: the shaders compile from source as the app starts)"
+    return 0
+  fi
+  mkdir -p "$SHADERS_DIR"
+  local source name
+  for source in FLXFilmLab/Resources/Shaders/flx.metal FLXFilmLab/Motion/Resources/Shaders/motion.metal; do
+    name="$(basename "$source" .metal)"
+    [[ -f "$SHADERS_DIR/$name.metallib" && "$SHADERS_DIR/$name.metallib" -nt "$source" \
+       && "$SHADERS_DIR/$name.metallib" -nt build.sh ]] && continue
+    echo "==> compiling the shaders, $name.metal"
+    xcrun -sdk macosx metal -c -fmetal-math-mode=fast -mmacosx-version-min="$DEPLOYMENT_TARGET" \
+      "$source" -o "$SHADERS_DIR/$name.air"
+    xcrun -sdk macosx metallib "$SHADERS_DIR/$name.air" -o "$SHADERS_DIR/$name.metallib"
+    rm -f "$SHADERS_DIR/$name.air"
+  done
+}
+
 build_core() {
+  build_shaders
   resolve_sdk
-  local lib="$CORE_DIR/libFLXCore.a"
+  local lib="$CORE_DIR/libFLXCore.a" compiler
+  # built again for another SDK or another compiler too: a module one compiler
+  # wrote, another refuses (macOS 27.2's update did that to every suite)
+  compiler="$(swiftc --version 2>&1 | head -1)"
   if [[ -f "$lib" && "$(cat "$CORE_DIR/sdk" 2>/dev/null)" == "$SDK" \
+        && "$(cat "$CORE_DIR/compiler" 2>/dev/null)" == "$compiler" \
         && -z "$(find "${CORE_SOURCES[@]}" build.sh -newer "$lib")" ]]; then
     return 0
   fi
@@ -196,6 +247,7 @@ build_core() {
     -emit-module -emit-module-path "$CORE_DIR/FLXCore.swiftmodule" \
     -emit-library -static -o "$lib" "${CORE_SOURCES[@]}"
   echo "$SDK" > "$CORE_DIR/sdk"
+  echo "$compiler" > "$CORE_DIR/compiler"
 }
 
 # A tool or suite, compiled against the shared module. -force_load links all
@@ -298,11 +350,36 @@ build_app() {
   mv "$bin" "$APP_DIR/Contents/MacOS/$EXECUTABLE"
 
   cp -R FLXFilmLab/Resources/packs "$APP_DIR/Contents/Resources/"
-  cp FLXFilmLab/Resources/AppIcon.icns "$APP_DIR/Contents/Resources/" 2>/dev/null || \
-    echo "    (no AppIcon.icns; run tools/icon/make_icon.py)"
+  # The icon: Icon Composer's layered AppIcon.icon, compiled by Xcode's
+  # actool into Assets.car, which macOS 26 draws in Liquid Glass with its
+  # dark, clear and tinted forms; without Xcode, the flat AppIcon.icns.
+  local icon_name=""
+  if [[ -d FLXFilmLab/Resources/AppIcon.icon ]] && xcrun --find actool >/dev/null 2>&1; then
+    echo "==> compiling the icon, AppIcon.icon"
+    if xcrun actool FLXFilmLab/Resources/AppIcon.icon --compile "$APP_DIR/Contents/Resources" \
+         --platform macosx --minimum-deployment-target "$DEPLOYMENT_TARGET" --app-icon AppIcon \
+         --output-partial-info-plist "$BUILD_DIR/AppIcon-info.plist" \
+         --output-format human-readable-text --errors --warnings >"$BUILD_DIR/actool.log" 2>&1 \
+       && [[ -f "$APP_DIR/Contents/Resources/Assets.car" ]]; then
+      icon_name="<key>CFBundleIconName</key><string>AppIcon</string>"
+    else
+      echo "    (actool failed, see $BUILD_DIR/actool.log; the flat AppIcon.icns instead)"
+    fi
+  fi
+  if [[ -z "$icon_name" ]]; then
+    rm -f "$APP_DIR/Contents/Resources/Assets.car"
+    cp FLXFilmLab/Resources/AppIcon.icns "$APP_DIR/Contents/Resources/" 2>/dev/null || \
+      echo "    (no AppIcon.icns; run tools/icon/make_icon.py)"
+  fi
   mkdir -p "$APP_DIR/Contents/Resources/Shaders"
   cp FLXFilmLab/Resources/Shaders/flx.metal FLXFilmLab/Motion/Resources/Shaders/motion.metal \
      "$APP_DIR/Contents/Resources/Shaders/"
+  # the shaders compiled ahead, beside their source, which stays the fallback
+  build_shaders
+  local library
+  for library in "$SHADERS_DIR/flx.metallib" "$SHADERS_DIR/motion.metallib"; do
+    [[ -f "$library" ]] && cp "$library" "$APP_DIR/Contents/Resources/Shaders/"
+  done
   cp NOTICE.md LICENSE "$APP_DIR/Contents/Resources/" 2>/dev/null || true
 
   cat > "$APP_DIR/Contents/Info.plist" <<PLIST
@@ -315,6 +392,7 @@ build_app() {
   <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
   <key>CFBundleExecutable</key><string>$EXECUTABLE</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
+  $icon_name
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$VERSION</string>
   <key>CFBundleVersion</key><string>1</string>

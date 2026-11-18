@@ -4,6 +4,7 @@
 #include "DisplayColour.h"
 #include "Document.h"
 #include "ImageLibrary.h"
+#include "SetupBuilder.h"
 #include "Widgets.h"
 
 #include <QCheckBox>
@@ -13,6 +14,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
+#include <QRadioButton>
 #include <QScrollArea>
 #include <QVBoxLayout>
 
@@ -95,6 +97,43 @@ private:
     int m_rows = 0;
 };
 
+// A row of its own, hairline and all, to show or hide as a whole.
+QWidget *rowOf(const QString &title, QWidget *control)
+{
+    auto *row = new QWidget;
+    auto *v = new QVBoxLayout(row);
+    v->setContentsMargins(0, 4, 0, 0);
+    v->setSpacing(8);
+    v->addWidget(hairline());
+    auto *h = new QHBoxLayout;
+    h->setSpacing(12);
+    auto *name = new QLabel(title);
+    name->setFont(theme::label());
+    h->addWidget(name);
+    h->addStretch(1);
+    h->addWidget(control);
+    v->addLayout(h);
+    return row;
+}
+
+QRadioButton *radio(const QString &text)
+{
+    auto *b = new QRadioButton(text);
+    b->setFont(theme::label());
+    b->setCursor(Qt::PointingHandCursor);
+    return b;
+}
+
+// A film or paper picker for a row: the inspector's, grouped by kind, at the
+// window's size of text.
+StockPicker *stockPicker()
+{
+    auto *p = new StockPicker(QString(), {});
+    p->combo()->setFont(theme::label());
+    p->setFixedWidth(270);
+    return p;
+}
+
 // A plain button with a border, as the Mac's push buttons in a form.
 QPushButton *borderedButton(const QString &text)
 {
@@ -125,13 +164,15 @@ SettingsDialog::SettingsDialog(Document &document, QWidget *parent)
     layout->setContentsMargins(20, 14, 20, 20);
     layout->setSpacing(12);
     // the tabs, where the Mac's settings window has them, at the top
-    m_tabs = new Segmented({QStringLiteral("General"), QStringLiteral("Films")});
-    m_tabs->setFixedWidth(200);
+    m_tabs = new Segmented({QStringLiteral("General"), QStringLiteral("Film && Paper"), QStringLiteral("Films")});
+    m_tabs->setFixedWidth(300);
     connect(m_tabs, &Segmented::chosen, this, [this](int i) { showPage(Page(i)); });
     layout->addWidget(m_tabs, 0, Qt::AlignHCenter);
     m_general = buildGeneral();
+    m_filmAndPaper = buildFilmAndPaper();
     m_films = buildFilms();
     layout->addWidget(m_general);
+    layout->addWidget(m_filmAndPaper);
     layout->addWidget(m_films, 1);
     showPage(Page::General);
 }
@@ -199,6 +240,64 @@ QWidget *SettingsDialog::buildGeneral()
         "DSC_0871.NEF.flx, which travels with the folder to another drive, another PC or the Mac app. They are "
         "always kept in the app's library too; of the two, the newer counts.")));
     layout->addWidget(library);
+    return page;
+}
+
+// What a picture with no settings of its own opens with, in Stills, and how
+// the paper follows a change of film, in Stills and Motion (NewPictures,
+// PaperRule): the Mac's Film & Paper tab.
+QWidget *SettingsDialog::buildFilmAndPaper()
+{
+    auto *page = new QWidget;
+    auto *layout = new QVBoxLayout(page);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(8);
+
+    layout->addWidget(heading(QStringLiteral("New Pictures")));
+    auto *pictures = new Group;
+    pictures->addRow(QStringLiteral("Open with"));
+    m_carryLook = radio(QStringLiteral("The look of the picture before"));
+    m_defaultStocks = radio(QStringLiteral("The default film and paper"));
+    connect(m_carryLook, &QRadioButton::clicked, this, [this] { chooseNewPictures(NewPictures::CarryLook); });
+    connect(m_defaultStocks, &QRadioButton::clicked, this, [this] { chooseNewPictures(NewPictures::DefaultStocks); });
+    pictures->addUnder(m_carryLook);
+    pictures->addUnder(m_defaultStocks);
+    pictures->addUnder(explanation(QStringLiteral(
+        "For a picture with no settings of its own. The look of the picture before is its film, paper and film "
+        "character, with the exposure, tone and colour fresh; the first picture after launch has none before it and "
+        "opens with the default film and paper. A picture with settings of its own always opens with them.")));
+    m_defaultFilm = stockPicker();
+    connect(m_defaultFilm, &Choice::chosen, this,
+            [this](const QVariant &v) { chooseDefaultFilm(v.toString().toStdString()); });
+    pictures->addRow(QStringLiteral("Default film"), m_defaultFilm);
+    m_defaultPaper = stockPicker();
+    m_defaultPaper->setGroups(stockGroups(m_doc.packs().paperEntries(), false));
+    connect(m_defaultPaper, &Choice::chosen, this,
+            [this](const QVariant &v) { chooseDefaultPaper(v.toString().toStdString()); });
+    m_defaultPaperRow = rowOf(QStringLiteral("Default paper"), m_defaultPaper);
+    pictures->addUnder(m_defaultPaperRow);
+    m_noPaper = explanation(QStringLiteral(
+        "A slide is seen on the light table, and an instant print is the print: neither is printed on paper."));
+    pictures->addUnder(m_noPaper);
+    layout->addWidget(pictures);
+
+    layout->addSpacing(8);
+    layout->addWidget(heading(QStringLiteral("Changing the Film")));
+    auto *changing = new Group;
+    changing->addRow(QStringLiteral("The paper"));
+    m_followsFilm = radio(QStringLiteral("Follows the film"));
+    m_staysWithKind = radio(QStringLiteral("Stays with the kind of film"));
+    connect(m_followsFilm, &QRadioButton::clicked, this, [this] { choosePaperRule(PaperRule::FollowsFilm); });
+    connect(m_staysWithKind, &QRadioButton::clicked, this, [this] { choosePaperRule(PaperRule::StaysWithKind); });
+    changing->addUnder(m_followsFilm);
+    changing->addUnder(m_staysWithKind);
+    changing->addUnder(explanation(QStringLiteral(
+        "Follows the film: each film brings the paper it is printed on by reference, and a motion picture film its own "
+        "print film. Stays with the kind of film: the paper stays while you change from one colour negative to "
+        "another, as do the print film of motion picture negatives and the paper of black-and-white ones; a film of "
+        "another kind brings back the paper last used with that kind, the first time its own. In Stills and "
+        "Motion.")));
+    layout->addWidget(changing);
     return page;
 }
 
@@ -300,6 +399,7 @@ void SettingsDialog::showPage(Page page)
     m_tabs->setCurrent(int(page));
     // the other page leaves the layout, so the window takes this one's size
     m_general->setVisible(page == Page::General);
+    m_filmAndPaper->setVisible(page == Page::FilmAndPaper);
     m_films->setVisible(page == Page::Films);
     refresh();
 }
@@ -362,6 +462,48 @@ void SettingsDialog::chooseGroupShown(const std::string &group, bool shown)
     refresh();
 }
 
+void SettingsDialog::chooseNewPictures(NewPictures choice)
+{
+    setNewPictures(choice);
+    refresh();
+}
+
+void SettingsDialog::chooseDefaultFilm(const std::string &stock)
+{
+    setDefaultFilm(stock);
+    // a new default film brings its own paper, which the paper picker can then change
+    if (const std::optional<std::string> own = ownPaper(m_doc.packs(), stock))
+        setDefaultPaper(*own);
+    refresh();
+}
+
+void SettingsDialog::chooseDefaultPaper(const std::string &stock)
+{
+    setDefaultPaper(stock);
+    refresh();
+}
+
+void SettingsDialog::choosePaperRule(PaperRule rule)
+{
+    setPaperRule(rule);
+    refresh();
+}
+
+std::string SettingsDialog::shownDefaultFilm() const
+{
+    return m_defaultFilm->current().toString().toStdString();
+}
+
+std::string SettingsDialog::shownDefaultPaper() const
+{
+    return m_defaultPaper->current().toString().toStdString();
+}
+
+bool SettingsDialog::defaultPaperShown() const
+{
+    return !m_defaultPaperRow->isHidden();
+}
+
 QString SettingsDialog::monitorText() const
 {
     const displaycolour::State screen = displaycolour::current();
@@ -396,6 +538,25 @@ void SettingsDialog::refresh()
     m_sidecars->setChecked(m_doc.library().savesSidecars());
     m_monitor->setText(monitorText());
 
+    // the defaults as a picture would start with them
+    const Recipe start = startingRecipe(m_doc.packs(), defaultFilmSetting(), defaultPaperSetting());
+    const bool carries = newPictures() == NewPictures::CarryLook;
+    m_carryLook->setChecked(carries);
+    m_defaultStocks->setChecked(!carries);
+    m_defaultFilm->setGroups(stockGroups(filmmenu::shown(m_doc.packs().filmEntries(), hiddenFilms(), start.filmStock), true));
+    m_defaultFilm->setCurrent(QString::fromStdString(start.filmStock));
+    m_defaultPaper->setCurrent(QString::fromStdString(start.printStock));
+    bool onPaper = true;
+    try {
+        onPaper = !m_doc.packs().pack(start.filmStock).isViewedDirectly(std::nullopt);
+    } catch (const std::exception &) {
+    }
+    m_defaultPaperRow->setVisible(onPaper);
+    m_noPaper->setVisible(!onPaper);
+    const bool follows = paperRule() == PaperRule::FollowsFilm;
+    m_followsFilm->setChecked(follows);
+    m_staysWithKind->setChecked(!follows);
+
     const std::set<std::string> hidden = filmmenu::hidden(hiddenFilms());
     for (const auto &[stock, check] : m_filmBoxes)
         check->setChecked(!hidden.count(stock));
@@ -408,8 +569,8 @@ void SettingsDialog::refresh()
     m_filmsShown->setText(filmsShownText());
     m_showAll->setEnabled(!hidden.empty());
 
-    // General as tall as its words need at its width; Films the Mac's size,
-    // its list scrolling
+    // General and Film & Paper as tall as their words need at their width;
+    // Films the Mac's size, its list scrolling
     if (m_page == Page::Films)
         setFixedSize(kFilmsWidth, kFilmsHeight);
     else

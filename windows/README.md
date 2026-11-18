@@ -122,6 +122,15 @@ help. From DSC_0871 at 2000 px, the port's own setup matches the Mac's to
 within ΔE2000 0.023 on Acros II, 0.036 on APX 100 and 0.035 on Provia 100F
 through the 82C, never more than one 8-bit level off.
 
+Followed to the Mac's 2.1.0: Settings' Film & Paper tab, the export's size
+(`engine/Resampler`, equal to the Mac's bit for bit), the kept print exposure
+and the spectral tables packed by band (`FilmRenderer`), and the decode held to
+the light that was there (`lobeWindows`, with the port's own colour noise and
+overshoot fixes). From DSC_0871 at 2000 px its renders on Metal, Direct3D 12
+and 11 stay within ΔE2000 0.00024 (Portra, plain), 0.024 (Portra with
+controls) and 0.027 (Tri-X through the red filter), never more than one 8-bit
+level off.
+
 Past 12 MP the intermediates are half precision, as the Mac's. The shaped
 print (`apply_geometry`), dodge & burn (MaskRasterizer) and Glow's effects
 (Core Image kernels on the Mac) are ported with the app (below), and the RAW
@@ -137,7 +146,10 @@ window), decodes on the GPU at the preview's size, and prints through the
 film and paper the inspector chooses, with the Mac's controls, their two
 vocabularies, help texts and defaults; Copy and Paste Settings, presets in
 the Mac's own JSON (a preset file works in either app), the surround, and
-export at full size: 16-bit TIFF, JPEG or PNG, the output profile embedded.
+export: 16-bit TIFF, JPEG or PNG, the output profile embedded, at full size or
+a long edge chosen beside the format (the Mac's ExportSize, kept under its
+names), the full-size print shrunk in linear light by `engine/Resampler`,
+the Mac's Lanczos-3 held to the light under its main lobe, step for step.
 Rendered pictures (JPEG, PNG) open too, read colour-managed into the working
 space as the Mac reads them. Crop & Straighten is the Mac's: turns, mirrors,
 levelling (by the slider, or a line drawn along the horizon), crops of fixed
@@ -219,7 +231,7 @@ it and the library the newer counts. Copy Settings and Paste Settings to
 Selected (each keeps its own masks, gradients and crop, the paste a step of
 its own history), Copy Look and Paste Look in Motion (Ctrl+Shift+C and V),
 and Export Selected (Ctrl+Shift+E): each picture printed at full size on an
-engine of its own, metered on its own preview-sized decode, one after
+engine of its own and written at Export's size, metered on its own preview-sized decode, one after
 another, or each clip written with its own look, a picture or clip never
 opened taking the look on screen; progress and Stop in the sidebar.
 
@@ -251,7 +263,17 @@ closed as it was left, so nothing they show is lost. Control names
 (Photographic or Darkroom, the Stills sliders; Motion's keep the
 photographic names, as on the Mac), Preview size, Save settings beside
 images, and the monitor's colour are there too; the inspector's Output
-section keeps the picture's own colour space and gamut compression.
+section keeps the picture's own colour space and gamut compression. Its Film
+& Paper tab is the Mac's (`NewPictures`, `PaperRule` in `engine/Packs`,
+`startingRecipe` and `pickingFilm` in `engine/SetupBuilder`): what a picture
+with no settings of its own opens with, the look of the picture before or the
+default film and paper (Portra 400 on Portra Endura unless set, the first
+picture after launch either way); and when the film changes, the paper
+following the film, each its own paper or print film, or staying with the
+kind of film, colour, motion picture or black and white, the paper last used
+with a kind coming back, in Stills and Motion alike. The settings are the
+Mac's, under its names (`newPictures`, `defaultFilm`, `defaultPaper`,
+`paperRule`, `papersByKind`).
 
 Original (`\`, in the View menu and the toolbar) shows the picture before film
 and paper, the RAW as macOS renders it by default, as shot, in the print's
@@ -299,12 +321,23 @@ than queueing every tick, a white balance change decodes again after a
 keeps the picture, its textures and the kernels between renders, reuses a
 setup's buffers and bindings when the next one has the same shape, and,
 as the Mac's, skips the film stage when only the print's controls moved.
+While only the controls after the enlarger move (Brightness, Density,
+Contrast, Shadows, Highlights, preflash, the masks), it prints from the
+light each negative passed in the enlarger the render before, kept within a
+thirty-second of the GPU's memory: no spectral integral, no grain mirror,
+and for a shaped print no shaping and no grain drawn again. The spectral
+tables reach the print kernel packed by band, as the Mac's do, and the
+screen's image is written in Qt's own byte order and handed on as it is read
+back, without a copy. `flxport-setup --kept` checks the kept exposure as the
+Mac's checks do: 18 edits on one renderer, each print equal to a fresh
+renderer's bit for bit, and kept exactly where it may be.
 
 For testing without a screen, `--screenshot PNG` writes the window once the
 file has rendered, `--save-preview PNG` the preview itself, `--export PATH`
-exports, `--recipe JSON` puts a Mac recipe on the file first, `--bench N`
-times N renders, `--size WxH` and `--preview N` set the window and the
-preview. With a movie, `--at SECONDS` shows that frame, `--play SECONDS`
+exports (`--long-edge PX` at that long edge), `--recipe JSON` puts a Mac
+recipe on the file first, `--bench N` times N renders, `--size WxH` and
+`--preview N` set the window and the preview. With a movie, `--at SECONDS`
+shows that frame, `--play SECONDS`
 plays first and counts the frames shown, `--codec prores|hevc` chooses
 what `--export` writes, and `--export-lut PATH` writes the look's .cube.
 `flxport-export` writes a clip as the app's Export does. `--save-original
@@ -317,7 +350,8 @@ the folder workflow in the running app, as the Mac's app tests do: four of
 RAWS' files copied into DIR and opened as a folder, decoded ahead, stepped
 through without a load showing, settings and flags kept and found again by a
 new library, the print kept from the screen, Paste Settings to Selected and
-its undo step, Export Selected, the sidecars; and the two smallest of CLIPS
+its undo step, Export Selected, Export and Export Selected at a long edge, the
+sidecars; and the two smallest of CLIPS
 copied into DIR as a folder of clips, a look kept, its graded frame, Paste
 Look and Export Selected; and the previews on a
 wide-gamut monitor (`FLX_DISPLAY_PROFILE` names a profile to use as the
@@ -336,10 +370,15 @@ switch, in the middle of the window in both halves; and the menus, which
 the wheel does not change and which open with the choice ticked, and the
 status saying the photograph, and the film menu one column that scrolls;
 and Settings' Films tab: films left out of the Stills and Motion film menus,
-a hidden film in use kept in them, a group hidden and every film shown again
-(83 checks, all passing on Direct3D 12; the Mac build, whose type is wider
-than Segoe UI, runs the other 79, all passing on Metal, and only reports
-the menus). `--text-size
+a hidden film in use kept in them, a group hidden and every film shown again;
+and a folder listing its RAW files only, not the JPEGs and TIFFs beside them;
+and Settings' Film & Paper tab: the defaults with nothing set, a default film
+bringing its own paper, a default slide with none, the paper following the
+film or staying with its kind as Stills and Motion change film, the paper
+last used shared between them, and two pictures opened afresh, with the look
+before and with the default film and paper (96 checks on the Mac build, all
+passing on Metal, which only reports the menus; 100 on Direct3D 12, all
+passing, which adds the menus' names at each text size). `--text-size
 SIZE` shows the panels at a text size for one run, without keeping it.
 
 A slider's tick at the 2560 px preview, all of it (meters, setup, GPU,
@@ -347,11 +386,12 @@ readback, the image), on DSC_0871 with Portra 400 on Endura:
 
 | | Print control (film stage kept) | Exposure (film stage again) | First render |
 |---|---|---|---|
-| RTX 5070 Ti, Direct3D 12 | 20 ms | 27 ms | 64 ms |
-| M4 Pro, Metal | 47 ms | 68 ms | 90 ms |
+| RTX 5070 Ti, Direct3D 12 | 11 ms | 26 ms | 92 ms |
+| M4 Pro, Metal | 23 ms | 55 ms | 85 ms |
 
-The Mac app itself takes 23 and 40 ms on the M4 Pro. On Windows the kernels
-are compiled when the app is built (fxc), and the decoder keeps them between
+The Mac app itself takes 17 and 41 ms on the M4 Pro. In 2.0 the PC took 21
+and 34 ms. On Windows the kernels are compiled when the app is built (fxc),
+and the decoder keeps them between
 decodes: opening a 24 MP file decodes in 0.45 s on the PC, and a white
 balance change, which decodes again as on the Mac, in 0.32 s. Exports of the 45 MP
 file match between Metal and Direct3D 12 to 0.2 in 65535 on average, half
@@ -388,7 +428,9 @@ The Mac app decodes with Apple's decoder (CIRAWFilter, set up in
   - false colour, colour noise and the capture's softness (below);
   - the lens's distortion corrected (below);
   - turning upright;
-  - Lanczos scaling as RawLoader's.
+  - Lanczos scaling as RawLoader's, each pixel held to the light within
+    the filter's reach (`lobeWindows`, `raw_hold`), so the dark side of a
+    bright light can't ring below black into a black speck in the print.
 
 `flxport-decode` decodes with the port (`--gpu` on the GPU), and
 `tools/mac-reference/flxdecode` with Apple's decoder as RawLoader sets it up. In both, the sharpening, the colour
@@ -587,7 +629,11 @@ the film's grain is the texture. So the port, by default:
   of the channels' cube roots, guided by their luminance, so the chroma
   follows the luminance's edges and is evened out between them. It runs at
   half size, as in their fast variant, over some 10 x 10 pixels of a 24 MP
-  picture, and an edge is anything over three times the noise;
+  picture, and an edge is anything over three times the noise. It never
+  takes a channel below black, or below where the pixel had it: beside a
+  lamp at night it carried the lamp's colour onto the demosaic's overshoot
+  and took blue to -8 (DSC_0805), magenta specks in the print. Where it
+  would, the colour is drawn in towards the pixel's grey first;
 - **sharpens the capture**: Richardson-Lucy deconvolution of the luminance,
   a Gaussian of 0.7 px, 10 times, applied to the three channels as a ratio.
   The result stays within each pixel's 3x3 neighbours, so there are no
@@ -604,12 +650,19 @@ clipped highlights most often, with no noise to measure, and would pull the
 fit to nought; a GPU rounding the mean by a hair did just that.
 
 First, a pixel without light amid well-lit ones takes its eight neighbours'
-median. Such pixels come from the demosaic overshooting beside a point of
+median, and so does one with a channel more than four times the noise below
+black. Such pixels come from the demosaic overshooting beside a point of
 light, on sensors without a low-pass filter. Taking their false colour
-would leave them black. Pixels in the shadows' noise, where many sit below
-nought, aren't touched: only those whose neighbours' median is over four
-times the noise. Clamping the demosaic instead would change a sixth of all
-pixels and the calibrated colour.
+would leave them black, or spread it. Pixels in the shadows' noise, where
+many sit below nought, aren't touched: only those whose neighbours' median
+is over four times the noise. A channel nearer black than four times the
+noise is the noise's, a saturated colour's weakest channel gone under by
+chance, and taking those too changed a tenth of a picture. With them left,
+the pixels the repair moves come out nearer Apple's decode at three in four.
+DSC_0805's decode then has as few pixels below black as Apple's (0.003% under
+-0.005, Apple 0.009%), where it had ten times as many, down to -7.8. Clamping
+the demosaic instead would change a sixth of all pixels and the calibrated
+colour.
 
 The steps take 1.1 s on 24 MP on the Mac's CPU and 2 s on 45 MP; the PC's
 CPU takes about twice that. The Mac and the PC compute them bit for bit

@@ -4,12 +4,20 @@
 // setup the Mac engine made, and rendered, so its stages can be compared
 // with the Mac's (tools/compare) like any port render.
 //
-//   flxport-setup <dumpdir> [--packs DIR] [--backend metal|d3d12|d3d11|vulkan] [--no-render]
+//   flxport-setup <dumpdir> [--packs DIR] [--backend metal|d3d12|d3d11|vulkan] [--no-render] [--kept]
 //
 // The packs default to the Mac app's (PackLibrary::defaultDirectory). The
 // render goes into port-<backend>-ownsetup/.
+//
+// --kept checks the print's kept exposure instead (setKeptExposureBudget), as
+// the Mac's tests/checks do: one renderer through a sequence of edits, each
+// print compared with a fresh renderer's, and that it printed from the kept
+// exposure exactly where it may. Exits 1 if a step differs.
 
 #include "FilmRenderer.h"
+#include "Filters.h"
+#include "FrameGeometry.h"
+#include "MaskRasterizer.h"
 #include "Packs.h"
 #include "Recipe.h"
 #include "Setup.h"
@@ -28,6 +36,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <functional>
 #include <memory>
 #include <stdexcept>
 
@@ -119,6 +128,105 @@ void compareInts(const char *item, std::initializer_list<long long> mac, std::in
     }
 }
 
+// The print's shape, as RenderEngine::shape lays it on a setup.
+void shapeSetup(RenderSetup &s, const GeometryMap &map)
+{
+    const Affine &t = map.outputToSource;
+    s.shape.columns = {float(t.a), float(t.b), float(t.c), float(t.d)};
+    s.shape.offsetSize = {float(t.tx), float(t.ty), float(map.sourceWidth), float(map.sourceHeight)};
+    s.shape.active = {map.isIdentity ? 0 : 1, 0, 0, 0};
+    s.encode.columns = s.shape.columns;
+    s.encode.offsetSize = s.shape.offsetSize;
+    s.encode.active = s.shape.active;
+    s.encode.modes.y = 0;
+    s.outputWidth = map.outputWidth();
+    s.outputHeight = map.outputHeight();
+    s.stages.shaped = !map.isIdentity;
+}
+
+// --kept: the Mac's "the print's exposure, kept between renders, prints what
+// a fresh render does" (tests/checks).
+int keptChecks(SetupBuilder &builder, const BuiltSetup &start, const RenderSetup &mac, QRhi *rhi)
+{
+    const int w = mac.width, h = mac.height;
+    LocalMask burn;
+    burn.id = "00000000-0000-0000-0000-000000000001";
+    burn.name = "Burn";
+    burn.shape = MaskShape::Oval;
+    burn.points = {{0.5, 0.45}, {0.75, 0.45}, {0.5, 0.7}};
+    burn.stops = 0.5;
+    struct Step {
+        const char *name;
+        std::function<void(Recipe &, float &)> edit;
+        bool fromKept;
+    };
+    const std::vector<Step> steps = {
+        {"as it is", [](Recipe &, float &) {}, false},
+        {"Brightness", [](Recipe &r, float &) { r.brightness += 0.1; }, true},
+        {"Density", [](Recipe &r, float &) { r.density += 0.15; }, true},
+        {"Contrast", [](Recipe &r, float &) { r.grade -= 15; }, true},
+        {"Shadows", [](Recipe &r, float &) { r.shadows = 0.3; }, true},
+        {"Highlights", [](Recipe &r, float &) { r.highlights = -0.3; }, true},
+        {"a burn", [&](Recipe &r, float &) { r.masks = {burn}; }, true},
+        {"the burn's own grade", [](Recipe &r, float &) { r.masks[0].grade = -10; }, true},
+        {"Exposure: the film again", [](Recipe &, float &ev) { ev += 0.4; }, false},
+        {"Brightness after it", [](Recipe &r, float &) { r.brightness -= 0.05; }, true},
+        {"a crop", [](Recipe &r, float &) { r.geometry.crop = RectD{0.1, 0.1, 0.7, 0.75}; }, false},
+        {"Brightness on the crop", [](Recipe &r, float &) { r.brightness += 0.05; }, true},
+        {"another crop", [](Recipe &r, float &) { r.geometry.crop = RectD{0.2, 0.15, 0.6, 0.7}; }, false},
+        {"Shadows on it", [](Recipe &r, float &) { r.shadows = 0.1; }, true},
+        {"the crop taken off", [](Recipe &r, float &) { r.geometry = FrameGeometry(); }, false},
+        {"another paper", [](Recipe &r, float &) { r.printStock = "kodak_supra_endura"; }, false},
+        {"Grain: the film again", [](Recipe &r, float &) { r.grainAmount = 0.5; }, false},
+        {"Brightness last", [](Recipe &r, float &) { r.brightness += 0.02; }, true},
+    };
+    std::printf("the print's exposure, kept between renders, prints what a fresh render does\n");
+    FilmRenderer keeping(rhi, FilmRenderer::Blur::Own);
+    keeping.setSkipsUnchangedFilm(true);
+    keeping.setKeptExposureBudget(qint64(1) << 30);
+    keeping.setPicture(mac.input.floats.data(), w, h);
+    Recipe recipe = start.resolved;
+    float ev = start.exposureEV;
+    int failures = 0;
+    for (const Step &step : steps) {
+        step.edit(recipe, ev);
+        BuiltSetup built = builder.build(recipe, ev, w, h);
+        RenderSetup &s = built.setup;
+        s.input = Dump();                   // the picture set, not set again
+        s.fileSeed = start.setup.fileSeed;  // as RenderEngine::setupFor seeds the grain
+        s.grainSeed = fnv1a(recipe.filmStock) ^ (s.fileSeed * 0x9E3779B9u);
+        shapeSetup(s, GeometryMap(recipe.geometry, w, h));
+        std::vector<float> map;
+        const maskraster::Size size = maskraster::mapSize(w, h);
+        if (!recipe.masks.empty()) {
+            const std::vector<float> cover = maskraster::coverage(recipe.masks[0], size.width, size.height);
+            map = maskraster::combine({{&recipe.masks[0], &cover}}, size.width, size.height);
+        }
+        keeping.setDodgeBurn(map, size.width, size.height);
+        keeping.load(s);
+        std::vector<uint8_t> displayKept, displayFresh;
+        std::vector<float> linearKept, linearFresh;
+        keeping.render(&displayKept, &linearKept);
+        const bool fromKept = keeping.printedFromKeptExposure();
+        FilmRenderer fresh(rhi, FilmRenderer::Blur::Own);
+        fresh.setPicture(mac.input.floats.data(), w, h);
+        fresh.setDodgeBurn(map, size.width, size.height);
+        fresh.load(s);
+        fresh.render(&displayFresh, &linearFresh);
+        float worst = 0;
+        for (size_t i = 0; i < std::min(linearKept.size(), linearFresh.size()); ++i)
+            worst = std::max(worst, std::abs(linearKept[i] - linearFresh[i]));
+        const bool same = displayKept == displayFresh && linearKept == linearFresh;
+        const bool ok = same && fromKept == step.fromKept;
+        failures += ok ? 0 : 1;
+        std::printf("   %s %-26s %s, %s\n", ok ? "ok  " : "FAIL", step.name,
+                    same ? "identical" : qPrintable(QStringLiteral("differs by %1").arg(double(worst))),
+                    fromKept ? "printed from the kept exposure" : "kept anew");
+    }
+    std::printf(failures ? "\n%d step(s) failed\n" : "\nall steps pass\n", failures);
+    return failures ? 1 : 0;
+}
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -136,6 +244,7 @@ int main(int argc, char **argv)
     const QString packs = option("--packs", PackLibrary::defaultDirectory());
     const QString backend = option("--backend", kDefaultBackend);
     const bool render = !args.removeAll("--no-render");
+    const bool kept = args.removeAll("--kept") > 0;
     if (args.size() != 1) {
         std::fprintf(stderr, "usage: flxport-setup <dumpdir> [--packs DIR] [--backend metal|d3d12|d3d11|vulkan] [--no-render]\n");
         return 2;
@@ -162,6 +271,12 @@ int main(int argc, char **argv)
         RenderSetup &port = built.setup;
         port.input = mac.input;
         port.directory = mac.directory;
+        if (kept) {
+            std::unique_ptr<QRhi> rhi = makeRhi(backend);
+            if (!rhi)
+                throw std::runtime_error("cannot start " + backend.toStdString());
+            return keptChecks(builder, built, mac, rhi.get());
+        }
 
         std::printf("%s: %s on %s — the port's setup against the Mac engine's\n", fileName.c_str(),
                     recipe.filmStock.c_str(), recipe.printStock.c_str());

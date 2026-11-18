@@ -517,7 +517,7 @@ which the installer puts beside the app in `licenses/`:
 
 ## App icon
 
-The app icon (`FLXFilmLab/Resources/AppIcon.icns`, the Windows app's
+The app icon (`FLXFilmLab/Resources/AppIcon.icns` and `AppIcon.icon`, the Windows app's
 `windows/app/flx.ico`, the pictures made from it,
 `docs/images/icon.png` and `tools/icon/social-preview.png`, and the artwork they
 are made from) is © Felix Jablonka, all rights reserved. Neither the GPL nor CC BY-SA

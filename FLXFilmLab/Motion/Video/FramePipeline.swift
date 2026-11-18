@@ -104,7 +104,9 @@ final class FramePipeline {
 
         let library: MTLLibrary
         do {
-            library = try device.makeLibrary(source: try Self.shaderSource(), options: nil)
+            library = try ShaderLibrary.make("motion", device: device,
+                                             sourcePath: "FLXFilmLab/Motion/Resources/Shaders/motion.metal",
+                                             options: nil) { try Self.shaderSource() }
         } catch {
             throw PipelineError.shader("\(error)")
         }

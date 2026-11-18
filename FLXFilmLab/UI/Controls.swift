@@ -283,12 +283,66 @@ struct ToolbarChoice<Value: CaseIterable & Hashable & RawRepresentable>: View
             }
             menu.addItem(item)
         }
-        // Returns once the menu has closed, so `target` lives as long as it.
-        if let event = NSApp.currentEvent, event.type == .leftMouseUp, let view = event.window?.contentView {
-            menu.popUp(positioning: current, at: view.convert(event.locationInWindow, from: nil), in: view)
-        } else {
-            menu.popUp(positioning: current, at: NSEvent.mouseLocation, in: nil)
+        popUpUnderPointer(menu, positioning: current)
+        withExtendedLifetime(target) {}
+    }
+}
+
+/// `menu` popped up with `item` under the pointer, as a pop-up button places
+/// its choice. Returns once the menu has closed.
+@MainActor
+private func popUpUnderPointer(_ menu: NSMenu, positioning item: NSMenuItem?) {
+    if let event = NSApp.currentEvent, event.type == .leftMouseUp, let view = event.window?.contentView {
+        menu.popUp(positioning: item, at: view.convert(event.locationInWindow, from: nil), in: view)
+    } else {
+        menu.popUp(positioning: item, at: NSEvent.mouseLocation, in: nil)
+    }
+}
+
+/// How large Export writes the print, in the toolbar beside its format
+/// (`ExportSize`): "Full Size" or the long edge set, "2048 px", as
+/// `ToolbarChoice` shows a choice. Its menu has both, and Set Long Edge… for
+/// another, which `setLongEdge` asks for.
+struct ExportSizeChoice: View {
+    @AppStorage(ExportSize.key) private var mode = ExportSize.fullSize
+    @AppStorage(ExportSize.longEdgeKey) private var longEdge = ExportSize.standardLongEdge
+    let setLongEdge: () -> Void
+    var width: CGFloat = 86
+
+    private enum Choice { case fullSize, longEdge, setLongEdge }
+
+    var body: some View {
+        Button(action: popUp) {
+            (Text(ExportSize(stored: mode, longEdge: longEdge).title + " ")
+                + Text(Image(systemName: "chevron.down")).font(.system(size: 9, weight: .semibold)))
+                .frame(width: width)
         }
+    }
+
+    private func popUp() {
+        let size = ExportSize(stored: mode, longEdge: longEdge)
+        let menu = NSMenu()
+        let target = MenuTarget<Choice> { choice in
+            switch choice {
+            case .fullSize: mode = ExportSize.fullSize
+            case .longEdge: mode = ExportSize.limited
+            case .setLongEdge: setLongEdge()
+            }
+        }
+        func add(_ title: String, _ choice: Choice, on: Bool) -> NSMenuItem {
+            let item = NSMenuItem(title: title, action: #selector(MenuTarget<Choice>.choose(_:)), keyEquivalent: "")
+            item.target = target
+            item.representedObject = choice
+            item.state = on ? .on : .off
+            menu.addItem(item)
+            return item
+        }
+        let full = add("Full Size", .fullSize, on: size.isFullSize)
+        let limited = add("\(size.longEdge) px Long Edge", .longEdge, on: !size.isFullSize)
+        menu.addItem(.separator())
+        _ = add("Set Long Edge…", .setLongEdge, on: false)
+        popUpUnderPointer(menu, positioning: size.isFullSize ? full : limited)
+        withExtendedLifetime(target) {}
     }
 }
 

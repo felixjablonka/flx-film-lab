@@ -146,9 +146,14 @@ final class FolderBrowser: ObservableObject {
         URL(fileURLWithPath: url.absoluteURL.standardizedFileURL.path)
     }
 
-    /// A folder's pictures, by name as Finder sorts them: anything an image
-    /// type, RAW files included, but not a movie, a vector drawing or a hidden
-    /// file. Sidecars (`.flx`) are not images. For `.clips`, its movies.
+    /// Every image type for `listing`'s pictures, not only RAW files: for the
+    /// app's tests, whose pictures are TIFFs they write.
+    nonisolated(unsafe) static var listsEveryImage = false
+
+    /// A folder's pictures, by name as Finder sorts them: its RAW files, which
+    /// the film is made from. A JPEG or TIFF beside them, often an export or a
+    /// Photoshop edit of one, is left out (it still opens on its own), as is a
+    /// hidden file. Sidecars (`.flx`) are not images. For `.clips`, its movies.
     nonisolated static func listing(_ folder: URL, kind: Kind = .pictures) -> [Item] {
         let keys: Set<URLResourceKey> = [.fileSizeKey, .contentTypeKey, .isRegularFileKey]
         let urls = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: Array(keys),
@@ -157,8 +162,10 @@ final class FolderBrowser: ObservableObject {
             guard let values = try? url.resourceValues(forKeys: keys), values.isRegularFile == true,
                   let type = values.contentType ?? UTType(filenameExtension: url.pathExtension) else { return nil }
             switch kind {
-            case .pictures:
+            case .pictures where listsEveryImage:
                 guard type.conforms(to: .image), !type.conforms(to: .svg), !type.conforms(to: .movie) else { return nil }
+            case .pictures:
+                guard RawLoader.isRawFile(url) else { return nil }
             case .clips:
                 guard type.conforms(to: .movie) else { return nil }
             }

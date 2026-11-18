@@ -66,8 +66,7 @@ struct FLXFilmLabApp: App {
                     if mode.wrappedValue == .motion {
                         MotionPanels.exportSelected(motion)
                     } else {
-                        let format = UserDefaults.standard.string(forKey: "exportFormat").flatMap(Exporter.Format.init) ?? .tiff16
-                        FolderPanels.exportSelected(stills, format: format)
+                        FolderPanels.exportSelected(stills)
                     }
                 }
                 .keyboardShortcut("e", modifiers: [.command, .shift])
@@ -305,7 +304,7 @@ struct WindowToolbar: ToolbarContent {
             Either(mode) { StillsBar.ViewItem(model: stills) } motion: { MotionBar.ViewItem(model: motion) }
         }
         ToolbarItem {
-            Either(mode) { StillsBar.FormatItem() } motion: { MotionBar.CodecItem(model: motion) }
+            Either(mode) { StillsBar.FormatItem(model: stills) } motion: { MotionBar.CodecItem(model: motion) }
         }
         ToolbarItem {
             Either(mode) { StillsBar.ExportItem(model: stills) } motion: { MotionBar.ExportItem(model: motion) }

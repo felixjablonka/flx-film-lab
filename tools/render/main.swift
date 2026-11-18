@@ -9,7 +9,8 @@ import CoreGraphics
 //   flxrender <input> <output.jpg> [--film STOCK] [--paper STOCK]
 //             [--exposure EV] [--brightness L] [--density STOPS] [--grade R]
 //             [--shadows L] [--highlights L] [--toe V] [--shoulder V]
-//             [--auto-brightness] [--auto-contrast] [--filter NAME] [--size PX] [--recipe file.json]
+//             [--auto-brightness] [--auto-contrast] [--filter NAME] [--size PX] [--long-edge PX]
+//             [--recipe file.json]
 
 func fail(_ message: String) -> Never {
     FileHandle.standardError.write(Data((message + "\n").utf8))
@@ -34,7 +35,10 @@ guard args.count >= 2 else {
       --auto-brightness        meter the midtones toward mid-grey
       --auto-contrast          fit the frame's textured range onto the paper
       --no-auto                disable auto exposure
-      --size PX                longest edge (default: native)
+      --size PX                longest edge of the decode, printed at that size, as the
+                               preview is (default: native)
+      --long-edge PX           print at full size, then shrink to this long edge, as
+                               Export does (never enlarged)
       --recipe FILE            load a saved recipe, then apply the flags above
       --wb MODE                "Film reference" (default), "As shot", "Daylight D55",
                                Daylight (D65), "Tungsten 3200 K", Tungsten (2850 K)
@@ -74,6 +78,7 @@ let outputURL = URL(fileURLWithPath: args.removeFirst())
 
 var recipe = Recipe()
 var maxDimension: Int?
+var longEdge: Int?
 
 func option(_ name: String) -> String? {
     guard let i = args.firstIndex(of: name), i + 1 < args.count else { return nil }
@@ -107,6 +112,7 @@ if let v = option("--filter") { recipe.lensFilter = v == "none" ? nil : v }
 if let v = option("--processing").flatMap(Double.init) { recipe.processingTemperature = (v - 32) * 5 / 9 }
 if let v = option("--shoulder").flatMap(Double.init) { recipe.shoulder = v }
 if let v = option("--size").flatMap(Int.init) { maxDimension = v }
+if let v = option("--long-edge").flatMap(Int.init) { longEdge = v }
 if flag("--no-auto") { recipe.autoExposure = false }
 let whiteBalanceMode: RawLoader.WhiteBalance =
     RawLoader.WhiteBalance(rawValue: option("--wb") ?? "") ?? .filmReference
@@ -167,12 +173,12 @@ do {
                  setup.film.name, setup.paper.name, renderTime))
 
     guard let linear = renderer.readLinear() else { fail("render produced no pixels") }
-    try Exporter.write(linear: linear, width: Int(renderer.outputSize.width),
-                       height: Int(renderer.outputSize.height),
-                       to: outputURL, format: format, colorSpace: resolved.outputColorSpace,
-                       metadata: RawLoader.metadata(of: inputURL),
-                       provenance: Exporter.Provenance(recipe: resolved))
-    print("wrote    \(outputURL.path)")
+    let written = try Exporter.write(linear: linear, width: Int(renderer.outputSize.width),
+                                     height: Int(renderer.outputSize.height),
+                                     to: outputURL, format: format, colorSpace: resolved.outputColorSpace,
+                                     metadata: RawLoader.metadata(of: inputURL),
+                                     provenance: Exporter.Provenance(recipe: resolved), longEdge: longEdge)
+    print("wrote    \(outputURL.path)  (\(written.width) x \(written.height))")
 } catch {
     fail("error: \(error)")
 }

@@ -114,22 +114,25 @@ extension Recipe {
     }
 
     /// This recipe with another film loaded, the way both apps' stock pickers
-    /// load one. Crossing between colour and black and white also moves the
-    /// print onto the new film's own paper: a silver negative on RA-4 paper or
-    /// a colour negative on Multigrade are real darkroom choices, but rarely
-    /// the one meant by picking a film. A paper chosen for the kind of film
-    /// already loaded stays.
+    /// load one (`pickingFilm`), the paper following as `papers` says:
     ///
-    /// A motion picture film always moves the print onto its own print film,
-    /// as a lab prints it (Felix's pick), and a still film picked after one
-    /// leaves the print film for its own paper; a print film chosen for a
-    /// still film stays.
+    /// - `followsFilm`: each film brings the paper it is printed on by
+    ///   reference, and a motion picture film its own print film, as a lab
+    ///   prints it.
+    /// - `staysWithKind`: a paper chosen for the kind of film already loaded
+    ///   stays (`FilmKind`): colour negatives, motion picture negatives, black
+    ///   and white. Crossing to another kind brings back the paper last used
+    ///   with it (`remembered`), or the new film's own: a silver negative on
+    ///   RA-4 paper or a colour negative on Multigrade are real darkroom
+    ///   choices, but rarely the one meant by picking a film. Slides and
+    ///   instant prints, seen as they are, leave the paper as it was.
     ///
-    /// Likewise "Print on paper", once set by hand, is a choice for one kind of
-    /// film: crossing between negative and slide goes back to following the
-    /// stock. Kept, it printed every later slide on RA-4 paper, where a
-    /// positive comes out as a negative.
-    func loadingFilm(_ stock: String, library: PackLibrary = .shared) -> Recipe {
+    /// "Print on paper", once set by hand, is a choice for one kind of film:
+    /// crossing between negative and slide goes back to following the stock.
+    /// Kept, it printed every later slide on RA-4 paper, where a positive
+    /// comes out as a negative.
+    func loadingFilm(_ stock: String, papers: PaperRule = .staysWithKind, remembered: [FilmKind: String] = [:],
+                     library: PackLibrary = .shared) -> Recipe {
         var r = self
         r.filmStock = stock
         if let film = try? library.pack(stock), let previous = try? library.pack(filmStock),
@@ -147,13 +150,19 @@ extension Recipe {
            r.grade == Double(previous.defaultGrade) {
             r.grade = Double(film.defaultGrade)
         }
-        if let film = try? library.pack(stock), let previous = try? library.pack(filmStock),
-           let paper = try? library.pack(printStock),
+        if let film = try? library.pack(stock),
            let target = film.targetPrint, library.printStocks.contains(where: { $0.stock == target }) {
-            let otherColour = film.isMonochrome != previous.isMonochrome && film.isMonochrome != paper.isMonochrome
-            let printFilm = film.isMotionPicture || (previous.isMotionPicture && paper.isMotionPicture)
-            if otherColour || printFilm {
+            switch papers {
+            case .followsFilm:
                 r.printStock = target
+            case .staysWithKind:
+                let before = (try? library.pack(filmStock)).flatMap(FilmKind.init)
+                if let kind = FilmKind(film), kind != before {
+                    let last = remembered[kind].flatMap { paper in
+                        library.printStocks.contains(where: { $0.stock == paper }) ? paper : nil
+                    }
+                    r.printStock = last ?? target
+                }
             }
         }
         return r

@@ -436,3 +436,42 @@ std::vector<PackIndexEntry> shown(const std::vector<PackIndexEntry> &entries, co
 }
 
 } // namespace filmmenu
+
+const char *paperRuleName(PaperRule rule)
+{
+    return rule == PaperRule::FollowsFilm ? "film" : "kind";
+}
+
+PaperRule paperRuleNamed(const std::string &name)
+{
+    return name == "film" ? PaperRule::FollowsFilm : PaperRule::StaysWithKind;
+}
+
+std::optional<FilmKind> filmKind(const ProfilePack &film)
+{
+    if (film.isPositive() || film.isInstantPrint())
+        return std::nullopt;
+    if (film.isMonochrome())
+        return film.isMotionPicture() ? FilmKind::BlackAndWhiteMotionPicture : FilmKind::BlackAndWhite;
+    return film.isMotionPicture() ? FilmKind::ColourMotionPicture : FilmKind::Colour;
+}
+
+const char *filmKindName(FilmKind kind)
+{
+    switch (kind) {
+    case FilmKind::Colour: return "colour";
+    case FilmKind::ColourMotionPicture: return "colourMotionPicture";
+    case FilmKind::BlackAndWhite: return "blackAndWhite";
+    case FilmKind::BlackAndWhiteMotionPicture: return "blackAndWhiteMotionPicture";
+    }
+    return "colour";
+}
+
+std::optional<FilmKind> filmKindNamed(const std::string &name)
+{
+    for (FilmKind kind : {FilmKind::Colour, FilmKind::ColourMotionPicture, FilmKind::BlackAndWhite,
+                          FilmKind::BlackAndWhiteMotionPicture})
+        if (name == filmKindName(kind))
+            return kind;
+    return std::nullopt;
+}

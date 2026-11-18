@@ -63,6 +63,17 @@ let stops: [Float] = [-2, -1, 0, 1, 2, 8]   // the last one is clear film / pape
 renderer.setImage(greyWedge(stops), width: stops.count, height: 1)
 let mid = 2, clear = 5
 
+print("the shaders run as the app ships them")
+do {
+    // compiled ahead when the build could (build.sh, with the Metal compiler),
+    // so these checks run what the app runs; else from source, as before
+    let ahead = FileManager.default.fileExists(atPath: "build/shaders/flx.metallib")
+        && ProcessInfo.processInfo.environment["FLX_COMPILE_SHADERS"] != "1"
+    check(ShaderLibrary.loadedAhead.contains("flx") == ahead,
+          ahead ? "the engine's shaders load compiled ahead (build/shaders/flx.metallib)"
+                : "the engine's shaders compile from source (no library compiled ahead)")
+}
+
 print("exposure reaches the film stage")
 do {
     let r = try baseRecipe(film: "kodak_portra_400")
@@ -1551,6 +1562,212 @@ do {
     }
 }
 
+print("a print exported with a long edge: made smaller in linear light, never enlarged, without ringing")
+do {
+    let sizes: [(given: (Int, Int, Int?), want: (Int, Int))] = [
+        ((8256, 5504, 2048), (2048, 1365)), ((4032, 6048, 2048), (1365, 2048)), ((5000, 5000, 1000), (1000, 1000)),
+        ((6000, 4000, 6000), (6000, 4000)), ((6000, 4000, 8000), (6000, 4000)), ((6000, 4000, nil), (6000, 4000)),
+        ((3, 1000, 100), (1, 100)),
+    ]
+    var wrongSizes: [String] = []
+    for (given, want) in sizes {
+        let got = Resampler.size(width: given.0, height: given.1, longEdge: given.2)
+        if got.width != want.0 || got.height != want.1 {
+            wrongSizes.append("\(given.0)x\(given.1) at \(given.2.map(String.init) ?? "full size") gave \(got.width)x\(got.height)")
+        }
+    }
+    check(wrongSizes.isEmpty, "the long edge as set, the short edge in proportion, never enlarged"
+          + (wrongSizes.isEmpty ? "" : ": " + wrongSizes.joined(separator: "; ")))
+
+    let grey = Resampler.shrink([Float](repeating: 0.18, count: 50 * 30 * 4), width: 50, height: 30, to: (20, 12))
+    check(grey.count == 20 * 12 * 4 && grey.allSatisfy { abs($0 - 0.18) < 1e-6 }, "an even grey stays that grey")
+
+    // A dark half and a light one, each with noise, from a hash the Windows
+    // port's checks share; the numbers are the reference resampler's
+    // (scratch Python, float64), which these must match.
+    func noise(_ x: Int, _ y: Int, _ c: Int) -> Float {
+        var h = UInt32(truncatingIfNeeded: x &* 73856093) ^ UInt32(truncatingIfNeeded: y &* 19349663)
+            ^ UInt32(truncatingIfNeeded: c &* 83492791)
+        h ^= h >> 13
+        h = h &* 0x5bd1e995
+        h ^= h >> 15
+        return Float(h & 0xFFFF) / 65535
+    }
+    let w = 37, h = 23
+    var edge = [Float](repeating: 1, count: w * h * 4)
+    for y in 0..<h {
+        for x in 0..<w {
+            for c in 0..<3 { edge[(y * w + x) * 4 + c] = (x < 18 ? 0.02 : 0.85) + 0.1 * noise(x, y, c) }
+        }
+    }
+    let size = Resampler.size(width: w, height: h, longEdge: 16)
+    let small = Resampler.shrink(edge, width: w, height: h, to: size)
+    // Plain loops and short expressions: GitHub's compiler gave up
+    // type-checking the closures these were first written with.
+    func rgbOf(_ pixels: [Float]) -> [Float] {
+        var out: [Float] = []
+        for i in 0..<pixels.count where i % 4 != 3 { out.append(pixels[i]) }
+        return out
+    }
+    let smallRGB = rgbOf(small), edgeRGB = rgbOf(edge)
+    var sum: Float = 0
+    for v in smallRGB { sum += v }
+    let reference: [(x: Int, y: Int, rgb: [Float])] = [
+        (0, 0, [0.065790, 0.074713, 0.064486]), (7, 4, [0.254365, 0.255605, 0.272681]),
+        (8, 5, [0.945933, 0.944476, 0.942113]), (15, 9, [0.881864, 0.890139, 0.900597]),
+    ]
+    var worst: Float = 0
+    for p in reference {
+        for c in 0..<3 {
+            let got: Float = small[(p.y * size.width + p.x) * 4 + c]
+            worst = max(worst, abs(got - p.rgb[c]))
+        }
+    }
+    let sizeRight = size.width == 16 && size.height == 10
+    let sumRight = abs(sum - 238.163512) < 1e-3
+    check(sizeRight && sumRight && worst < 1e-5,
+          String(format: "Lanczos-3 in linear light, as the reference makes it: %dx%d, sum %.6f (238.163512), worst pixel off by %.1e",
+                 size.width, size.height, sum, worst))
+    let darkest: Float = edgeRGB.min() ?? 0, lightest: Float = edgeRGB.max() ?? 0
+    let low: Float = smallRGB.min() ?? 0, high: Float = smallRGB.max() ?? 0
+    check(low >= darkest && high <= lightest,
+          String(format: "no ringing past the light that was there: %.4f to %.4f in %.4f to %.4f (the bare filter rings to 0.0119)",
+                 low, high, darkest, lightest))
+    var edgeSum: Float = 0
+    for v in edgeRGB { edgeSum += v }
+    let meanIn: Float = edgeSum / Float(w * h * 3)
+    let meanOut: Float = sum / Float(size.width * size.height * 3)
+    check(abs(meanOut - meanIn) < 1e-3, String(format: "the light kept: mean %.5f from %.5f", meanOut, meanIn))
+
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("flx-checks-size-\(getpid())")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let url = dir.appendingPathComponent("small.jpg")
+    let written = try Exporter.write(linear: [Float](repeating: 0.18, count: 64 * 40 * 4), width: 64, height: 40,
+                                     to: url, format: .jpeg, colorSpace: "sRGB", longEdge: 32)
+    var fileWidth = 0, fileHeight = 0, exifWidth = 0, exifHeight = 0
+    if let source = CGImageSourceCreateWithURL(url as CFURL, nil) {
+        if let image = CGImageSourceCreateImageAtIndex(source, 0, nil) {
+            fileWidth = image.width
+            fileHeight = image.height
+        }
+        let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+        let exif = properties?[kCGImagePropertyExifDictionary] as? [CFString: Any]
+        exifWidth = exif?[kCGImagePropertyExifPixelXDimension] as? Int ?? 0
+        exifHeight = exif?[kCGImagePropertyExifPixelYDimension] as? Int ?? 0
+    }
+    let toldRight = written.width == 32 && written.height == 20
+    let fileRight = fileWidth == 32 && fileHeight == 20
+    let exifRight = exifWidth == 32 && exifHeight == 20
+    check(toldRight && fileRight && exifRight,
+          "the file is written at the long edge, and its EXIF says so: \(fileWidth)x\(fileHeight)")
+
+    let suite = "flx-checks-export-size-\(getpid())"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let fresh = ExportSize.current(defaults)
+    ExportSize(isFullSize: false, longEdge: 3000).save(defaults)
+    let set = ExportSize.current(defaults)
+    ExportSize(isFullSize: true, longEdge: 3000).save(defaults)
+    let backToFull = ExportSize.current(defaults)
+    defaults.set(10, forKey: ExportSize.longEdgeKey)
+    let tooSmall = ExportSize.current(defaults)
+    let freshRight = fresh == ExportSize(isFullSize: true, longEdge: 2048)
+    let setRight = set.limit == 3000
+    let backRight = backToFull.limit == nil && backToFull.longEdge == 3000
+    let tooSmallRight = tooSmall.longEdge == ExportSize.standardLongEdge
+    check(freshRight && setRight && backRight && tooSmallRight,
+          "the export size kept between launches: full size first, a long edge set, kept while full size is chosen")
+}
+
+print("the preview's decode keeps to the light that was there")
+do {
+    // A dark frame with a bright block and a line of one pixel: Lanczos rang
+    // below the dark beside them, a negative exposure the film printed black.
+    let w = 400, h = 300
+    var px = [Float](repeating: 0, count: w * h * 4)
+    for y in 0..<h {
+        for x in 0..<w {
+            let lit = (x >= 150 && x < 250 && y >= 100 && y < 200) || x == 320
+            for c in 0..<3 { px[(y * w + x) * 4 + c] = lit ? 1.0 : 0.02 }
+            px[(y * w + x) * 4 + 3] = 1
+        }
+    }
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("flx-checks-decode-\(getpid())")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let url = dir.appendingPathComponent("edge.tif")
+    try Exporter.write(linear: px, width: w, height: h, to: url, format: .tiff16, colorSpace: "sRGB")
+    let full = try RawLoader.load(url: url, options: RawLoader.Options(maxDimension: nil))
+    let small = try RawLoader.load(url: url, options: RawLoader.Options(maxDimension: 97))
+    // Plain loops: GitHub's compiler gives up on chains of closures.
+    func range(_ d: RawLoader.Decoded) -> (low: Float, high: Float) {
+        var low = Float.infinity, high = -Float.infinity
+        for i in 0..<d.pixels.count where i % 4 != 3 {
+            low = min(low, d.pixels[i])
+            high = max(high, d.pixels[i])
+        }
+        return (low, high)
+    }
+    let whole = range(full), shrunk = range(small)
+    let within = shrunk.low >= whole.low - 1e-4 && shrunk.high <= whole.high + 1e-4
+    check(small.width == 97 && within,
+          String(format: "at %dx%d, %.4f to %.4f, within the full size's %.4f to %.4f", small.width, small.height,
+                 shrunk.low, shrunk.high, whole.low, whole.high))
+    // and Lanczos still shrinks it: the line, a pixel at full size, shows
+    var line: Float = 0
+    for y in 0..<small.height {
+        for x in 76...79 { line = max(line, small.pixels[(y * small.width + x) * 4 + 1]) }
+    }
+    check(line > whole.low + 0.05, String(format: "the line of one pixel still shows: %.4f over %.4f", line, whole.low))
+
+    // A decode ahead is rendered in bands, asked between each whether to go
+    // on: the same pixels as one render, and it can be stopped.
+    var asked = 0
+    let banded = try RawLoader.load(url: url, options: RawLoader.Options(maxDimension: 97), between: {
+        asked += 1
+        return true
+    })
+    let same = banded.width == small.width && banded.height == small.height && banded.pixels == small.pixels
+    check(same && asked == 4, "a decode in four bands is the same as in one, pixel for pixel (asked \(asked) times)")
+    var stoppedAt = 0
+    var threw = false
+    do {
+        _ = try RawLoader.load(url: url, options: RawLoader.Options(maxDimension: 97), between: {
+            stoppedAt += 1
+            return stoppedAt < 3
+        })
+    } catch is CancellationError {
+        threw = true
+    }
+    check(threw && stoppedAt == 3, "and stops at the band it is told to")
+}
+
+print("a decode ahead waits for a slider to pause, and stops when no longer wanted")
+do {
+    let gate = AheadGate()
+    let first = gate.issue()
+    let idle = gate.proceed(first)
+    gate.set(rendering: true)
+    gate.hurry(first)
+    let hurried = gate.proceed(first)
+    let second = gate.issue()
+    let hurriedStill = gate.proceed(first)
+    gate.set(rendering: false)
+    let next = gate.proceed(second)
+    gate.dropAll()
+    let dropped = !gate.proceed(second)
+    check(idle && hurried && hurriedStill && next && dropped,
+          "goes on when idle; a step waiting for one never holds or stops it; dropped, it stops")
+    // An edit's frame just now: the next band waits until it is half a second old.
+    let third = gate.issue()
+    gate.set(lastFrame: Date())
+    let start = Date()
+    let went = gate.proceed(third)
+    let waited = Date().timeIntervalSince(start)
+    check(went && waited >= 0.45 && waited < 5, String(format: "waits after an edit's frame: %.2f s", waited))
+}
+
 print("the print is turned, mirrored, levelled and cropped as it is, pixel for pixel")
 do {
     // Lopsided in every direction, so a turn or a mirror the wrong way shows.
@@ -2086,6 +2303,88 @@ do {
     check(far != nil && withFar < 2e-3 && withFar < without / 2,
           String(format: "Bloom & Glow at their widest, the light beyond the part from the preview: off by %.1e at most (%.1e from the part alone)",
                  withFar, without))
+}
+
+print("the print's exposure, kept between renders, prints what a fresh render does")
+do {
+    // Edits made one after another on one renderer, as a slider's ticks are:
+    // where only the controls after the enlarger's light moved, the print is
+    // made from the exposure the render before kept (`keptExposure`), and
+    // wherever the light or the negative changed, it must not be. Each print
+    // is compared with the same recipe printed by a renderer of its own; a
+    // kept exposure gone stale would be off by far more than rounding.
+    let fw = 720, fh = 480
+    var frame = [Float](repeating: 1, count: fw * fh * 4)
+    var state: UInt32 = 54321
+    func noise() -> Float { state = state &* 1664525 &+ 1013904223; return Float(state >> 8) / 16777216 }
+    for y in 0..<fh {
+        for x in 0..<fw {
+            let i = (y * fw + x) * 4, v = Float(y) / Float(fh)
+            let base: Float = 0.03 + 0.4 * Float(x) / Float(fw) + ((x / 48 + y / 48) % 2 == 0 ? 0.05 : 0)
+            frame[i] = base * (0.7 + 0.6 * v) * (0.9 + 0.2 * noise())
+            frame[i + 1] = base * (0.9 + 0.2 * noise())
+            frame[i + 2] = base * (1.2 - 0.6 * v) * (0.9 + 0.2 * noise())
+        }
+    }
+    var recipe = Recipe()
+    recipe.autoExposure = false
+    recipe.autoGrade = false
+    recipe.autoDensity = false
+    let otherPaper = PackLibrary.shared.printStocks.first { $0.stock != recipe.printStock }!.stock
+    var seed: UInt32 = 11
+    func renderer() throws -> Renderer {
+        let r = try Renderer()
+        r.setImage(frame, width: fw, height: fh)
+        r.grainSeed = seed
+        return r
+    }
+    func printed(_ r: Renderer, _ recipe: Recipe) throws -> [Float] {
+        let masks = recipe.masks.filter(\.enabled)
+        if masks.isEmpty { r.clearDodgeBurn() } else {
+            r.setDodgeBurnMap(MaskRasterizer.rasterize(masks: masks, width: fw, height: fh))
+        }
+        _ = try r.render(setup: try RenderSetupBuilder.build(recipe: recipe, exposureEV: Float(recipe.exposureEV)),
+                         recipe: recipe)
+        return r.readLinear()!
+    }
+    let ticking = try renderer()
+    let steps: [(String, Bool, (inout Recipe) -> Void)] = [
+        ("opened", false, { _ in }),
+        ("Brightness", true, { $0.brightness = 0.1 }),
+        ("Density", true, { $0.density = 0.3 }),
+        ("Contrast", true, { $0.grade -= 1 }),
+        ("Shadows and Highlights", true, { $0.shadows = 0.2; $0.highlights = -0.2 }),
+        ("preflash", true, { $0.preflashExposure = 0.1 }),
+        ("Temperature", false, { $0.filterShiftY += 5 }),
+        ("Brightness after it", true, { $0.brightness = 0 }),
+        ("exposure", false, { $0.exposureEV += 0.3 }),
+        ("cropped and levelled", false, { var g = $0.geometry; g.crop = CGRect(x: 0.1, y: 0.1, width: 0.7, height: 0.6)
+                                          g.straighten = 3; $0.geometry = g }),
+        ("Brightness, cropped", true, { $0.brightness = 0.05 }),
+        ("a mask", true, { var m = LocalMask(); m.points = [CGPoint(x: 0.2, y: 0.2), CGPoint(x: 0.6, y: 0.2),
+                                                             CGPoint(x: 0.5, y: 0.7)]; m.stops = 0.5; $0.masks = [m] }),
+        ("the mask's grade", true, { $0.masks[0].grade = 1.5 }),
+        ("another paper", false, { $0.printStock = otherPaper }),
+        ("no grain", false, { $0.grainEnabled = false }),
+        ("Brightness, no grain", true, { $0.brightness = -0.05 }),
+        ("uncropped, another grain seed", false, { $0.geometry = .identity; $0.masks = []; $0.grainEnabled = true }),
+    ]
+    for (name, kept, change) in steps {
+        change(&recipe)
+        if name.hasPrefix("uncropped") { seed &+= 1; ticking.grainSeed = seed }
+        let got = try printed(ticking, recipe)
+        let reused = ticking.printedFromKeptExposure
+        let fresh = try printed(try renderer(), recipe)
+        let off = zip(got, fresh).reduce(Float(0)) { max($0, abs($1.0 - $1.1)) }
+        check(reused == kept && off <= 1e-5,
+              "\(name): \(reused ? "from the kept exposure" : "exposed again"), "
+              + (off == 0 ? "the same as a fresh render" : String(format: "off by %.1e from a fresh render", off)))
+    }
+    let plain = try renderer()
+    plain.keepsPrintExposure = false
+    let off = zip(try printed(plain, recipe), try printed(try renderer(), recipe)).reduce(Float(0)) { max($0, abs($1.0 - $1.1)) }
+    check(off <= 1e-5, off == 0 ? "the plain kernel prints the same"
+                                : String(format: "the plain kernel prints the same, to %.1e", off))
 }
 
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) check(s) failed")

@@ -251,13 +251,19 @@ final class ClipModel: ObservableObject {
         }
     }
 
-    /// Change film the way the stock picker does: crossing between colour and
-    /// black and white also moves the print onto the new film's own paper, and
-    /// a motion picture film onto its own print film (`Recipe.loadingFilm`),
-    /// as in the Stills mode.
+    /// Change film the way the stock picker does, the paper following as
+    /// Settings say (`Recipe.pickingFilm`, `PaperRule`), as in Stills.
     func selectFilm(_ stock: String) {
         guard stock != look.recipe.filmStock else { return }
-        look.recipe = look.recipe.loadingFilm(stock)
+        look.recipe = look.recipe.pickingFilm(stock, .standard)
+    }
+
+    /// Change paper the way the stock picker does: the paper is then the one
+    /// last used with this kind of film (`PaperMemory`), as in Stills.
+    func selectPaper(_ stock: String) {
+        guard stock != look.recipe.printStock else { return }
+        PaperMemory.remember(stock, with: look.recipe.filmStock, .standard)
+        look.recipe.printStock = stock
     }
 
     func resetExposure() {

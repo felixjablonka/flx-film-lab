@@ -8,6 +8,7 @@
 #include "MainWindow.h"
 #include "MotionDocument.h"
 #include "MotionInspector.h"
+#include "Resampler.h"
 #include "SettingsDialog.h"
 #include "Theme.h"
 #include "Thumbnails.h"
@@ -17,6 +18,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QColorTransform>
 #include <QCoreApplication>
 #include <QDir>
@@ -24,6 +26,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QHoverEvent>
+#include <QImageReader>
 #include <QMouseEvent>
 #include <QLabel>
 #include <QListView>
@@ -128,12 +131,18 @@ void pictureChecks(MainWindow &window, Document &doc, const QString &pictures, c
     }, 30000);
     check(doc.filePath() == items[1].path && !flashed, QStringLiteral("stepping to it never shows a load"));
     check(settled(), QStringLiteral("and it prints"));
+    // Decoding the pictures either side waits for a moving slider to pause,
+    // but not for the picture's own first frame to be half a second old:
+    // stepping on a second later found the next one not decoded yet (2.1.0).
+    check(!doc.holdsDecodesAhead(), QStringLiteral("its first frame does not hold back decoding its neighbours"));
 
     std::printf("a look of its own, kept\n");
     Recipe changed = doc.recipe();
     changed.autoExposure = false;
     changed.exposureEV += 0.7;
     doc.setRecipe(changed);
+    check(waitUntil([&] { return !doc.isRendering(); }, 30000) && doc.holdsDecodesAhead(),
+          QStringLiteral("an edit's frame does, as a moving slider's do"));
     const QString one = items[1].path;
     check(waitUntil([&] {
               const auto r = doc.library().record(one);
@@ -214,6 +223,55 @@ void pictureChecks(MainWindow &window, Document &doc, const QString &pictures, c
     check(made == QStringList({QFileInfo(one).completeBaseName() + "_" + film + ".jpg",
                                QFileInfo(items[3].path).completeBaseName() + "_" + film + ".jpg"}),
           QStringLiteral("each named by the picture and its film: %1").arg(made.join(", ")));
+
+    std::printf("export at a long edge\n");
+    // the size beside the format, chosen in the toolbar's menu and kept as
+    // the Mac keeps it
+    setExportSize(ExportSize{});
+    window.chooseSize(1);
+    const ExportSize chosen = exportSize();
+    QComboBox *sizeMenu = nullptr;
+    for (QComboBox *box : window.findChildren<QComboBox *>())
+        if (box->toolTip().startsWith(QStringLiteral("How large Export writes")))
+            sizeMenu = box;
+    check(!chosen.fullSize && chosen.longEdge == ExportSize::kStandardLongEdge && chosen.limit() == 2048 && sizeMenu
+              && sizeMenu->currentIndex() == 1 && sizeMenu->itemText(1) == QStringLiteral("2048 px Long Edge"),
+          QStringLiteral("the toolbar's size: 2048 px on the long edge (%1)").arg(sizeMenu ? sizeMenu->currentText() : "no menu"));
+    // the full-size prints of the batch above, their sizes to shrink
+    auto sizeOf = [](const QString &path) { return QImageReader(path).size(); };
+    auto shrunkTo = [](QSize full, int longEdge) {
+        const auto [w, h] = resampler::exportSize(full.width(), full.height(), longEdge);
+        return QSize(w, h);
+    };
+    // the picture on screen, the last of the batch: the checks after these
+    // find the screen as they did before them
+    const QString fullPrint = QDir(out).filePath(made.value(1));
+    const QString single = QDir(scratch).filePath(QStringLiteral("single.jpg"));
+    doc.exportTo(single, ExportFormat::Jpeg, 300);
+    const bool exported = waitUntil([&] { return !doc.isExporting(); }, 300000);
+    const QSize singleWant = shrunkTo(sizeOf(fullPrint), 300);
+    check(exported && sizeOf(single) == singleWant && std::max(singleWant.width(), singleWant.height()) == 300,
+          QStringLiteral("Export at a long edge of 300 px writes %1x%2 (the full print %3x%4)")
+              .arg(sizeOf(single).width()).arg(sizeOf(single).height())
+              .arg(sizeOf(fullPrint).width()).arg(sizeOf(fullPrint).height()));
+    check(doc.status() == QStringLiteral("Exported single.jpg, %1 × %2").arg(singleWant.width()).arg(singleWant.height()),
+          QStringLiteral("and the status line says how large: %1").arg(doc.status()));
+    const QString outSmall = QDir(scratch).filePath(QStringLiteral("Prints small"));
+    QDir().mkpath(outSmall);
+    doc.browser().setSelection({items[1].path, items[2].path, items[3].path});
+    doc.exportSelected(outSmall, ExportFormat::Jpeg, 160);
+    check(waitUntil([&] { return !doc.browser().batch(); }, 300000), QStringLiteral("a batch at a long edge finishes"));
+    QStringList sizes, wanted;
+    for (const QString &name : made) {
+        const QSize got = sizeOf(QDir(outSmall).filePath(name)), want = shrunkTo(sizeOf(QDir(out).filePath(name)), 160);
+        sizes << QStringLiteral("%1x%2").arg(got.width()).arg(got.height());
+        wanted << QStringLiteral("%1x%2").arg(want.width()).arg(want.height());
+    }
+    check(!made.isEmpty() && sizes == wanted && QDir(outSmall).entryList(QDir::Files) == made,
+          QStringLiteral("each at the long edge, 160 px, in its own shape: %1").arg(sizes.join(", ")));
+    window.chooseSize(0);
+    check(exportSize().fullSize && exportSize().longEdge == 2048 && sizeMenu && sizeMenu->currentIndex() == 0,
+          QStringLiteral("back to Full Size, the long edge kept to come back to"));
 
     std::printf("settings beside the pictures\n");
     doc.browser().setSavesSidecars(true);
@@ -914,12 +972,136 @@ void filmSettingsChecks(MainWindow &window, Document &doc, MotionDocument &motio
     window.findChildren<MotionInspector *>().first()->listFilms();
 }
 
+// Settings' Film & Paper tab (the Mac's 6a6e290): the default film and paper,
+// what a picture with no settings of its own opens with, and how the paper
+// follows a change of film, through the Stills and Motion documents as the
+// pickers change film and paper, the paper last used with each kind shared
+// between them.
+void filmAndPaperChecks(MainWindow &window, Document &doc, MotionDocument &motion, const QString &pictures,
+                        const QString &scratch)
+{
+    std::printf("film and paper in settings\n");
+    SettingsDialog *settings = window.showSettings();
+    if (!settings)
+        return;
+    const char *keys[] = {"newPictures", "defaultFilm", "defaultPaper", kPaperRuleKey, kPapersByKindKey};
+    // from no setting at all, as a first launch has it
+    for (const char *key : keys)
+        appSettings().remove(key);
+    settings->showPage(SettingsDialog::Page::FilmAndPaper);
+    QCoreApplication::processEvents();
+    settings->grab().save(QDir(scratch).filePath(QStringLiteral("settings-film-paper.png")));
+    check(newPictures() == NewPictures::CarryLook && paperRule() == PaperRule::StaysWithKind
+              && settings->shownDefaultFilm() == "kodak_portra_400"
+              && settings->shownDefaultPaper() == "kodak_portra_endura" && settings->defaultPaperShown(),
+          QStringLiteral("with nothing set: the look of the picture before, Portra 400 on its paper, the paper "
+                         "staying with its kind"));
+    settings->chooseDefaultFilm("kodak_tri_x_400");
+    check(defaultFilmSetting() == "kodak_tri_x_400" && defaultPaperSetting() == "ilford_multigrade_rc_deluxe"
+              && settings->shownDefaultPaper() == "ilford_multigrade_rc_deluxe",
+          QStringLiteral("a default film brings its own paper: %1").arg(QString::fromStdString(defaultPaperSetting())));
+    settings->chooseDefaultFilm("fujifilm_provia_100f");
+    check(!settings->defaultPaperShown(), QStringLiteral("a default slide has no paper to choose"));
+    settings->chooseDefaultFilm("kodak_tri_x_400");
+    settings->chooseDefaultPaper("kodak_portra_endura");
+    check(defaultPaperSetting() == "kodak_portra_endura" && settings->defaultPaperShown(),
+          QStringLiteral("and the paper can then be another"));
+    settings->chooseDefaultPaper("ilford_multigrade_rc_deluxe");
+
+    std::printf("the paper as the film changes, in Stills and Motion\n");
+    settings->choosePaperRule(PaperRule::FollowsFilm);
+    doc.selectFilm("kodak_portra_400");
+    doc.selectPaper("kodak_portra_endura");
+    doc.selectFilm("kodak_gold_200");
+    check(paperRule() == PaperRule::FollowsFilm && doc.recipe().printStock == "kodak_ektacolor_edge",
+          QStringLiteral("following the film, Gold 200 brings its own paper: %1")
+              .arg(QString::fromStdString(doc.recipe().printStock)));
+    settings->choosePaperRule(PaperRule::StaysWithKind);
+    doc.selectPaper("kodak_portra_endura");
+    doc.selectFilm("kodak_portra_400");
+    check(doc.recipe().printStock == "kodak_portra_endura",
+          QStringLiteral("staying with the kind, Portra 400 keeps the paper Gold 200 was on"));
+    motion.selectFilm("kodak_vision3_250d");
+    motion.selectPaper("kodak_2393");
+    motion.selectFilm("kodak_vision3_500t");
+    check(motion.look().recipe.printStock == "kodak_2393",
+          QStringLiteral("in Motion, another motion picture film keeps the print film chosen: %1")
+              .arg(QString::fromStdString(motion.look().recipe.printStock)));
+    doc.selectFilm("kodak_exr_200t");
+    check(doc.recipe().printStock == "kodak_2393",
+          QStringLiteral("and Stills brings back the print film Motion last used: %1")
+              .arg(QString::fromStdString(doc.recipe().printStock)));
+
+    std::printf("new pictures: the look before, or the default film and paper\n");
+    // two pictures with no settings of their own: copies under new names
+    const QString dir = QDir(scratch).filePath(QStringLiteral("New pictures"));
+    QDir().mkpath(dir);
+    QStringList fresh;
+    for (const FolderBrowser::Item &item : FolderBrowser::listing(pictures, FolderBrowser::Kind::Pictures)) {
+        if (fresh.size() == 2)
+            break;
+        if (QFileInfo(item.path).suffix().compare(QStringLiteral("nef"), Qt::CaseInsensitive) != 0)
+            continue;
+        const QString to = QDir(dir).filePath(QStringLiteral("New %1.NEF").arg(fresh.size() + 1));
+        QFile::copy(item.path, to);
+        fresh << FolderBrowser::canonical(to);
+    }
+    auto opened = [&](const QString &path) {
+        doc.open(path);
+        return waitUntil([&] {
+            return doc.filePath() == path && doc.hasImage() && !doc.isDecoding() && !doc.isRendering()
+                   && !doc.displayImage().isNull();
+        }, 60000);
+    };
+    if (fresh.size() < 2 || doc.filePath().isEmpty()) {
+        check(false, QStringLiteral("a picture on screen and two RAW files to open afresh from %1").arg(pictures));
+    } else {
+        const std::string before = doc.recipe().filmStock;
+        settings->chooseNewPictures(NewPictures::CarryLook);
+        check(opened(fresh[0]) && doc.recipe().filmStock == before,
+              QStringLiteral("the look of the picture before: %1").arg(QString::fromStdString(doc.recipe().filmStock)));
+        settings->chooseNewPictures(NewPictures::DefaultStocks);
+        check(opened(fresh[1]) && doc.recipe().filmStock == "kodak_tri_x_400"
+                  && doc.recipe().printStock == "ilford_multigrade_rc_deluxe",
+              QStringLiteral("set to the defaults, the default film and paper: %1 on %2")
+                  .arg(QString::fromStdString(doc.recipe().filmStock), QString::fromStdString(doc.recipe().printStock)));
+    }
+
+    for (const char *key : keys)
+        appSettings().remove(key);
+    settings->showPage(SettingsDialog::Page::General);
+    settings->close();
+}
+
 } // namespace
+
+// A folder lists its RAW files, which the film is made from, and not the
+// JPEGs and TIFFs beside them (the Mac's rawOnlyListing): a user's folder of
+// NEFs with Photoshop TIFFs beside them stuck at "decoding…" (2.0.0). The
+// listing goes by file type, so empty files stand in for the pictures.
+void listingChecks(const QString &scratch)
+{
+    std::printf("a folder lists its RAW files only\n");
+    const QString dir = QDir(scratch).filePath(QStringLiteral("mixed"));
+    QDir().mkpath(dir);
+    for (const char *name : {"Z9Z_0486.NEF", "Z9Z_0486-Edit.tif", "R0000320.DNG", "export.jpg", "DSC00012.ARW",
+                             "scan.png", "IMG_0001.CR3", "DSCF1234.RAF", "notes.txt"}) {
+        QFile file(QDir(dir).filePath(QString::fromLatin1(name)));
+        if (!file.open(QIODevice::WriteOnly))
+            check(false, QStringLiteral("could not write %1").arg(file.fileName()));
+    }
+    QStringList listed;
+    for (const FolderBrowser::Item &item : FolderBrowser::listing(dir, FolderBrowser::Kind::Pictures))
+        listed << item.name();
+    check(listed == QStringList({"DSC00012.ARW", "DSCF1234.RAF", "IMG_0001.CR3", "R0000320.DNG", "Z9Z_0486.NEF"}),
+          QStringLiteral("the NEF, DNG, ARW, CR3 and RAF, not the TIFF, JPEG or PNG: %1").arg(listed.join(", ")));
+}
 
 int runSelfTest(MainWindow &window, Document &document, MotionDocument &motion, const QString &pictures,
                 const QString &clips, const QString &scratch)
 {
     g_failures = 0;
+    listingChecks(scratch);
     pictureChecks(window, document, pictures, scratch);
     if (!clips.isEmpty())
         clipChecks(window, motion, clips, scratch);
@@ -931,6 +1113,7 @@ int runSelfTest(MainWindow &window, Document &document, MotionDocument &motion, 
     menuChecks(window, document, scratch);
     settingsChecks(window, document, scratch);
     filmSettingsChecks(window, document, motion, scratch);
+    filmAndPaperChecks(window, document, motion, pictures, scratch);
     std::printf(g_failures == 0 ? "\nall app checks pass\n" : "\n%d app check(s) failed\n", g_failures);
     return g_failures;
 }

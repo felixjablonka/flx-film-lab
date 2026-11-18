@@ -114,8 +114,11 @@ public:
                                        const std::optional<FrameGeometry> &metering = std::nullopt);
 
     // The picture at full size with `recipe`, metered on the preview as the
-    // screen shows it, written to `path`. Throws std::runtime_error.
-    void exportTo(const Recipe &recipe, const DecodeKey &key, const QString &path, ExportFormat format);
+    // screen shows it, written to `path`, shrunk to `longEdge` when that is
+    // smaller (0: the full size). Returns the size written. Throws
+    // std::runtime_error.
+    QSize exportTo(const Recipe &recipe, const DecodeKey &key, const QString &path, ExportFormat format,
+                   int longEdge = 0);
 
     // The loupe (DocumentModel's on the Mac): the picture at full size,
     // decoded as the export decodes it, held in memory while it is open; on

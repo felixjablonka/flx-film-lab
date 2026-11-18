@@ -388,7 +388,7 @@ enum ToneCurve {
         var data = [Float](repeating: 0, count: w * h * 4)
         let anyMaskGrade = recipe.masks.contains { $0.enabled && $0.grade != 0 }
 
-        for row in 0..<h {
+        for row in 0..<(anyMaskGrade ? h : 1) {
             let localGrade: Float = anyMaskGrade
                 ? Constants.localGradeMin
                     + (Constants.localGradeMax - Constants.localGradeMin) * Float(row) / Float(h - 1)
@@ -404,7 +404,15 @@ enum ToneCurve {
                 data[base + 3] = 1
             }
         }
+        if !anyMaskGrade { copyFirstRow(&data, width: w, height: h) }
         return (data, g)
+    }
+
+    /// The rows of a tone table differ only in a mask's local grade: without
+    /// one, every row is the first, worked out once and copied.
+    private static func copyFirstRow(_ data: inout [Float], width w: Int, height h: Int) {
+        let first = Array(data[0..<w * 4])
+        for row in 1..<h { data.replaceSubrange(row * w * 4..<(row + 1) * w * 4, with: first) }
     }
 
     // MARK: - Transparency
@@ -454,7 +462,7 @@ enum ToneCurve {
         var data = [Float](repeating: 0, count: w * h * 4)
         let anyMaskGrade = recipe.masks.contains { $0.enabled && $0.grade != 0 }
 
-        for row in 0..<h {
+        for row in 0..<(anyMaskGrade ? h : 1) {
             let localGrade: Float = anyMaskGrade
                 ? Constants.localGradeMin
                     + (Constants.localGradeMax - Constants.localGradeMin) * Float(row) / Float(h - 1)
@@ -473,6 +481,7 @@ enum ToneCurve {
                 data[base + 3] = 1
             }
         }
+        if !anyMaskGrade { copyFirstRow(&data, width: w, height: h) }
         return (data, g, (start, step))
     }
 

@@ -5,6 +5,7 @@
 // For testing, without anyone at the screen:
 //   --screenshot PNG    once the file has rendered and nothing is pending, the window to PNG, then quit
 //   --export PATH       once it has rendered, export it (the format from PATH's extension), then quit
+//   --long-edge PX      with --export: shrunk to that long edge, as Export's size does (never enlarged)
 //   --size WxH          the window's size
 //   --recipe JSON       a recipe in the Mac app's form, put on the file once it has opened
 //   --preview N         the preview's long side
@@ -125,6 +126,8 @@ int main(int argc, char **argv)
                                         QStringLiteral("png"));
     const QCommandLineOption exportTo(QStringLiteral("export"), QStringLiteral("Export, then quit."),
                                       QStringLiteral("path"));
+    const QCommandLineOption longEdge(QStringLiteral("long-edge"), QStringLiteral("With --export: this long edge."),
+                                      QStringLiteral("px"));
     const QCommandLineOption size(QStringLiteral("size"), QStringLiteral("Window size."), QStringLiteral("WxH"));
     const QCommandLineOption recipe(QStringLiteral("recipe"), QStringLiteral("A recipe to put on the file."),
                                     QStringLiteral("json"));
@@ -168,9 +171,9 @@ int main(int argc, char **argv)
     const QCommandLineOption textSize(QStringLiteral("text-size"),
                                       QStringLiteral("The panels' text size for this run: Standard, Larger or Largest."),
                                       QStringLiteral("size"));
-    parser.addOptions({screenshot, exportTo, size, recipe, preview, savePreview, bench, cropping, select, whiteBalance,
-                       at, play, codec, exportLUT, loupe, saveLoupe, saveOriginal, libraryDir, selfTest, selfTestClips,
-                       displayColour, textSize, iconSheet});
+    parser.addOptions({screenshot, exportTo, longEdge, size, recipe, preview, savePreview, bench, cropping, select,
+                       whiteBalance, at, play, codec, exportLUT, loupe, saveLoupe, saveOriginal, libraryDir, selfTest,
+                       selfTestClips, displayColour, textSize, iconSheet});
     parser.addHelpOption();
     parser.process(app);
 
@@ -453,7 +456,7 @@ int main(int argc, char **argv)
                 const ExportFormat format = ext == "jpg" || ext == "jpeg" ? ExportFormat::Jpeg
                                             : ext == "png"                 ? ExportFormat::Png
                                                                            : ExportFormat::Tiff16;
-                document.exportTo(path, format);
+                document.exportTo(path, format, parser.value(longEdge).toInt());
                 *exportStarted = true;
                 *quiet = 0;
                 return;

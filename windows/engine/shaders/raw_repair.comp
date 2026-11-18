@@ -1,7 +1,8 @@
 #version 440
-// A pixel without light amid well-lit ones (the demosaic's overshoot beside
-// a point of light) takes its eight neighbours' median, channel by channel,
-// where their luminance's median is over four times the noise. RawDetail's
+// A pixel without light amid well-lit ones, or with a channel more than four
+// times the noise below black (the demosaic's overshoot beside a point of
+// light), takes its eight neighbours' median, channel by channel, where their
+// luminance's median is over four times the noise. RawDetail's
 // repairOvershoot.
 
 layout(local_size_x = 16, local_size_y = 16) in;
@@ -38,7 +39,9 @@ void main()
     ivec2 size = imageSize(dst);
     if (gid.x >= size.x || gid.y >= size.y) return;
     vec3 p = texelFetch(src, gid, 0).rgb;
-    if (luminance(p) <= 0.0) {
+    float lowestChannel = min(p.r, min(p.g, p.b));
+    bool dark = luminance(p) <= 0.0;
+    if (dark || lowestChannel < 0.0) {
         float l[8], r[8], g[8], b[8];
         int m = 0;
         for (int dy = -1; dy <= 1; ++dy)
@@ -53,7 +56,9 @@ void main()
                 ++m;
             }
         float median = fifthOfEight(l);
-        if (median > 4.0 * sqrt(variance(median)))
+        float sigma = sqrt(variance(median));
+        // a channel within four times the noise of black is the noise's
+        if (median > 4.0 * sigma && (dark || lowestChannel < -4.0 * sigma))
             p = vec3(fifthOfEight(r), fifthOfEight(g), fifthOfEight(b));
     }
     imageStore(dst, gid, vec4(p, 1.0));

@@ -197,6 +197,30 @@ std::vector<PackIndexEntry> shown(const std::vector<PackIndexEntry> &entries, co
                                   const std::string &inUse);
 } // namespace filmmenu
 
+// How the paper follows a change of film, in Stills and Motion (Settings, Film
+// & Paper; the Mac's PaperRule): each film bringing the paper it is printed on
+// by reference, and a motion picture film its own print film; or the paper
+// staying while the film changes within its kind (FilmKind), and the paper
+// last used with a kind coming back, the first time the new film's own.
+enum class PaperRule { FollowsFilm, StaysWithKind };
+inline constexpr const char *kPaperRuleKey = "paperRule";
+const char *paperRuleName(PaperRule rule);              // "film", "kind", as the Mac keeps them
+PaperRule paperRuleNamed(const std::string &name);      // StaysWithKind unless "film"
+
+// The kinds of film a paper is chosen for, each printed on its own kind (the
+// Mac's FilmKind): a colour negative on colour paper, a motion picture
+// negative on print film, a black-and-white one on silver paper, or silver
+// print film. Slides and instant prints are seen as they are, and have none.
+enum class FilmKind { Colour, ColourMotionPicture, BlackAndWhite, BlackAndWhiteMotionPicture };
+std::optional<FilmKind> filmKind(const ProfilePack &film);
+const char *filmKindName(FilmKind kind);                // the Mac's names: "colour", "colourMotionPicture", ...
+std::optional<FilmKind> filmKindNamed(const std::string &name);
+
+// The paper last used with each kind of film (the Mac's PaperMemory), kept
+// between launches and shared by Stills and Motion.
+using PaperMemory = std::map<FilmKind, std::string>;
+inline constexpr const char *kPapersByKindKey = "papersByKind";
+
 // The packs directory: index.json, shared.json, one <stock>.json each, and
 // the tcLut binaries. Packs are read once and kept.
 class PackLibrary

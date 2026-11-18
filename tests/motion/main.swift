@@ -208,6 +208,11 @@ func run() async throws {
     let baker = try LookBaker()
     let lut = try baker.bake(recipe: look.recipe)
     let pipeline = try FramePipeline()
+    let ahead = FileManager.default.fileExists(atPath: "build/shaders/motion.metallib")
+        && ProcessInfo.processInfo.environment["FLX_COMPILE_SHADERS"] != "1"
+    check(ShaderLibrary.loadedAhead.contains("motion") == ahead,
+          ahead ? "Motion's shaders load compiled ahead (build/shaders/motion.metallib)"
+                : "Motion's shaders compile from source (no library compiled ahead)")
     pipeline.setLUT(lut)
     var noEffects = GlowLook()
     noEffects.bloom.enabled = false

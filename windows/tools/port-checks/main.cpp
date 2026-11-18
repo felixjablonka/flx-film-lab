@@ -1,11 +1,14 @@
 // flxport-checks: what the port decides without a picture, checked against
 // what the Mac app's own checks expect (tests/app, tests/checks,
-// tests/motionapp): the paper the film picker leaves the print on
-// (Recipe.loadingFilm), for Stills and Motion alike; the film menu's groups
+// tests/motionapp): the paper the film picker leaves the print on in either
+// of Settings' rules (Recipe.pickingFilm), for Stills and Motion alike, and
+// the recipe a picture starts afresh with (NewPictures); the film menu's groups
 // and order, and the films Settings leaves in it; the colour films' camera
 // filters; instant prints' processing and frame; oval gradients; the undo
 // steps' names; the library and its sidecars, read and written as the Mac app
-// reads and writes them (fixtures/, sidecars the Mac app wrote).
+// reads and writes them (fixtures/, sidecars the Mac app wrote); a print shrunk
+// to Export's long edge, to the Mac checks' own numbers; and the decoder's
+// detail steps beside a bright light, which printed as specks.
 //
 //   flxport-checks [--packs DIR]
 //
@@ -19,7 +22,9 @@
 #include "Filters.h"
 #include "Packs.h"
 #include "Provenance.h"
+#include "RawDetail.h"
 #include "Recipe.h"
+#include "Resampler.h"
 #include "SetupBuilder.h"
 
 #include <QJsonArray>
@@ -551,6 +556,135 @@ void libraryChecks()
     }
 }
 
+// Export's size (the Mac's tests/checks, "a print exported with a long edge"):
+// the size rule, and Lanczos-3 in linear light held to the light under its
+// main lobe, on the Mac checks' synthetic edge and to their numbers.
+void resamplerChecks()
+{
+    std::printf("a print exported with a long edge: made smaller in linear light, never enlarged, without ringing\n");
+    struct Case {
+        int w, h, longEdge, wantW, wantH;
+    };
+    const Case cases[] = {{8256, 5504, 2048, 2048, 1365}, {4032, 6048, 2048, 1365, 2048}, {5000, 5000, 1000, 1000, 1000},
+                          {6000, 4000, 6000, 6000, 4000}, {6000, 4000, 8000, 6000, 4000}, {6000, 4000, 0, 6000, 4000},
+                          {3, 1000, 100, 1, 100}};
+    std::string wrong;
+    for (const Case &c : cases) {
+        const auto [w, h] = resampler::exportSize(c.w, c.h, c.longEdge);
+        if (w != c.wantW || h != c.wantH)
+            wrong += " " + std::to_string(c.w) + "x" + std::to_string(c.h) + " at " + std::to_string(c.longEdge)
+                     + " gave " + std::to_string(w) + "x" + std::to_string(h);
+    }
+    check(wrong.empty(), "the long edge as set, the short edge in proportion, never enlarged" + wrong);
+
+    const std::vector<float> grey = resampler::shrink(std::vector<float>(50 * 30 * 4, 0.18f), 50, 30, 20, 12);
+    check(grey.size() == 20 * 12 * 4
+              && std::all_of(grey.begin(), grey.end(), [](float v) { return std::abs(v - 0.18f) < 1e-6f; }),
+          "an even grey stays that grey");
+
+    // a dark half and a light one, each with noise from the Mac checks' hash
+    const auto noise = [](int x, int y, int c) {
+        // in unsigned arithmetic, which wraps as the Mac's &* does
+        uint32_t h = (uint32_t(x) * 73856093u) ^ (uint32_t(y) * 19349663u) ^ (uint32_t(c) * 83492791u);
+        h ^= h >> 13;
+        h *= 0x5bd1e995u;
+        h ^= h >> 15;
+        return float(h & 0xFFFF) / 65535.0f;
+    };
+    const int w = 37, h = 23;
+    std::vector<float> edge(size_t(w) * h * 4, 1.0f);
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x)
+            for (int c = 0; c < 3; ++c)
+                edge[(size_t(y) * w + x) * 4 + c] = (x < 18 ? 0.02f : 0.85f) + 0.1f * noise(x, y, c);
+    const auto [sw, sh] = resampler::exportSize(w, h, 16);
+    const std::vector<float> shrunk = resampler::shrink(edge, w, h, sw, sh);
+    double sum = 0;
+    float lowest = 1e9f, highest = -1e9f, darkest = 1e9f, lightest = -1e9f;
+    double sumIn = 0;
+    for (size_t i = 0; i < shrunk.size(); ++i)
+        if (i % 4 != 3) {
+            sum += shrunk[i];
+            lowest = std::min(lowest, shrunk[i]);
+            highest = std::max(highest, shrunk[i]);
+        }
+    for (size_t i = 0; i < edge.size(); ++i)
+        if (i % 4 != 3) {
+            sumIn += edge[i];
+            darkest = std::min(darkest, edge[i]);
+            lightest = std::max(lightest, edge[i]);
+        }
+    struct Pixel {
+        int x, y;
+        float rgb[3];
+    };
+    const Pixel reference[] = {{0, 0, {0.065790f, 0.074713f, 0.064486f}}, {7, 4, {0.254365f, 0.255605f, 0.272681f}},
+                               {8, 5, {0.945933f, 0.944476f, 0.942113f}}, {15, 9, {0.881864f, 0.890139f, 0.900597f}}};
+    float worst = 0;
+    for (const Pixel &p : reference)
+        for (int c = 0; c < 3; ++c)
+            worst = std::max(worst, std::abs(shrunk[(size_t(p.y) * sw + p.x) * 4 + c] - p.rgb[c]));
+    char line[200];
+    std::snprintf(line, sizeof line, "Lanczos-3 in linear light, as the Mac's checks make it: %dx%d, sum %.6f (238.163512), "
+                  "worst pixel off by %.1e", sw, sh, sum, worst);
+    check(sw == 16 && sh == 10 && std::abs(sum - 238.163512) < 1e-3 && worst < 1e-5f, line);
+    std::snprintf(line, sizeof line, "no ringing past the light that was there: %.4f to %.4f in %.4f to %.4f",
+                  lowest, highest, darkest, lightest);
+    check(lowest >= darkest && highest <= lightest, line);
+    const double meanIn = sumIn / (w * h * 3), meanOut = sum / (sw * sh * 3);
+    std::snprintf(line, sizeof line, "the light kept: mean %.5f from %.5f", meanOut, meanIn);
+    check(std::abs(meanOut - meanIn) < 1e-3, line);
+}
+
+// The decoder's detail steps beside a bright light (RawDetail): a channel the
+// demosaic took far below black is repaired from the neighbours and one within
+// the noise left; the colour noise reduction never takes a channel below black.
+// Both printed as magenta specks round lamps at night (DSC_0805).
+void decoderDetailChecks()
+{
+    std::printf("the decoder's detail steps beside a bright light\n");
+    Noise noise;
+    noise.a = 1e-6;
+    noise.b = 1e-6;                     // sigma at 0.5: 0.0012
+    const int w = 16, h = 16;
+    std::vector<float3> grey(size_t(w) * h, float3{0.5f, 0.5f, 0.5f});
+    auto at = [&](std::vector<float3> &v, int x, int y) -> float3 & { return v[size_t(y) * w + x]; };
+    std::vector<float3> rgb = grey;
+    at(rgb, 5, 5) = {0.6f, 0.5f, -0.4f};          // the demosaic's lobe beside a light
+    at(rgb, 10, 10) = {0.55f, 0.5f, -0.001f};     // the noise's
+    at(rgb, 12, 3) = {-0.1f, -0.1f, -0.1f};       // without light
+    repairOvershoot(rgb, w, h, noise);
+    const auto is = [](float3 a, float3 b) { return a.x == b.x && a.y == b.y && a.z == b.z; };
+    check(is(at(rgb, 5, 5), {0.5f, 0.5f, 0.5f}), "a channel far below black amid lit neighbours takes their median");
+    check(is(at(rgb, 10, 10), {0.55f, 0.5f, -0.001f}), "one within four times the noise of black is left as it is");
+    check(is(at(rgb, 12, 3), {0.5f, 0.5f, 0.5f}), "a pixel without light amid lit ones, as before");
+
+    // a dark frame and an orange lamp of a pixel in it, twelve times white,
+    // with the demosaic's lobes above and below it: blue below black. The
+    // filter carried the lamp's colour onto them, the worst to -8.1.
+    const int n = 48;
+    std::vector<float3> night(size_t(n) * n, float3{0.01f, 0.012f, 0.01f});
+    night[size_t(24) * n + 24] = {12.0f, 6.0f, 0.002f};
+    for (int x = 23; x <= 25; ++x) {
+        night[size_t(23) * n + x] = {0.3f, 0.12f, -0.6f};
+        night[size_t(25) * n + x] = {0.3f, 0.12f, -0.6f};
+    }
+    std::vector<float3> before = night;
+    Noise quiet;
+    quiet.a = 1e-5;
+    quiet.b = 1e-6;
+    reduceColourNoise(night, n, n, quiet);
+    float worst = 0;
+    for (size_t i = 0; i < night.size(); ++i) {
+        const float lowest = std::min({0.0f, before[i].x, before[i].y, before[i].z});
+        worst = std::min({worst, night[i].x - lowest, night[i].y - lowest, night[i].z - lowest});
+    }
+    char line[160];
+    std::snprintf(line, sizeof line, "the colour noise reduction takes no channel below black beside a lamp (worst %.2e)",
+                  worst);
+    check(worst > -1e-6f, line);
+}
+
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
@@ -567,40 +701,112 @@ int main(int argc, char **argv)
 
     try {
         PackLibrary packs(packsDir);
+        // The paper as a film is picked (Settings, Film & Paper), in both rules:
+        // tests/app's sequence, the memory kept as the documents keep it.
         Recipe r;
-        auto pick = [&](const std::string &stock) { r = loadingFilm(r, stock, packs); };
+        PaperMemory memory;
+        PaperRule rule = PaperRule::FollowsFilm;
+        auto pick = [&](const std::string &stock) { r = pickingFilm(r, stock, packs, rule, memory); };
+        auto paper = [&](const std::string &stock) {
+            rememberPaper(memory, stock, r.filmStock, packs);
+            r.printStock = stock;
+        };
+        auto from = [&](const std::string &film, const std::string &on) {
+            r.filmStock = film;
+            r.printStock = on;
+        };
 
-        std::printf("pick a black-and-white film\n");
-        r.filmStock = "kodak_portra_400";
-        r.printStock = "kodak_portra_endura";
+        std::printf("the paper follows the film\n");
+        from("kodak_portra_400", "kodak_portra_endura");
+        pick("kodak_gold_200");
+        check(r.printStock == "kodak_ektacolor_edge", "Gold 200 brings its own paper, Ektacolor Edge (" + r.printStock + ")");
         pick("kodak_tri_x_400");
-        check(r.filmStock == "kodak_tri_x_400" && r.printStock == "ilford_multigrade_rc_deluxe",
-              "Tri-X moves the print onto its own paper (" + r.printStock + ")");
+        check(r.printStock == "ilford_multigrade_rc_deluxe", "Tri-X its own, Multigrade (" + r.printStock + ")");
+        paper("kodak_portra_endura");
         pick("ilford_hp5_plus");
-        check(r.printStock == "ilford_multigrade_rc_deluxe", "another black-and-white film keeps the paper");
-        r.printStock = "kodak_portra_endura";
-        pick("kodak_tri_x_400");
-        check(r.printStock == "kodak_portra_endura",
-              "a silver film already on colour paper, chosen deliberately, stays there");
-        r.printStock = "ilford_multigrade_rc_deluxe";
-        pick("kodak_portra_400");
-        check(r.printStock == "kodak_portra_endura", "back to colour film, back to its colour paper");
-
-        std::printf("pick a motion picture film\n");
+        check(r.printStock == "ilford_multigrade_rc_deluxe",
+              "HP5 its own again, whatever was chosen for Tri-X (" + r.printStock + ")");
         pick("kodak_exr_200t");
         check(r.printStock == "fujifilm_fcp_3519", "EXR 200T moves the print onto F-CP 3519 (" + r.printStock + ")");
         pick("fujifilm_eterna_500t");
         check(r.printStock == "fujifilm_fcp_3510", "Eterna 500T onto its own, F-CP 3510");
         pick("kodak_5251_50t");
         check(r.printStock == "kodak_5385", "5251 onto its companion print film, 5385 (" + r.printStock + ")");
-        r.printStock = "kodak_2393";
+        pick("kodak_double_x_5222");
+        check(r.printStock == "kodak_2302", "Double-X onto its silver release print film, 2302 (" + r.printStock + ")");
+        paper("kodak_2393");
         pick("kodak_vision3_250d");
         check(r.printStock == "kodak_2383", "Vision3 250D onto 2383, from a print film chosen by hand too");
         pick("kodak_portra_400");
         check(r.printStock == "kodak_portra_endura", "a still film leaves the print film for its own paper");
-        r.printStock = "kodak_2383";
+
+        std::printf("the paper stays with the kind of film\n");
+        memory.clear();
+        rule = PaperRule::StaysWithKind;
+        from("kodak_portra_400", "kodak_portra_endura");
+        pick("kodak_gold_200");
+        check(r.printStock == "kodak_portra_endura", "Gold 200 stays on the colour paper Portra 400 was on");
+        pick("kodak_tri_x_400");
+        check(r.printStock == "ilford_multigrade_rc_deluxe",
+              "Tri-X, the first black-and-white film, its own paper (" + r.printStock + ")");
+        pick("ilford_hp5_plus");
+        check(r.printStock == "ilford_multigrade_rc_deluxe", "another black-and-white film keeps the paper");
+        paper("kodak_portra_endura");
+        pick("kodak_tri_x_400");
+        check(r.printStock == "kodak_portra_endura", "a colour paper chosen for a silver film stays with the next one");
+        paper("ilford_multigrade_rc_deluxe");
+        pick("kodak_portra_400");
+        check(r.printStock == "kodak_portra_endura", "back to colour film, back to the colour paper it was on");
+        paper("fujifilm_crystal_archive_typeii");
+        pick("kodak_tri_x_400");
+        check(r.printStock == "ilford_multigrade_rc_deluxe", "back to black and white, back to its paper");
+        pick("kodak_gold_200");
+        check(r.printStock == "fujifilm_crystal_archive_typeii",
+              "and to colour again, the colour paper picked last (" + r.printStock + ")");
+        pick("kodak_exr_200t");
+        check(r.printStock == "fujifilm_fcp_3519", "the first motion picture film, its own print film, F-CP 3519");
+        pick("fujifilm_eterna_500t");
+        check(r.printStock == "fujifilm_fcp_3519", "another motion picture film keeps the print film");
+        paper("kodak_2393");
+        pick("kodak_vision3_250d");
+        check(r.printStock == "kodak_2393", "a print film chosen by hand stays (" + r.printStock + ")");
+        pick("kodak_double_x_5222");
+        check(r.printStock == "kodak_2302", "Double-X, the first silver motion picture film, its own print film, 2302");
+        pick("kodak_vision3_500t");
+        check(r.printStock == "kodak_2393", "back to colour motion picture film, back to its print film (" + r.printStock + ")");
+        pick("kodak_portra_400");
+        check(r.printStock == "fujifilm_crystal_archive_typeii", "a still film leaves the print film for its colour paper");
+        paper("kodak_2383");
         pick("kodak_gold_200");
         check(r.printStock == "kodak_2383", "a print film chosen for a still film stays");
+        pick("fujifilm_provia_100f");
+        check(r.printStock == "kodak_2383", "a slide, seen on the light table, leaves the paper as it was");
+        pick("kodak_portra_400");
+        check(r.printStock == "kodak_2383", "and the colour negative after it keeps it");
+        check(std::string(paperRuleName(PaperRule::FollowsFilm)) == "film" && paperRuleNamed("kind") == PaperRule::StaysWithKind
+                  && paperRuleNamed("") == PaperRule::StaysWithKind
+                  && filmKindNamed(filmKindName(FilmKind::BlackAndWhiteMotionPicture)) == FilmKind::BlackAndWhiteMotionPicture
+                  && std::string(filmKindName(FilmKind::ColourMotionPicture)) == "colourMotionPicture",
+              "the rule and the kinds by the names the Mac keeps them under");
+
+        std::printf("a picture's start: the default film and paper\n");
+        Recipe start = startingRecipe(packs, "", "");
+        check(start.filmStock == "kodak_portra_400" && start.printStock == "kodak_portra_endura",
+              "with nothing set, Portra 400 on its own paper, as before");
+        start = startingRecipe(packs, "kodak_tri_x_400", "");
+        check(start.filmStock == "kodak_tri_x_400" && start.printStock == "ilford_multigrade_rc_deluxe"
+                  && start.grade == double(packs.pack("kodak_tri_x_400").defaultGrade()),
+              "a default film alone, on its own paper at its own grade (" + start.printStock + ")");
+        start = startingRecipe(packs, "kodak_tri_x_400", "kodak_portra_endura");
+        check(start.filmStock == "kodak_tri_x_400" && start.printStock == "kodak_portra_endura",
+              "and on the default paper set");
+        start = startingRecipe(packs, "fujifilm_provia_100f", "");
+        check(start.filmStock == "fujifilm_provia_100f" && !start.scanFilm
+                  && packs.pack("fujifilm_provia_100f").isViewedDirectly(start.scanFilm),
+              "a default slide is seen on the light table");
+        start = startingRecipe(packs, "not_a_film", "not_a_paper");
+        check(start.filmStock == "kodak_portra_400" && start.printStock == "kodak_portra_endura",
+              "a default film or paper no longer in the app falls back to Portra 400 and its paper");
         groupChecks(packs);
         filmMenuChecks(packs);
         colourFilterChecks(packs);
@@ -609,6 +815,8 @@ int main(int argc, char **argv)
         nameChecks();
         undoChecks();
         libraryChecks();
+        resamplerChecks();
+        decoderDetailChecks();
     } catch (const std::exception &e) {
         std::fprintf(stderr, "flxport-checks: %s\n", e.what());
         return 1;

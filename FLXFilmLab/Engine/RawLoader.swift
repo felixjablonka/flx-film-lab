@@ -134,7 +134,15 @@ enum RawLoader {
         return type.conforms(to: .rawImage) || url.pathExtension.lowercased() == "dng"
     }
 
-    static func load(url: URL, options: Options) throws -> Decoded {
+    /// Decode `url` as `options` say. With `between`, the picture is rendered
+    /// in `strips` bands of rows, top to bottom, and `between` is asked before
+    /// each whether to go on: a decode ahead waits in it while the picture on
+    /// screen is being edited, so a slider's frame waits for one band at most,
+    /// not the whole decode, and stops (CancellationError) when no longer
+    /// wanted. Four bands decode the same pixels as one, to the byte, on the
+    /// Z 7, iPhone, Leica and Ricoh files tried; eight differed by up to 2e-4.
+    static func load(url: URL, options: Options, strips: Int = 4,
+                     between: (() -> Bool)? = nil) throws -> Decoded {
         let image: CIImage
         let isRaw = isRawFile(url)
 
@@ -154,14 +162,38 @@ enum RawLoader {
         guard width > 0, height > 0 else { throw LoadError.renderFailed }
 
         var pixels = [Float](repeating: 0, count: width * height * 4)
+        var stopped = false
         pixels.withUnsafeMutableBytes { raw in
-            context.render(scaled,
-                           toBitmap: raw.baseAddress!,
-                           rowBytes: width * 16,
-                           bounds: extent,
-                           format: .RGBAf,
-                           colorSpace: workingColorSpace)
+            guard let between, strips > 1 else {
+                context.render(scaled,
+                               toBitmap: raw.baseAddress!,
+                               rowBytes: width * 16,
+                               bounds: extent,
+                               format: .RGBAf,
+                               colorSpace: workingColorSpace)
+                return
+            }
+            // The bitmap's first row is the top of `bounds`; Core Image's y
+            // runs up from the bottom.
+            let rows = (height + strips - 1) / strips
+            var y = 0
+            while y < height {
+                let band = min(rows, height - y)
+                guard between() else {
+                    stopped = true
+                    return
+                }
+                context.render(scaled,
+                               toBitmap: raw.baseAddress! + y * width * 16,
+                               rowBytes: width * 16,
+                               bounds: CGRect(x: extent.minX, y: extent.maxY - CGFloat(y + band),
+                                              width: extent.width, height: CGFloat(band)),
+                               format: .RGBAf,
+                               colorSpace: workingColorSpace)
+                y += band
+            }
         }
+        if stopped { throw CancellationError() }
 
         let properties = metadata(of: url)
         let tiff = properties?[kCGImagePropertyTIFFDictionary] as? [CFString: Any]
@@ -319,6 +351,15 @@ enum RawLoader {
         }
     }
 
+    /// The decode at the preview's size: Core Image's Lanczos, each channel
+    /// held to the light under the filter's main lobe, as `Resampler` holds
+    /// the export's. Lanczos rings at a hard edge, and here, before the film,
+    /// the dark side of a bright light rang below black: no exposure at all,
+    /// which the film printed as a black speck. DSC_0805's lit facades and
+    /// the branches against the sun in DSC_0871 had five to six times as many
+    /// pixels below -0.005 as at full size, down to -0.16. The bounds are the
+    /// darkest and the lightest light within a reduction's width, and a pixel
+    /// more, of each pixel's centre.
     private static func downscale(_ image: CIImage, maxDimension: Int?) -> CIImage {
         guard let maxDimension, maxDimension > 0 else { return image }
         let longEdge = max(image.extent.width, image.extent.height)
@@ -328,7 +369,23 @@ enum RawLoader {
         filter.setValue(image, forKey: kCIInputImageKey)
         filter.setValue(scale, forKey: kCIInputScaleKey)
         filter.setValue(1.0, forKey: kCIInputAspectRatioKey)
-        return (filter.outputImage ?? image).clampedToExtent()
+        let lanczos = filter.outputImage ?? image
+        // The main lobe reaches 1/scale pixels of the decode either side of a
+        // pixel's centre; the bound is read at the decode's pixel nearest it.
+        let side = 2 * (Int((1 / scale).rounded(.up)) + 1) + 1
+        func bound(_ name: String) -> CIImage {
+            image.clampedToExtent()
+                .applyingFilter(name, parameters: ["inputWidth": side, "inputHeight": side])
+                .cropped(to: image.extent)
+                .samplingNearest()
+                .transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        }
+        let held = lanczos
+            .applyingFilter("CIMaximumCompositing",
+                            parameters: [kCIInputBackgroundImageKey: bound("CIMorphologyRectangleMinimum")])
+            .applyingFilter("CIMinimumCompositing",
+                            parameters: [kCIInputBackgroundImageKey: bound("CIMorphologyRectangleMaximum")])
+        return held.clampedToExtent()
             .cropped(to: CGRect(x: 0, y: 0,
                                 width: (image.extent.width * scale).rounded(.down),
                                 height: (image.extent.height * scale).rounded(.down)))

@@ -433,14 +433,13 @@ void Inspector::buildStocks()
     body->addWidget(onPaper);
 
     auto *paper = new StockPicker(QStringLiteral("Paper"), stockGroups(m_doc.packs().paperEntries(), false));
-    connect(paper, &Choice::chosen, this,
-            [this](const QVariant &v) { edit([&](Recipe &r) { r.printStock = v.toString().toStdString(); }); });
+    connect(paper, &Choice::chosen, this, [this](const QVariant &v) { m_doc.selectPaper(v.toString().toStdString()); });
     body->addWidget(paper);
 
     auto *reference = new LinkButton(QStringLiteral("Use this film's reference paper"));
     connect(reference, &QPushButton::clicked, this, [this] {
         if (const ProfilePack *f = m_doc.filmPack())
-            edit([&](Recipe &r) { r.printStock = f->targetPrint; });
+            m_doc.selectPaper(f->targetPrint);
     });
     body->addWidget(reference);
 

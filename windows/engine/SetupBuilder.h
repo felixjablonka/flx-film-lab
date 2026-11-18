@@ -27,10 +27,34 @@ EffectsParams effectsFor(const std::optional<GlowLook> &look, int longEdge);
 
 // The film picker's choice (Recipe.loadingFilm): "Print on paper" set by hand
 // is a choice for one kind of film; a grade left at the last film's default
-// moves to this one's; crossing between colour and black and white moves the
-// print to the film's own paper, and a motion picture film onto its own print
-// film; a camera filter the new film is not baked for goes.
-Recipe loadingFilm(const Recipe &recipe, const std::string &stock, PackLibrary &packs);
+// moves to this one's; a camera filter the new film is not baked for goes;
+// and the paper follows as `papers` says. FollowsFilm: each film brings the
+// paper it is printed on by reference, a motion picture film its own print
+// film. StaysWithKind: a paper chosen for the kind of film loaded stays, and
+// crossing to another kind brings back the paper last used with it
+// (`remembered`), or the new film's own; slides and instant prints leave the
+// paper as it was.
+Recipe loadingFilm(const Recipe &recipe, const std::string &stock, PackLibrary &packs,
+                   PaperRule papers = PaperRule::StaysWithKind, const PaperMemory &remembered = {});
+
+// A film picked in Stills or Motion (Recipe.pickingFilm): the paper it was on
+// kept in `memory` as the one last used with the old film's kind, then the
+// film loaded as `papers` says.
+Recipe pickingFilm(const Recipe &recipe, const std::string &stock, PackLibrary &packs, PaperRule papers,
+                   PaperMemory &memory);
+
+// `paper` as the one last used with `film`'s kind (PaperMemory.remember).
+void rememberPaper(PaperMemory &memory, const std::string &paper, const std::string &film, PackLibrary &packs);
+
+// The paper `film` is printed on by reference, if it is one of the papers
+// (NewPictures.ownPaper).
+std::optional<std::string> ownPaper(PackLibrary &packs, const std::string &film);
+
+// The recipe a picture starts afresh with (NewPictures.starting): the default
+// film, `film`, loaded as the Film menu loads one, on the default paper,
+// `paper`, everything else at its default. A film no longer among the packs,
+// or none set, is Portra 400; a paper likewise the film's own.
+Recipe startingRecipe(PackLibrary &packs, const std::string &film, const std::string &paper);
 
 class SetupBuilder
 {

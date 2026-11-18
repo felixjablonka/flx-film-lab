@@ -1,5 +1,7 @@
 #include "Exporter.h"
 
+#include "Resampler.h"
+
 #include <QBuffer>
 #include <QFile>
 #include <QImage>
@@ -182,11 +184,17 @@ QByteArray withExifPng(const QByteArray &png, const QByteArray &exif)
 
 } // namespace
 
-void writeExport(const std::vector<float> &linear, int width, int height, const QString &path, ExportFormat format,
-                 const std::string &colorSpace, const ExportMetadata &metadata)
+QSize writeExport(const std::vector<float> &full, int fullWidth, int fullHeight, const QString &path,
+                  ExportFormat format, const std::string &colorSpace, const ExportMetadata &metadata, int longEdge)
 {
-    if (linear.size() != size_t(width) * height * 4)
+    if (full.size() != size_t(fullWidth) * fullHeight * 4)
         fail(QStringLiteral("the full-resolution render did not complete"));
+    // plain ints, not a structured binding: the lambdas below capture them
+    const std::pair<int, int> size = resampler::exportSize(fullWidth, fullHeight, longEdge);
+    const int width = size.first, height = size.second;
+    const std::vector<float> shrunk = width == fullWidth && height == fullHeight
+        ? std::vector<float>{} : resampler::shrink(full, fullWidth, fullHeight, width, height);
+    const std::vector<float> &linear = shrunk.empty() ? full : shrunk;
     const bool proPhoto = colorSpace == "ProPhoto RGB";
     const QColorSpace space = outputColorSpace(colorSpace);
     if (format == ExportFormat::Tiff16) {
@@ -198,7 +206,7 @@ void writeExport(const std::vector<float> &linear, int width, int height, const 
                                                  + 0.5f);
         });
         writeTiff(pixels, width, height, space.iccProfile(), metadata, colorSpace == "sRGB", path);
-        return;
+        return QSize(width, height);
     }
     QImage image(width, height, QImage::Format_RGB888);
     parallelRows(height, [&](int y0, int y1) {
@@ -224,4 +232,5 @@ void writeExport(const std::vector<float> &linear, int width, int height, const 
     QSaveFile file(path);
     if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() || !file.commit())
         fail(QStringLiteral("cannot write %1: %2").arg(path, file.errorString()));
+    return QSize(width, height);
 }

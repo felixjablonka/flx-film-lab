@@ -11,14 +11,16 @@
 
 namespace {
 
-// The RAW files the decoders read, and pictures already rendered: what the
-// Open dialog offers.
+// The RAW files the decoders read, which the film is made from: what a folder
+// lists (FolderBrowser.listing). A JPEG or TIFF beside them, often an export
+// or a Photoshop edit of one, is left out; the Open dialog still offers it on
+// its own.
 const QStringList &pictureSuffixes()
 {
     static const QStringList suffixes{
         "3fr", "ari", "arw", "bay", "cap", "cr2", "cr3", "crw", "dcr", "dcs", "dng", "drf", "eip", "erf", "fff",
         "iiq", "k25", "kdc", "mdc", "mef", "mos", "mrw", "nef", "nrw", "orf", "ori", "pef", "ptx", "raf", "raw",
-        "rw2", "rwl", "rwz", "sr2", "srf", "srw", "x3f", "jpg", "jpeg", "png", "tif", "tiff"};
+        "rw2", "rwl", "rwz", "sr2", "srf", "srw", "x3f"};
     return suffixes;
 }
 

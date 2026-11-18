@@ -6,7 +6,8 @@ layout(local_size_x = 16, local_size_y = 16) in;
 layout(binding = 0) uniform sampler2D src;
 layout(binding = 1, rgba8) uniform writeonly image2D dst;
 layout(std140, binding = 2) uniform Encode {
-    ivec4 modes;           // x: encoding (1 the sRGB curve, 2 ProPhoto's), y: coverage
+    ivec4 modes;           // x: encoding (1 the sRGB curve, 2 ProPhoto's), y: coverage,
+                           // z: 1 blue first (the app's screen: Qt's own order, no swizzle on the CPU)
     vec4 columns;          // the print's shape, as print_and_scan's
     vec4 offsetSize;
     ivec4 shaped;          // x: 1 when the print is turned, levelled or cropped
@@ -35,5 +36,7 @@ void main()
     // conversion to 8 bits lands on the same one: Direct3D's, left to round
     // the float itself, came out one level off Metal's in 4% of the values.
     vec4 rgba = vec4(clamp(c, 0.0, 1.0) * a, a);
+    if (u.modes.z == 1)
+        rgba = rgba.bgra;
     imageStore(dst, gid, floor(rgba * 255.0 + 0.5) / 255.0);
 }

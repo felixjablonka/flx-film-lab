@@ -120,7 +120,7 @@ a video mode. That is where most of the work in this repository went.
 ### What is new
 
 - **A native app.** The model runs on the GPU. A slider move re-renders the
-  2560-pixel preview in about 29 to 50 ms, and a 45-megapixel NEF renders at
+  2560-pixel preview in about 17 to 42 ms, and a 45-megapixel NEF renders at
   full resolution in under a second on an M4 Pro. RAW files decode through macOS
   itself, and nothing in the app needs Python.
 - **Camera-side controls, before the negative.** spektrafilm's controls are
@@ -182,8 +182,8 @@ a video mode. That is where most of the work in this repository went.
   - Tri-X pushed two stops, and Ilford Multigrade paper.
   - Five motion picture print films to print on, beside Kodak's 2383 and
     2393: Fujifilm's F-CP 3519, F-CP 3510 and Eterna-CP 3513DI, Kodak's
-    5385 of 1962, and Kodak's black-and-white 2302. A motion picture film prints
-    on its own print film, as a lab prints it.
+    5385 of 1962, and Kodak's black-and-white 2302. Each motion picture film
+    has its own print film, as a lab prints it.
 
   Each profile's characteristic curves and spectral sensitivities, and, where
   the sheet plots them, its dye spectra and MTF curves, are read off the sheet's
@@ -284,11 +284,26 @@ filter: Red, Wratten 25; paper: Ilford Multigrade RC Deluxe*, or for a slide
 The same line is the image description, where Photos and Lightroom find a
 caption, unless the camera or an editor left one.
 
+The format and the size are chosen beside Export in the toolbar, and kept
+between launches. The size is **Full Size**, or a long edge in pixels, 2048 to
+begin with; **Set Long Edge…** sets another, from 64 to 65,500. The short edge
+follows the picture's shape, and a picture smaller than the long edge is written
+at its own size, never enlarged. A smaller file is made from the full-size
+print, as the loupe shows it, not printed again at that size. It is shrunk in
+linear light, so fine detail, grain and colour keep their brightness: shrunk
+after the tone curve, as most editors shrink a picture, branches against a
+bright sky and grain come out darker. The filter is Lanczos-3, crisp and
+without aliasing; each pixel is held to the light under the filter's main
+lobe, so it does not ring into dark outlines or coloured specks at a hard
+edge.
+
 ## A folder of pictures
 
-**Open Folder** (⇧⌘O, or a folder dropped on the window) lists a folder's
-pictures down the left of the Stills window, in the sidebar (⌃⌘S shows or
-hides it); opening one picture lists its folder too. Click a picture to work
+**Open Folder** (⇧⌘O, or a folder dropped on the window) lists a folder's RAW
+files down the left of the Stills window, in the sidebar (⌃⌘S shows or hides
+it); opening one picture lists its folder too. JPEG and TIFF files are left
+out: the film is made from the camera's raw data, and they are often a RAW's
+own exports or edits. One still opens on its own. Click a picture to work
 on it. ↑ and ↓ in the sidebar, or ⌘↑ and ⌘↓ anywhere, step through them, and
 the pictures either side are decoded ahead, so the next is on screen at once.
 
@@ -303,9 +318,10 @@ the pictures either side are decoded ahead, so the next is on screen at once.
   Settings puts them on one: each keeps its own masks, gradients and crop,
   and has the paste as a step of its own undo history. **Export Selected**
   (⇧⌘E) prints each at full size into a folder, one after another, in the
-  format Export writes and under the name Export gives it. Each is metered
-  on its own, so it prints as it would on screen, and a picture never opened
-  gets the look on screen, its autos as opening it would set them.
+  format and at the size Export writes and under the name Export gives it.
+  Each is metered on its own, so it prints as it would on screen, and a
+  picture never opened gets the look on screen, its autos as opening it
+  would set them.
 - **Kept between launches.** Each picture's settings and flag are kept in the
   app's library, in Application Support, and nothing is written into the
   folder. A folder moved or renamed is found again by its files' names and
@@ -504,8 +520,9 @@ on **Ilford Multigrade RC Deluxe**, and **Kodak Double-X 5222**, Kodak's
 motion picture negative, on its release print film, **Kodak 2302**, each built
 from its maker's datasheet (`docs/profiles.md`). Picking
 one moves the print onto Multigrade, or Double-X onto 2302, and picking a
-colour film again moves it back; a paper chosen on purpose for the kind of film
-already loaded stays.
+colour film again moves it back. A paper chosen on purpose for a kind of film
+stays with it, and comes back when you return to that kind; Settings can have
+each film bring its own paper instead (*Settings*).
 
 - **The film is panchromatic, and bluer than the eye.** Each film sees the
   scene through its own measured spectral sensitivity, so an unfiltered blue
@@ -891,14 +908,14 @@ fitted preview cannot.
 ![The loupe at 100% over Venice in fog, on Kodak EXR 200T printed on Fujifilm F-CP 3519](docs/images/loupe.jpg)
 
 While the loupe is open the picture is held at full size on the GPU, decoded
-as the export decodes it: 0.44 s for a 45 MP Nikon Z 7 frame, which then
-holds 720 MB until the loupe is put away. Only the part under the loupe is
-printed, with the values the preview resolved, from a box of the frame wide
+as the export decodes it: about half a second for a 45 MP Nikon Z 7 frame,
+which then holds 720 MB until the loupe is put away. Only the part under the
+loupe is printed, with the values the preview resolved, from a box of the frame wide
 enough for every blur and the grain's filters to reach into it, so it draws the
 same grains and the same dodges and burns as the whole print. Bloom and glow
 reach further than a part can hold, up to 8% of the frame's long edge, and
 take the light from beyond it from the preview's print. The loupe's pixels are
-the exported file's to 1 of 255. A move takes about 7 ms on a 45 MP frame,
+the exported file's to 1 of 255. A move takes about 6 ms on a 45 MP frame,
 16 ms with bloom and glow on a levelled print.
 
 ## Surround
@@ -929,6 +946,22 @@ keeps it between launches. Its General tab:
   (*Performance*).
 - **Save settings beside images.** A `.flx` file beside each picture or clip
   (*A folder of pictures*).
+
+Its Film & Paper tab:
+
+- **Open with.** What a picture with no settings of its own opens with: the
+  look of the picture before, its film, paper and film character with the
+  exposure, tone and colour fresh, as it always has; or the default film and
+  paper, everything else at its default. The first picture after launch opens
+  with the defaults, and a picture with settings of its own with those.
+- **Default film and paper.** Portra 400 on Portra Endura unless set; a new
+  default film brings its own paper, which can then be changed.
+- **The paper.** When the film changes, it follows the film, each film
+  bringing the paper it is printed on by reference and a motion picture film
+  its own print film; or it stays with the kind of film, colour negatives,
+  motion picture negatives and black-and-white films each keeping theirs, and
+  a film of another kind bringing back the paper last used with it. In Stills
+  and Motion.
 
 Its Films tab chooses which films the Film menu lists, in Stills and Motion:
 every film, in the menu's groups and order, ticked or not, with Show All and
@@ -1053,7 +1086,8 @@ black-and-white motion picture negative, prints on its release print film,
 glows grey in a black-and-white picture.
 
 **Motion picture film, filters and instant prints, as in Stills.** A motion
-picture film prints on its own print film, colour films take the 81C, 812,
+picture film prints on its own print film, or the one last chosen for motion
+picture film (*Settings*), colour films take the 81C, 812,
 82A, 82C, 85 and 85B under Film & Paper, and Polaroid's instant prints are
 seen as the
 prints they are, processed at 70 F.
@@ -1221,8 +1255,15 @@ missing there. The preview's own share is its size's, about 1.6 GB at
 ## Build and run
 
 Needs macOS 26+ on Apple Silicon, and the Command Line Tools. **Xcode is not
-required** — there is no `.xcodeproj`, and Metal shaders are compiled at runtime
-from `FLXFilmLab/Resources/Shaders/flx.metal`.
+required** — there is no `.xcodeproj`. With Xcode and its Metal Toolchain
+component (`xcodebuild -downloadComponent MetalToolchain`), the build compiles
+the shaders ahead into Metal libraries the app loads; without, the app compiles
+`FLXFilmLab/Resources/Shaders/flx.metal` as it starts, about half a second the
+first time. With Xcode, its actool also compiles the layered icon
+(`FLXFilmLab/Resources/AppIcon.icon`), which macOS draws in Liquid Glass and in
+its dark, clear and tinted forms; without, the app carries the flat
+`AppIcon.icns`. The build uses the SDK the releases are built with, 26.5, when
+it is installed, so the app behaves here as it will for everyone.
 
 ```bash
 ./build.sh run
@@ -1274,7 +1315,10 @@ The same engine, headless:
 can edit and pass back with `--recipe`. `--wb` takes a white balance by its
 stored name (`"Daylight D55"`, `"Tungsten 3200 K"`, ...), `--filter` a
 camera filter (`red`, `85b`, ...), and `--processing` an instant print's
-processing temperature (55, 70 or 95, in F).
+processing temperature (55, 70 or 95, in F). `--long-edge 2048` writes the
+print at that long edge, shrunk from the full-size print as Export shrinks it;
+`--size` instead decodes the picture at that size and prints it there, as the
+preview does.
 
 ## Verification
 
@@ -1366,22 +1410,33 @@ On an M4 Pro, a 45 MP Nikon NEF:
 
 | | |
 |---|---|
-| Full-resolution render | 0.36 s |
-| Full pipeline incl. decode and JPEG write | 1.9 s |
-| Preview frame, print or tone slider (2560 px) | ~29 ms |
-| Preview frame, exposure or film-character slider | ~50 ms |
-| Loupe, reading the picture at full size (once) | 0.44 s |
-| Loupe, each move or slider tick (600 × 600 px) | ~7 ms |
+| Full-resolution render | 0.32 s |
+| Full pipeline incl. decode and JPEG write | 1.8 s |
+| Preview frame, print or tone slider (2560 px) | ~17 ms |
+| Preview frame, exposure or film-character slider | ~42 ms |
+| Loupe, reading the picture at full size (once) | 0.49 s |
+| Loupe, each move or slider tick (600 × 600 px) | ~6 ms |
 
 The preview is 2560 pixels on its long side. Preview size, in Settings, also
 offers 1024, 2048, 3072 and 4096, and the choice is kept between launches. At
-2048 the two sliders take about 19 and 33 ms, at 3072 about 42 and 71, and at
-4096 about 73 and 122, for a Mac with the GPU for it. A file smaller than the
+2048 the two sliders take about 12 and 27 ms, at 3072 about 23 and 61, and at
+4096 about 38 and 104, for a Mac with the GPU for it. A file smaller than the
 preview size is shown at its own size; the preview never enlarges it. Of
-those times grain takes about 6 and 10 ms at 2560, and 0.08 s of the
+those times grain takes about 11 and 20 ms at 2560, and 0.15 s of the
 full-resolution render: its three emulsion layers, and printing its mirror
 image, which keeps the colour without taking the grain's coarse structure away
-(*Grain*).
+(*Grain*). While only the controls after the enlarger move (Brightness,
+Density, Contrast, Shadows, Highlights, preflash, dodging and burning), the
+light each negative passed in the enlarger is kept from the frame before, so
+the print stage neither integrates the spectra again nor prints the grain's
+mirror.
+
+The preview is made from the picture decoded at its size: Core Image's
+Lanczos shrinks the camera's light before the film sees it, each channel held
+to the darkest and lightest light within the filter's reach, as a smaller
+export is held (*Opening and exporting*). Unheld, the dark side of a bright
+light rang below black: no exposure at all, which the film printed as a black
+speck beside lamps at night and the sun through branches.
 
 The preview renders on its own actor (`App/RenderEngine.swift`), never on the
 main thread, so the controls stay responsive whatever a frame costs; while one
@@ -1446,7 +1501,7 @@ python tools/bake/build_print_profiles.py  # -> profiles/  (the motion picture p
 python tools/bake/build_instant_profiles.py  # -> profiles/  (the Polaroid instant prints)
 python tools/bake/bake_packs.py       # -> FLXFilmLab/Resources/packs
 python tools/bake/bake_reference.py   # -> tests/parity
-python tools/icon/make_icon.py        # -> FLXFilmLab/Resources/AppIcon.icns, and the icon's two pictures
+python tools/icon/make_icon.py        # -> FLXFilmLab/Resources/AppIcon.icns and AppIcon.icon, and the icon's two pictures
 ```
 
 ## Layout
@@ -1460,15 +1515,15 @@ FLXFilmLab/
   Model/       data-pack decoding, the recipe, shared constants
   UI/          canvas, inspector and its controls, the sidebar, Settings, curves, crop, mask and
                loupe overlays
-  Resources/   baked packs + flx.metal (compiled at runtime)
+  Resources/   baked packs + flx.metal (compiled ahead, or at launch)
   Motion/      the Motion mode
     App/       the clip model
     Video/     frame pipeline, playback, preview, export, look baking
     UI/        preview canvas, transport, inspector
-    Resources/ motion.metal (compiled at runtime)
+    Resources/ motion.metal (compiled ahead, or at launch)
 profiles/      film profiles this repo builds from datasheets
 tools/bake/    Python: datasheet extraction, packs, parity references
-tools/icon/    the app icon's .icns builder (the icon is all rights reserved)
+tools/icon/    the app icon's builder, .icns and .icon (the icon is all rights reserved)
 tools/render/  headless CLI renderer
 tools/lut/     flxlut: a look as a .cube for each log format the Motion mode reads
 windows/       FLX Film Lab for Windows (windows/README.md)

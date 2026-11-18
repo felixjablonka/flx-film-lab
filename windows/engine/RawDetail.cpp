@@ -243,7 +243,12 @@ void repairOvershoot(std::vector<float3> &rgb, int w, int h, const Noise &noise)
         for (int j = begin; j < end; ++j)
             for (int i = 0; i < w; ++i) {
                 const size_t k = size_t(j) * w + i;
-                if (y[k] > 0)
+                // without light, or with a channel below black: beside a
+                // bright light the demosaic's lobes take one channel under
+                // (DSC_0805's lamps: blue to -0.8) while the luminance stays
+                const float3 &p = rgb[k];
+                const float lowestChannel = std::min({p.x, p.y, p.z});
+                if (y[k] > 0 && lowestChannel >= 0)
                     continue;
                 int m = 0;
                 for (int dy = -1; dy <= 1; ++dy)
@@ -258,8 +263,16 @@ void repairOvershoot(std::vector<float3> &rgb, int w, int h, const Noise &noise)
                     }
                 std::nth_element(l, l + 4, l + 8);
                 const float median = l[4];
-                if (median <= 4 * std::sqrt(noise.variance(median)))
+                const float sigma = std::sqrt(noise.variance(median));
+                if (median <= 4 * sigma)
                     continue;                   // in the shadows' noise: left as it is
+                // A channel within four times the noise of black is the
+                // noise's: a saturated colour's weakest channel goes under
+                // by chance, and taking those too changed a tenth of a
+                // picture. Beyond it, the changes brought the port nearer
+                // Apple's decode at three in four of the pixels they moved.
+                if (y[k] > 0 && lowestChannel > -4 * sigma)
+                    continue;
                 float3 v;
                 for (int ch = 0; ch < 3; ++ch) {
                     std::nth_element(c[ch], c[ch] + 4, c[ch] + 8);
@@ -391,7 +404,19 @@ void reduceColourNoise(std::vector<float3> &rgb, int w, int h, const Noise &nois
                 };
                 const float i = full[size_t(y) * w + x];
                 float3 &p = rgb[size_t(y) * w + x];
-                const float r3 = i + up(a1) * i + up(b1), b3 = i + up(a2) * i + up(b2);
+                // The chroma may move a pixel's colour, never take a channel
+                // below black or below where the pixel had it: beside a bright
+                // light of one colour, the light's chroma came onto a dark
+                // pixel and took a channel far under (DSC_0805's lamps: blue
+                // to -7.8, magenta specks in the print). So it is drawn in
+                // towards the pixel's grey, i, until none goes lower.
+                const float lowest = std::min({0.0f, cubeRoot(p.x), cubeRoot(p.y), cubeRoot(p.z)});
+                const float dr = up(a1) * i + up(b1), db = up(a2) * i + up(b2), dg = -(kR * dr + kB * db) / kG;
+                float t = 1;
+                for (const float d : {dr, dg, db})
+                    if (d < 0)
+                        t = std::min(t, (i - lowest) / -d);
+                const float r3 = t < 1 ? i + t * dr : i + dr, b3 = t < 1 ? i + t * db : i + db;
                 const float g3 = (i - kR * r3 - kB * b3) / kG;
                 p = {r3 * r3 * r3, g3 * g3 * g3, b3 * b3 * b3};
             }

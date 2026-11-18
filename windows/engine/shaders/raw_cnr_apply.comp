@@ -9,8 +9,11 @@ layout(local_size_x = 16, local_size_y = 16) in;
 layout(binding = 0) uniform sampler2D ab;           // half size: means of a1, b1, a2, b2
 layout(binding = 1) uniform sampler2D guide;        // full size
 layout(binding = 2, rgba32f) uniform writeonly image2D dst;
+layout(binding = 3) uniform sampler2D before;       // the picture the chroma is taken from
 
 const vec3 kLuma = vec3(0.2627, 0.6780, 0.0593);
+
+float cubeRoot(float v) { return sign(v) * pow(abs(v), 1.0 / 3.0); }
 
 void main()
 {
@@ -26,7 +29,16 @@ void main()
     vec4 bottom = texelFetch(ab, ivec2(x0, y1), 0) * (1.0 - fx) + texelFetch(ab, ivec2(x1, y1), 0) * fx;
     vec4 k = top * (1.0 - fy) + bottom * fy;
     float i = texelFetch(guide, gid, 0).r;
-    float r3 = i + k.x * i + k.y, b3 = i + k.z * i + k.w;
+    // never a channel below black or below where the pixel had it: the
+    // chroma drawn in towards the pixel's grey, i, first (RawDetail's)
+    vec3 p = texelFetch(before, gid, 0).rgb;
+    float lowest = min(0.0, min(cubeRoot(p.r), min(cubeRoot(p.g), cubeRoot(p.b))));
+    float dr = k.x * i + k.y, db = k.z * i + k.w, dg = -(kLuma.x * dr + kLuma.z * db) / kLuma.y;
+    float t = 1.0;
+    if (dr < 0.0) t = min(t, (i - lowest) / -dr);
+    if (dg < 0.0) t = min(t, (i - lowest) / -dg);
+    if (db < 0.0) t = min(t, (i - lowest) / -db);
+    float r3 = t < 1.0 ? i + t * dr : i + dr, b3 = t < 1.0 ? i + t * db : i + db;
     float g3 = (i - kLuma.x * r3 - kLuma.z * b3) / kLuma.y;
     imageStore(dst, gid, vec4(r3 * r3 * r3, g3 * g3 * g3, b3 * b3 * b3, 1.0));
 }

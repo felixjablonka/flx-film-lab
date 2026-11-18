@@ -239,7 +239,21 @@ void MotionDocument::selectFilm(const std::string &stock)
     if (stock == m_look.recipe.filmStock)
         return;
     MotionLook next = m_look;
-    next.recipe = loadingFilm(m_look.recipe, stock, *m_packs);
+    PaperMemory memory = paperMemory();
+    next.recipe = pickingFilm(m_look.recipe, stock, *m_packs, paperRule(), memory);
+    setPaperMemory(memory);
+    setLook(next);
+}
+
+void MotionDocument::selectPaper(const std::string &stock)
+{
+    if (stock == m_look.recipe.printStock)
+        return;
+    PaperMemory memory = paperMemory();
+    rememberPaper(memory, stock, m_look.recipe.filmStock, *m_packs);
+    setPaperMemory(memory);
+    MotionLook next = m_look;
+    next.recipe.printStock = stock;
     setLook(next);
 }
 

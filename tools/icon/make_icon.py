@@ -15,10 +15,13 @@ whose edges are not opaque onto a grey rounded square, which is what a
 pre-shaped Big Sur-style icon with transparent corners and a shadow now gets.
 So the artwork goes in as it is, full-bleed and opaque.
 
-The layered Liquid Glass form (an Icon Composer `.icon`, compiled into
-Assets.car) needs Xcode's actool, which this build does not use; the `.icns`
-is what every macOS from 14 reads. macOS 14 and 15 do not mask icons, so
-there the square shows as a square.
+It also writes the icon's layered form, an Icon Composer document,
+`FLXFilmLab/Resources/AppIcon.icon`: the artwork cut from its white ground as
+one layer, on a white fill. Where Xcode is installed, build.sh compiles it
+with actool into the app's Assets.car, and macOS 26 draws it in Liquid Glass,
+with its dark, clear and tinted forms; without Xcode the app carries the
+`.icns`, which macOS 26 masks and leaves flat. The layer carries the icon's
+reservation too.
 
 It also writes the two pictures made from the icon, both masked to its
 rounded square as macOS draws it: `docs/images/icon.png`, at the top of the
@@ -34,12 +37,16 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import json
+
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from scipy import ndimage
 
 REPO = Path(__file__).resolve().parents[2]
 ARTWORK = Path(__file__).resolve().parent / "AppIcon-artwork.png"
 OUT = REPO / "FLXFilmLab" / "Resources" / "AppIcon.icns"
+LAYERED = REPO / "FLXFilmLab" / "Resources" / "AppIcon.icon"
 SIZE = 1024
 README_ICON = REPO / "docs" / "images" / "icon.png"
 SOCIAL_PREVIEW = Path(__file__).resolve().parent / "social-preview.png"
@@ -63,6 +70,49 @@ def build() -> Path:
     subprocess.run(["iconutil", "-c", "icns", str(iconset), "-o", str(OUT)], check=True)
     print(f"wrote {OUT} ({OUT.stat().st_size / 1024:.0f} KB)")
     return OUT
+
+
+def layered() -> Path:
+    """The Icon Composer document: the artwork's peaks as one layer, cut from
+    its white ground, on a white fill, glass opaque so the colours stay the
+    artwork's, and a shadow in the layer's own colours.
+
+    The cut un-blends the artwork's own anti-aliasing: an edge pixel is the
+    nearest solid colour laid over the white at some coverage, and that
+    coverage becomes its alpha, so no white fringe shows on the dark form."""
+    art = np.asarray(Image.open(ARTWORK).convert("RGB")).astype(np.float64) / 255
+    border = np.concatenate([art[0], art[-1], art[:, 0], art[:, -1]])
+    white = np.median(border, axis=0)
+    away = np.abs(art - white).max(axis=2)
+    solid = ndimage.binary_erosion(ndimage.binary_fill_holes(away > 0.25), iterations=2)
+    _, (iy, ix) = ndimage.distance_transform_edt(~solid, return_indices=True)
+    colour = art[iy, ix]                                  # the nearest solid colour
+    span = colour - white
+    alpha = ((art - white) * span).sum(axis=2) / np.maximum((span * span).sum(axis=2), 1e-6)
+    alpha = np.where(solid, 1.0, np.clip(alpha, 0, 1))
+    near = ndimage.distance_transform_edt(~solid) <= 4
+    alpha = np.where(near, alpha, 0.0)
+    rgba = np.dstack([colour, alpha])
+    layer = Image.fromarray((rgba * 255 + 0.5).astype(np.uint8), "RGBA")
+    layer = layer.convert("RGBa").resize((SIZE, SIZE), Image.LANCZOS).convert("RGBA")
+
+    assets = LAYERED / "Assets"
+    assets.mkdir(parents=True, exist_ok=True)
+    for stale in assets.iterdir():
+        stale.unlink()
+    layer.save(assets / "artwork.png", optimize=True)
+    icon = {
+        "fill": {"solid": "extended-srgb:1.00000,1.00000,1.00000,1.00000"},
+        "groups": [{
+            "layers": [{"image-name": "artwork.png", "name": "artwork"}],
+            "shadow": {"kind": "layer-color", "opacity": 0.5},
+            "translucency": {"enabled": False, "value": 0.5},
+        }],
+        "supported-platforms": {"squares": "shared"},
+    }
+    (LAYERED / "icon.json").write_text(json.dumps(icon, indent=2) + "\n")
+    print(f"wrote {LAYERED}")
+    return LAYERED
 
 
 def rounded(size: int) -> Image.Image:
@@ -146,5 +196,6 @@ def social_preview() -> Path:
 
 if __name__ == "__main__":
     build()
+    layered()
     readme_icon()
     social_preview()

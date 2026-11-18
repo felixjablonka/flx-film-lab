@@ -177,6 +177,12 @@ void RenderEngine::ensureDevice()
     m_renderer = std::make_unique<FilmRenderer>(m_rhi.get(), FilmRenderer::Blur::Own);
     m_renderer->setSkipsUnchangedFilm(true);
     m_renderer->setMeasuresHistogram(true);
+    // The print's exposure kept between a slider's ticks, within a
+    // thirty-second of the GPU's memory, as the Mac's within one of Metal's
+    // recommended working set; where that is unknown, an 8 GB Mac's 160 MB.
+    // A 2560 px preview keeps 160 MB with grain, 4096 px 400 MB.
+    const qint64 free = gpuMemoryFree(m_rhi.get());
+    m_renderer->setKeptExposureBudget(free > 0 ? free / 32 : qint64(160) << 20);
 }
 
 QString RenderEngine::backendName() const
@@ -354,23 +360,27 @@ std::optional<RenderEngine::Output> RenderEngine::render(const Recipe &recipe, i
     BuiltSetup built = setupFor(out.resolved, m_picture.width, m_picture.height, m_fileName);
     // while the crop is drawn, the corners levelling leaves empty are transparent
     shape(built.setup, out.map, wholeFrame);
+    // blue first, the screen image's own byte order (QImage::Format_RGB32 on
+    // a little-endian CPU): wrapped as it is read back, not copied or swizzled
+    built.setup.encode.modes.z = 1;
     updateMasks(out.resolved.masks);
     const double tBuild = double(clock.nsecsElapsed()) / 1e6;
     m_renderer->load(built.setup);
     const double tLoad = double(clock.nsecsElapsed()) / 1e6;
-    std::vector<uint8_t> display;
+    QByteArray display;
     FilmRenderer::Histogram histogram;
-    const double gpu = m_renderer->render(&display, nullptr, &histogram) * 1e3;
+    const double gpu = m_renderer->render(&display, &histogram) * 1e3;
     out.histogram = PrintHistogram{std::move(histogram.after), std::move(histogram.before)};
     const double tRender = double(clock.nsecsElapsed()) / 1e6;
     const QSize size = m_renderer->outputSize();
     const int w = size.width(), h = size.height();
     const bool transparent = built.setup.encode.modes.y != 0;
-    QImage image(w, h, transparent ? QImage::Format_RGBA8888_Premultiplied : QImage::Format_RGBA8888);
-    for (int y = 0; y < h; ++y)
-        std::memcpy(image.scanLine(y), &display[size_t(y) * w * 4], size_t(w) * 4);
-    image.setColorSpace(outputColorSpace(out.resolved.outputColorSpace));
     const QImage::Format format = transparent ? QImage::Format_ARGB32_Premultiplied : QImage::Format_RGB32;
+    // the readback itself, kept alive by the image and its copies
+    auto *bytes = new QByteArray(std::move(display));
+    QImage image(reinterpret_cast<uchar *>(bytes->data()), w, h, w * 4, format,
+                 [](void *held) { delete static_cast<QByteArray *>(held); }, bytes);
+    image.setColorSpace(outputColorSpace(out.resolved.outputColorSpace));
     // For a monitor with a profile of its own, the print goes to it straight
     // from the output space, nothing clipped to sRGB on the way (DisplayColour).
     const QImage shown = displaycolour::active() ? displaycolour::toScreen(image) : QImage();
@@ -392,7 +402,8 @@ std::optional<RenderEngine::Output> RenderEngine::render(const Recipe &recipe, i
     return out;
 }
 
-void RenderEngine::exportTo(const Recipe &recipe, const DecodeKey &key, const QString &path, ExportFormat format)
+QSize RenderEngine::exportTo(const Recipe &recipe, const DecodeKey &key, const QString &path, ExportFormat format,
+                             int longEdge)
 {
     ensureDevice();
     // exactly the values on screen, metered on the same decode
@@ -508,7 +519,7 @@ void RenderEngine::exportTo(const Recipe &recipe, const DecodeKey &key, const QS
     const Provenance made = provenance(resolved, *m_packs, FLX_VERSION_TEXT);
     metadata.software = QString::fromStdString(made.software);
     metadata.provenance = QString::fromStdString(made.description);
-    writeExport(linear, out.width(), out.height(), path, format, resolved.outputColorSpace, metadata);
+    return writeExport(linear, out.width(), out.height(), path, format, resolved.outputColorSpace, metadata, longEdge);
 }
 
 // MARK: - The loupe

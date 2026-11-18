@@ -1,0 +1,36 @@
+#version 440
+// The Lanczos-scaled picture held to the light under the filter's main
+// lobe, channel by channel: between the darkest and the lightest of the
+// source pixels in each output pixel's window (lobeWindows), as RawLoader
+// holds the Mac's preview. RawDecoder's scaleDown.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2D src;      // the picture before scaling
+layout(binding = 1) uniform sampler2D scaled;   // raw_lanczos's result
+layout(binding = 2, rgba32f) uniform writeonly image2D dst;
+layout(std430, binding = 3) readonly buffer WindowsX {
+    int windowsX[];         // first and last source column of each output column
+};
+layout(std430, binding = 4) readonly buffer WindowsY {
+    int windowsY[];         // first and last source row of each output row
+};
+
+void main()
+{
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(dst);
+    if (gid.x >= size.x || gid.y >= size.y) return;
+    int x0 = windowsX[gid.x * 2], x1 = windowsX[gid.x * 2 + 1];
+    int y0 = windowsY[gid.y * 2], y1 = windowsY[gid.y * 2 + 1];
+    vec3 low = texelFetch(src, ivec2(x0, y0), 0).rgb;
+    vec3 high = low;
+    for (int y = y0; y <= y1; ++y)
+        for (int x = x0; x <= x1; ++x) {
+            vec3 v = texelFetch(src, ivec2(x, y), 0).rgb;
+            low = min(low, v);
+            high = max(high, v);
+        }
+    vec3 v = texelFetch(scaled, gid, 0).rgb;
+    imageStore(dst, gid, vec4(max(min(v, high), low), 1.0));
+}

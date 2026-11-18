@@ -272,28 +272,29 @@ func run() async throws {
     check(await settle(m) && m.resolvedRecipe?.brightness == 59.0 / 300,
           "the frame on screen is the last value, not a queued one")
 
-    print("pick a black-and-white film")
-    var start = m.recipe
-    start.filmStock = "kodak_portra_400"
-    start.printStock = "kodak_portra_endura"
-    m.recipe = start
-    m.selectFilm("kodak_tri_x_400")
-    check(m.recipe.filmStock == "kodak_tri_x_400" && m.recipe.printStock == "ilford_multigrade_rc_deluxe",
-          "Tri-X moves the print onto its own paper (\(m.recipe.printStock))")
-    m.selectFilm("ilford_hp5_plus")
-    check(m.recipe.printStock == "ilford_multigrade_rc_deluxe", "another black-and-white film keeps the paper")
-    var onColour = m.recipe
-    onColour.printStock = "kodak_portra_endura"
-    m.recipe = onColour
-    m.selectFilm("kodak_tri_x_400")
-    check(m.recipe.printStock == "kodak_portra_endura",
-          "a silver film already on colour paper, chosen deliberately, stays there")
-    m.recipe.printStock = "ilford_multigrade_rc_deluxe"
-    m.selectFilm("kodak_portra_400")
-    check(m.recipe.printStock == "kodak_portra_endura", "back to colour film, back to its colour paper")
-    check(await settle(m) && m.displayImage != nil, "and it renders")
+    // The paper as a film is picked (Settings, General), in both rules. This
+    // model keeps its settings in the test's own standard defaults: the rule
+    // and the papers remembered start clean, and are cleared after.
+    let standardPrefs = UserDefaults.standard
+    func pickFrom(_ film: String, _ paper: String) {
+        var r = m.recipe
+        r.filmStock = film
+        r.printStock = paper
+        m.recipe = r
+    }
 
-    print("pick a motion picture film")
+    print("the paper follows the film")
+    standardPrefs.removeObject(forKey: PaperMemory.key)
+    standardPrefs.set(PaperRule.followsFilm.rawValue, forKey: PaperRule.key)
+    pickFrom("kodak_portra_400", "kodak_portra_endura")
+    m.selectFilm("kodak_gold_200")
+    check(m.recipe.printStock == "kodak_ektacolor_edge", "Gold 200 brings its own paper, Ektacolor Edge (\(m.recipe.printStock))")
+    m.selectFilm("kodak_tri_x_400")
+    check(m.recipe.printStock == "ilford_multigrade_rc_deluxe", "Tri-X its own, Multigrade (\(m.recipe.printStock))")
+    m.selectPaper("kodak_portra_endura")
+    m.selectFilm("ilford_hp5_plus")
+    check(m.recipe.printStock == "ilford_multigrade_rc_deluxe",
+          "HP5 its own again, whatever was chosen for Tri-X (\(m.recipe.printStock))")
     m.selectFilm("kodak_exr_200t")
     check(m.recipe.printStock == "fujifilm_fcp_3519", "EXR 200T moves the print onto F-CP 3519 (\(m.recipe.printStock))")
     m.selectFilm("fujifilm_eterna_500t")
@@ -302,23 +303,60 @@ func run() async throws {
     check(m.recipe.printStock == "kodak_5385", "5251 onto its companion print film, 5385 (\(m.recipe.printStock))")
     m.selectFilm("kodak_double_x_5222")
     check(m.recipe.printStock == "kodak_2302", "Double-X onto its silver release print film, 2302 (\(m.recipe.printStock))")
-    m.selectFilm("kodak_tri_x_400")
-    check(m.recipe.printStock == "ilford_multigrade_rc_deluxe",
-          "a still silver film leaves 2302 for its own paper (\(m.recipe.printStock))")
-    m.selectFilm("kodak_double_x_5222")
-    m.selectFilm("kodak_vision3_500t")
-    check(m.recipe.printStock == "kodak_2383", "a colour film leaves 2302 for its own print film (\(m.recipe.printStock))")
-    m.recipe.printStock = "kodak_2393"
+    m.selectPaper("kodak_2393")
     m.selectFilm("kodak_vision3_250d")
     check(m.recipe.printStock == "kodak_2383", "Vision3 250D onto 2383, from a print film chosen by hand too")
     m.selectFilm("kodak_portra_400")
     check(m.recipe.printStock == "kodak_portra_endura", "a still film leaves the print film for its own paper")
-    m.recipe.printStock = "kodak_2383"
+    check(await settle(m) && m.displayImage != nil, "and it renders")
+
+    print("the paper stays with the kind of film")
+    standardPrefs.removeObject(forKey: PaperMemory.key)
+    standardPrefs.set(PaperRule.staysWithKind.rawValue, forKey: PaperRule.key)
+    pickFrom("kodak_portra_400", "kodak_portra_endura")
+    m.selectFilm("kodak_gold_200")
+    check(m.recipe.printStock == "kodak_portra_endura", "Gold 200 stays on the colour paper Portra 400 was on")
+    m.selectFilm("kodak_tri_x_400")
+    check(m.recipe.printStock == "ilford_multigrade_rc_deluxe",
+          "Tri-X, the first black-and-white film, its own paper (\(m.recipe.printStock))")
+    m.selectFilm("ilford_hp5_plus")
+    check(m.recipe.printStock == "ilford_multigrade_rc_deluxe", "another black-and-white film keeps the paper")
+    m.selectPaper("kodak_portra_endura")
+    m.selectFilm("kodak_tri_x_400")
+    check(m.recipe.printStock == "kodak_portra_endura", "a colour paper chosen for a silver film stays with the next one")
+    m.selectPaper("ilford_multigrade_rc_deluxe")
+    m.selectFilm("kodak_portra_400")
+    check(m.recipe.printStock == "kodak_portra_endura", "back to colour film, back to the colour paper it was on")
+    m.selectPaper("fujifilm_crystal_archive_typeii")
+    m.selectFilm("kodak_tri_x_400")
+    check(m.recipe.printStock == "ilford_multigrade_rc_deluxe", "back to black and white, back to its paper")
+    m.selectFilm("kodak_gold_200")
+    check(m.recipe.printStock == "fujifilm_crystal_archive_typeii",
+          "and to colour again, the colour paper picked last (\(m.recipe.printStock))")
+    m.selectFilm("kodak_exr_200t")
+    check(m.recipe.printStock == "fujifilm_fcp_3519", "the first motion picture film, its own print film, F-CP 3519")
+    m.selectFilm("fujifilm_eterna_500t")
+    check(m.recipe.printStock == "fujifilm_fcp_3519", "another motion picture film keeps the print film")
+    m.selectPaper("kodak_2393")
+    m.selectFilm("kodak_vision3_250d")
+    check(m.recipe.printStock == "kodak_2393", "a print film chosen by hand stays (\(m.recipe.printStock))")
+    m.selectFilm("kodak_double_x_5222")
+    check(m.recipe.printStock == "kodak_2302", "Double-X, the first silver motion picture film, its own print film, 2302")
+    m.selectFilm("kodak_vision3_500t")
+    check(m.recipe.printStock == "kodak_2393", "back to colour motion picture film, back to its print film (\(m.recipe.printStock))")
+    m.selectFilm("kodak_portra_400")
+    check(m.recipe.printStock == "fujifilm_crystal_archive_typeii", "a still film leaves the print film for its colour paper")
+    m.selectPaper("kodak_2383")
     m.selectFilm("kodak_gold_200")
     check(m.recipe.printStock == "kodak_2383", "a print film chosen for a still film stays")
+    m.selectFilm("fujifilm_provia_100f")
+    check(m.recipe.printStock == "kodak_2383", "a slide, seen on the light table, leaves the paper as it was")
     m.selectFilm("kodak_portra_400")
-    m.recipe.printStock = "kodak_portra_endura"
+    check(m.recipe.printStock == "kodak_2383", "and the colour negative after it keeps it")
+    m.selectPaper("kodak_portra_endura")
     check(await settle(m) && m.displayImage != nil, "and it renders")
+    standardPrefs.removeObject(forKey: PaperMemory.key)
+    standardPrefs.removeObject(forKey: PaperRule.key)
 
     print("pick a slide after setting \"Print on paper\" by hand")
     // Set by hand on a negative, it stayed pinned, and every slide picked
@@ -447,6 +485,17 @@ func run() async throws {
     await m.export(to: out, format: .tiff16)
     let written = CGImageSourceCreateWithURL(out as CFURL, nil).flatMap { CGImageSourceCreateImageAtIndex($0, 0, nil) }
     check(written?.width == 600 && written?.height == 400, "after loading, A exports at \(size(written))")
+
+    print("export at a long edge")
+    let atLongEdge = dir.appendingPathComponent("smaller.jpg")
+    await m.export(to: atLongEdge, format: .jpeg, longEdge: 300)
+    let small = CGImageSourceCreateWithURL(atLongEdge as CFURL, nil).flatMap { CGImageSourceCreateImageAtIndex($0, 0, nil) }
+    check(size(small) == "300x200", "a long edge of 300 px writes A at \(size(small))")
+    check(m.status == "Exported smaller.jpg, 300 × 200", "and the status line says how large: \(m.status)")
+    let larger = dir.appendingPathComponent("larger.jpg")
+    await m.export(to: larger, format: .jpeg, longEdge: 4000)
+    let notEnlarged = CGImageSourceCreateWithURL(larger as CFURL, nil).flatMap { CGImageSourceCreateImageAtIndex($0, 0, nil) }
+    check(size(notEnlarged) == "600x400", "a long edge beyond the picture's leaves it at its own size: \(size(notEnlarged))")
 
     print("export keeps the photograph's metadata")
     // Stored 300x200 and marked to be turned a quarter (orientation 6), as a
@@ -839,6 +888,23 @@ func loupe() async throws {
 /// kept between launches and beside the pictures, a read-only folder, a moved
 /// folder, Paste Settings to Selected, Export Selected, and how many undo
 /// histories are kept.
+/// A folder lists its RAW files, which the film is made from, and not the
+/// JPEGs and TIFFs beside them: a user's folder of NEFs with Photoshop TIFFs
+/// beside them stuck at "decoding…" (2.0.0). The listing goes by file type, so
+/// empty files stand in for the pictures.
+func rawOnlyListing() throws {
+    print("a folder lists its RAW files only")
+    let dir = scratch.appendingPathComponent("mixed")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    for name in ["Z9Z_0486.NEF", "Z9Z_0486-Edit.tif", "R0000320.DNG", "export.jpg", "DSC00012.ARW", "scan.png",
+                 "IMG_0001.CR3", "DSCF1234.RAF", "notes.txt"] {
+        try Data().write(to: dir.appendingPathComponent(name))
+    }
+    let listed = FolderBrowser.listing(dir).map(\.name)
+    check(listed == ["DSC00012.ARW", "DSCF1234.RAF", "IMG_0001.CR3", "R0000320.DNG", "Z9Z_0486.NEF"],
+          "the NEF, DNG, ARW, CR3 and RAF, not the TIFF, JPEG or PNG: \(listed)")
+}
+
 @MainActor
 func folders() async throws {
     let fm = FileManager.default
@@ -897,9 +963,14 @@ func folders() async throws {
     check(m.fileURL == c && !showedLoad, "stepping to a picture decoded ahead never shows a load")
     m.showNeighbour(-1)
     check(await settle(m) && m.fileURL == b, "and back")
+    // Decoding the pictures either side waits for a moving slider to pause,
+    // but not for the picture's own first frame to be half a second old:
+    // stepping on a second later found the next one not decoded yet (2.1.0).
+    check(!m.holdsDecodesAhead, "a picture's first frame does not hold back decoding its neighbours")
 
     print("settings of its own, kept")
     m.recipe.shadows = 0.3
+    check(await settle(m) && m.holdsDecodesAhead, "an edit's frame does, as a moving slider's do")
     await written(m)
     check(m.browser.edited == [b] && m.library.record(for: b)?.edits?.recipe.shadows == 0.3
               && m.library.record(for: a) == nil,
@@ -1023,6 +1094,25 @@ func folders() async throws {
     let printed = CGImageSourceCreateWithURL(out.appendingPathComponent("G_FujifilmProvia100F.jpg") as CFURL, nil)
         .flatMap { CGImageSourceCreateImageAtIndex($0, 0, nil) }
     check(size(printed) == "320x200", "at full size: \(size(printed))")
+    let outSmall = scratch.appendingPathComponent("folders-out-small")
+    try fm.createDirectory(at: outSmall, withIntermediateDirectories: true)
+    m4.exportSelected(to: outSmall, format: .jpeg, longEdge: 160)
+    check(await waitUntil(timeout: 60) { m4.browser.batch == nil }, "a batch at a long edge finishes")
+    // each the shape of its full-size print, with its long edge 160 px
+    func image(_ url: URL) -> CGImage? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        return CGImageSourceCreateImageAtIndex(source, 0, nil)
+    }
+    var smallSizes: [String] = [], wanted: [String] = []
+    var allLong = true
+    for name in made {
+        let full = image(out.appendingPathComponent(name))
+        let want = Resampler.size(width: full?.width ?? 0, height: full?.height ?? 0, longEdge: 160)
+        wanted.append("\(want.width)x\(want.height)")
+        if want.width != 160 { allLong = false }
+        smallSizes.append(size(image(outSmall.appendingPathComponent(name))))
+    }
+    check(!made.isEmpty && smallSizes == wanted && allLong, "each at the long edge, 160 px, in its own shape: \(smallSizes)")
 
     print("undo histories, the latest pictures'")
     let many = root.appendingPathComponent("Many")
@@ -1353,11 +1443,89 @@ func filmMenu() {
     }
 }
 
+/// What a picture with no settings of its own opens with (Settings, General):
+/// the look of the picture before, or the default film and paper; the first
+/// one after launch the defaults either way, and one with settings of its own
+/// those.
+@MainActor
+func newPictures() async throws {
+    print("new pictures: the look before, or the default film and paper")
+    let dir = scratch.appendingPathComponent("new-pictures")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let urls = (0..<6).map { dir.appendingPathComponent("P\($0).tif") }
+    for url in urls { try writeImage(url, width: 300, height: 200, colour: (1, 1, 1)) }
+    let suite = "flx-apptest-new-pictures-\(getpid())"
+    let prefs = UserDefaults(suiteName: suite)!
+    prefs.removePersistentDomain(forName: suite)
+    defer { prefs.removePersistentDomain(forName: suite) }
+    func model() -> DocumentModel {
+        let library = ImageLibrary(directory: dir.appendingPathComponent("library"), defaults: prefs)
+        library.saveDelay = .milliseconds(50)
+        return DocumentModel(presetStore: PresetStore(directory: dir.appendingPathComponent("presets")),
+                             defaults: prefs, library: library)
+    }
+
+    let before = model()
+    before.open(url: urls[0])
+    _ = await settle(before)
+    check(before.recipe.filmStock == "kodak_portra_400" && before.recipe.printStock == "kodak_portra_endura",
+          "with nothing set, the first picture opens on Portra 400 and its paper, as before")
+    before.selectFilm("kodak_gold_200")
+    before.recipe.brightness = 0.2
+    _ = await settle(before)
+    before.open(url: urls[1])
+    _ = await settle(before)
+    check(before.recipe.filmStock == "kodak_gold_200" && before.recipe.brightness == 0,
+          "the next one, the look of the one before, its tone fresh")
+    try? await Task.sleep(for: .milliseconds(1000))
+    before.library.save(wait: true)
+    before.library.finishWriting()
+
+    prefs.set("kodak_tri_x_400", forKey: NewPictures.filmKey)
+    prefs.set("ilford_multigrade_rc_deluxe", forKey: NewPictures.paperKey)
+    let launched = model()
+    launched.open(url: urls[2])
+    _ = await settle(launched)
+    check(launched.recipe.filmStock == "kodak_tri_x_400" && launched.recipe.printStock == "ilford_multigrade_rc_deluxe",
+          "with a default film and paper set, the first picture after launch opens with them")
+    launched.selectFilm("kodak_portra_400")
+    launched.recipe.filmFormat = .thirtyFiveMM
+    _ = await settle(launched)
+    launched.open(url: urls[3])
+    _ = await settle(launched)
+    check(launched.recipe.filmStock == "kodak_portra_400" && launched.recipe.filmFormat == .thirtyFiveMM,
+          "the next one, the look of the one before, as before")
+    prefs.set(NewPictures.defaultStocks.rawValue, forKey: NewPictures.key)
+    launched.open(url: urls[4])
+    _ = await settle(launched)
+    check(launched.recipe.filmStock == "kodak_tri_x_400" && launched.recipe.printStock == "ilford_multigrade_rc_deluxe"
+          && launched.recipe.filmFormat == Recipe().filmFormat,
+          "set to the defaults, the next one opens with the default film and paper, the rest at its default")
+    launched.open(url: urls[0])
+    _ = await settle(launched)
+    check(launched.recipe.filmStock == "kodak_gold_200" && launched.recipe.brightness == 0.2,
+          "a picture with settings of its own opens with them (\(launched.recipe.filmStock))")
+    prefs.set("fujifilm_provia_100f", forKey: NewPictures.filmKey)
+    prefs.removeObject(forKey: NewPictures.paperKey)
+    launched.open(url: urls[5])
+    _ = await settle(launched)
+    check(launched.recipe.filmStock == "fujifilm_provia_100f" && launched.recipe.scanFilm == nil
+          && (try? PackLibrary.shared.pack("fujifilm_provia_100f"))?.isViewedDirectly(scanFilm: launched.recipe.scanFilm) == true,
+          "a default slide opens on the light table")
+    prefs.set("not_a_film", forKey: NewPictures.filmKey)
+    check(NewPictures.starting(prefs).filmStock == "kodak_portra_400",
+          "a default film no longer in the app falls back to Portra 400")
+}
+
 ThumbnailStore.cacheDirectoryOverride = scratch.appendingPathComponent("thumbnails")
 filmMenu()
+try rawOnlyListing()
+// the folder tests' pictures are TIFFs they write: listed as every image is
+FolderBrowser.listsEveryImage = true
 try await folders()
 try await undoRedo()
 try await loupe()
+try await newPictures()
 try await run()
 try? FileManager.default.removeItem(at: scratch)
 print(failures == 0 ? "\nall app checks passed" : "\n\(failures) app check(s) failed")

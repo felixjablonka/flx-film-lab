@@ -109,8 +109,12 @@ public:
     bool printsInSilver();
 
     void open(const QString &path);
-    // The stock picker's choice (Recipe.loadingFilm).
+    // The stock picker's choice, the paper following as Settings say
+    // (Recipe.pickingFilm, PaperRule), as in Stills.
     void selectFilm(const std::string &stock);
+    // The paper picker's: the paper is then the one last used with this kind
+    // of film (PaperMemory), as in Stills.
+    void selectPaper(const std::string &stock);
     void resetExposure();
     void resetTone();
     void resetColour();

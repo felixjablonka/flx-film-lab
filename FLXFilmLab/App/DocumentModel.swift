@@ -124,11 +124,13 @@ final class DocumentModel: ObservableObject {
     /// The original in the print's place, while it is shown.
     @Published private(set) var originalImage: CGImage?
     /// The panels the window's toolbar asks for, which ContentView puts up:
-    /// Open's, Export's, and the sheet that names a new preset. The toolbar is
-    /// the window's (RootView's), the same for both halves, not ContentView's.
+    /// Open's, Export's, the sheet that names a new preset and the one that
+    /// sets the export's long edge. The toolbar is the window's (RootView's),
+    /// the same for both halves, not ContentView's.
     @Published var showsOpenPanel = false
     @Published var showsExportPanel = false
     @Published var showsPresetNaming = false
+    @Published var showsLongEdgeSheet = false
     /// The original of the picture on screen, whole, at the preview's size.
     private var originalFrame: (url: URL, longEdge: Int, image: CGImage)?
     private var originalDecode: Task<Void, Never>?
@@ -144,7 +146,10 @@ final class DocumentModel: ObservableObject {
     /// print actually being made. No view shows it, so it is not published.
     private(set) var resolvedRecipe: Recipe?
     @Published private(set) var isDecoding = false {
-        didSet { updateBusy() }
+        didSet {
+            updateBusy()
+            aheadGate.set(opening: isDecoding)
+        }
     }
     /// A decode or an open that has taken long enough to show, 0.3 s: what the
     /// toolbar, the status line and the white balance's note wait for, so that
@@ -233,8 +238,23 @@ final class DocumentModel: ObservableObject {
     /// Set while one image's edits are swapped in for another's, so the swap
     /// does not trigger re-decodes and renders of its own half-way through.
     private var applyingEdits = false
-    private var renderInFlight = false
+    private var renderInFlight = false {
+        didSet { aheadGate.set(rendering: renderInFlight) }
+    }
     private var renderAgain = false
+    /// When the last frame of an edit to the picture on screen came: with
+    /// `renderInFlight`, whether its frames are coming, as they do while a
+    /// slider moves. A picture's first frame is not an edit's: the picture
+    /// after it is decoded as soon as it has been drawn, so that stepping on
+    /// a second later finds it ready, as before 2.1 (`firstFrameDue`).
+    private var lastFrameAt: Date? {
+        didSet { aheadGate.set(lastFrame: lastFrameAt) }
+    }
+    /// From a picture's arrival to its first frame.
+    private var firstFrameDue = false
+    private var framesComing: Bool {
+        renderInFlight || firstFrameDue || lastFrameAt.map { Date().timeIntervalSince($0) < 0.5 } ?? false
+    }
 
     /// Each picture's own settings and flag, kept between launches.
     let library: ImageLibrary
@@ -248,6 +268,13 @@ final class DocumentModel: ObservableObject {
     /// once. The one on screen shares its pixels with the engine.
     private var decoded: [DecodeKey: RawLoader.Decoded] = [:]
     private var prefetchTask: Task<Void, Never>?
+    /// The neighbour being decoded ahead, with its ticket at `aheadGate`: a
+    /// step to it waits for this decode rather than starting another of the
+    /// same picture beside it, which slowed both (an iPhone DNG's 1.4 s
+    /// became 2.3).
+    private var decodingAhead: (key: DecodeKey, ticket: Int, task: Task<RawLoader.Decoded?, Never>)?
+    /// What the decode ahead, rendered in bands, waits on between them.
+    private let aheadGate = AheadGate()
     /// The pictures visited, the most recent last: only the last
     /// `historiesKept` keep their undo history, so a session through hundreds
     /// of pictures does not hold hundreds of histories.
@@ -354,13 +381,16 @@ final class DocumentModel: ObservableObject {
                    customTemperature: customTemperature, customTint: customTint)
     }
 
-    /// The edits an image opens with: its own if it has been open before this
-    /// session, otherwise the current look with a fresh start for the rest.
+    /// The edits an image opens with: its own if it has any, otherwise, as
+    /// Settings say (`NewPictures`), the look of the picture on screen with a
+    /// fresh start for the rest, or the default film and paper. With no
+    /// picture on screen, the defaults.
     private func edits(for url: URL) -> ImageEdits {
         if url == fileURL { return currentEdits }
         if let remembered = editsByImage[url] { return remembered }
         if let saved = library.record(for: url)?.edits { return saved }
-        let fresh = recipe.carryingLook()
+        let fresh = fileURL != nil && NewPictures.current(defaults) == .carryLook
+            ? recipe.carryingLook() : NewPictures.starting(defaults)
         return ImageEdits(recipe: fresh, whiteBalance: .filmReference,
                           customTemperature: 5500, customTint: 0)
     }
@@ -401,6 +431,25 @@ final class DocumentModel: ObservableObject {
             // Decoded ahead of time, as a neighbour: no settle, no decode.
             decodeTask = Task { [weak self] in
                 await self?.finishDecode(.success(ready), key: key, generation: generation)
+            }
+            return
+        }
+        if let ahead = decodingAhead, ahead.key == key {
+            // Being decoded ahead right now: wait for that decode, which is
+            // further on than a new one would be, and let it go on unpaused.
+            aheadGate.hurry(ahead.ticket)
+            let pending = ahead.task
+            decodeTask = Task { [weak self] in
+                let result: Result<RawLoader.Decoded, Error>
+                if let picture = await pending.value {
+                    result = .success(picture)
+                } else {
+                    result = await Task.detached(priority: .userInitiated) {
+                        Result { try RawLoader.load(url: key.url, options: key.options) }
+                    }.value
+                }
+                guard let self, !Task.isCancelled else { return }
+                await self.finishDecode(result, key: key, generation: generation)
             }
             return
         }
@@ -483,6 +532,8 @@ final class DocumentModel: ObservableObject {
             fileURL = key.url
             browser.current = key.url
             if pendingURL == key.url { pendingURL = nil }
+            firstFrameDue = true
+            lastFrameAt = nil
             // The previous image's readings stay on the sliders until this
             // one's first frame brings its own, a few ms later: blanked, the
             // auto sliders jumped twice at every picture stepped to.
@@ -510,12 +561,19 @@ final class DocumentModel: ObservableObject {
 
     // MARK: - Stocks
 
-    /// Change film the way the stock picker does: crossing between colour and
-    /// black and white also moves the print onto the new film's own paper, and
-    /// a motion picture film onto its own print film (`Recipe.loadingFilm`).
+    /// Change film the way the stock picker does, the paper following as
+    /// Settings say (`Recipe.pickingFilm`, `PaperRule`).
     func selectFilm(_ stock: String) {
         guard stock != recipe.filmStock else { return }
-        recipe = recipe.loadingFilm(stock)
+        recipe = recipe.pickingFilm(stock, defaults)
+    }
+
+    /// Change paper the way the stock picker does: the paper is then the one
+    /// last used with this kind of film (`PaperMemory`).
+    func selectPaper(_ stock: String) {
+        guard stock != recipe.printStock else { return }
+        PaperMemory.remember(stock, with: recipe.filmStock, defaults)
+        recipe.printStock = stock
     }
 
     // MARK: - Copy and paste settings
@@ -688,6 +746,11 @@ final class DocumentModel: ObservableObject {
     private func finishRender(_ result: Result<RenderEngine.Output?, Error>, sourceID: Int) {
         renderInFlight = false
         preview.isRendering = false
+        // An edit's frame, or the picture's first (a frame of one replaced
+        // since counts as neither).
+        if sourceID == loaded?.sourceID {
+            if firstFrameDue { firstFrameDue = false } else { lastFrameAt = Date() }
+        }
         switch result {
         case .success(let output):
             // A frame for an image that has since been replaced is dropped;
@@ -716,12 +779,14 @@ final class DocumentModel: ObservableObject {
 
     // MARK: - Export
 
-    func export(to url: URL, format: Exporter.Format) async {
+    /// Print the picture on screen at full size and write it to `url`, its
+    /// long edge shrunk to `longEdge` when that is smaller (`ExportSize`).
+    func export(to url: URL, format: Exporter.Format, longEdge: Int? = nil) async {
         guard let engine, let loaded, canExport else {
             errorMessage = "Wait for the image to finish loading, then export."
             return
         }
-        status = "Exporting at full resolution…"
+        status = longEdge.map { "Exporting at \($0) px…" } ?? "Exporting at full size…"
         var options = loaded.key.options
         options.maxDimension = nil
         let source = loaded.key.url
@@ -729,10 +794,11 @@ final class DocumentModel: ObservableObject {
         do {
             // Exactly the values on screen, metered on the same decode.
             let resolved = try await engine.resolve(recipe).recipe
-            try await Task.detached(priority: .userInitiated) {
-                try Self.printFullSize(source, options: options, resolved: resolved, to: url, format: format)
+            let written = try await Task.detached(priority: .userInitiated) {
+                try Self.printFullSize(source, options: options, resolved: resolved, to: url, format: format,
+                                       longEdge: longEdge)
             }.value
-            status = "Exported \(url.lastPathComponent)"
+            status = "Exported \(url.lastPathComponent), \(written.width) × \(written.height)"
         } catch {
             errorMessage = error.localizedDescription
             status = statusLine
@@ -824,7 +890,13 @@ final class DocumentModel: ObservableObject {
     }
 
     /// Decode the pictures either side of the one on screen, at the preview's
-    /// size, after it has had its first frame; keep no other decodes.
+    /// size, the next first; keep no other decodes. Each starts once the
+    /// picture on screen has its first frame and its edits' frames have paused
+    /// for half a second (`framesComing`), and is rendered in bands that wait
+    /// the same way (`aheadGate`): a decode holds the GPU for some 0.4 s, and
+    /// a slider moving behind it stalled, a frame of 16 ms taking 60 to 90.
+    /// A step to a picture still being decoded waits for that decode
+    /// (`decodingAhead`).
     private func prefetchNeighbours() {
         prefetchTask?.cancel()
         guard let current = fileURL else { return }
@@ -833,17 +905,47 @@ final class DocumentModel: ObservableObject {
         let wanted = neighbours.map { decodeKey(for: $0) }
         let keep = Set(wanted + [loaded?.key, requested].compactMap { $0 })
         decoded = decoded.filter { keep.contains($0.key) }
+        if let ahead = decodingAhead, !wanted.contains(ahead.key), ahead.key != requested {
+            // a neighbour no more: stopped at its next band
+            aheadGate.dropAll()
+            decodingAhead = nil
+        }
         let missing = wanted.filter { decoded[$0] == nil }
         guard !missing.isEmpty else { return }
         prefetchTask = Task { [weak self] in
             for key in missing {
-                try? await Task.sleep(for: .milliseconds(150))
+                repeat {
+                    try? await Task.sleep(for: .milliseconds(50))
+                    if Task.isCancelled { return }
+                } while self?.framesComing == true
+                guard let self else { return }
+                // Opened meanwhile, or on its way to the screen already.
+                if self.decoded[key] != nil || self.requested == key { continue }
+                let decode: Task<RawLoader.Decoded?, Never>
+                if let ahead = self.decodingAhead, ahead.key == key {
+                    decode = ahead.task
+                } else {
+                    let gate = self.aheadGate, ticket = gate.issue()
+                    decode = Task { await Self.decodeAhead(key, gate: gate, ticket: ticket) }
+                    self.decodingAhead = (key, ticket, decode)
+                }
+                let picture = await decode.value
+                if self.decodingAhead?.key == key { self.decodingAhead = nil }
                 if Task.isCancelled { return }
-                let picture = await Task.detached(priority: .utility) {
-                    try? RawLoader.load(url: key.url, options: key.options)
-                }.value
-                guard let self, !Task.isCancelled else { return }
                 if let picture { self.decoded[key] = picture }
+            }
+        }
+    }
+
+    /// Decode `key` ahead, in bands that wait at `gate` with `ticket`, on a
+    /// queue of its own rather than Swift's thread pool: it may wait between
+    /// bands for as long as a slider moves. Nil if stopped or unreadable.
+    nonisolated private static func decodeAhead(_ key: DecodeKey, gate: AheadGate,
+                                                ticket: Int) async -> RawLoader.Decoded? {
+        await withCheckedContinuation { done in
+            DispatchQueue.global(qos: .utility).async {
+                let decoded = try? RawLoader.load(url: key.url, options: key.options) { gate.proceed(ticket) }
+                done.resume(returning: decoded)
             }
         }
     }
@@ -851,10 +953,14 @@ final class DocumentModel: ObservableObject {
     /// The pictures decoded ahead of time, and how many undo histories are
     /// kept, for the tests.
     var prefetchedPictures: Set<URL> { Set(decoded.keys.map(\.url)) }
+    /// Whether a decode ahead would wait for the frames to pause now.
+    var holdsDecodesAhead: Bool { framesComing }
     var historiesHeld: Int { historyByImage.count }
 
     private func memoryRanShort() {
         prefetchTask?.cancel()
+        aheadGate.dropAll()
+        decodingAhead = nil
         decoded = decoded.filter { $0.key == loaded?.key }
         browser.thumbnails.trim()
         if !showOriginal { originalFrame = nil }
@@ -947,11 +1053,12 @@ final class DocumentModel: ObservableObject {
 
     /// Print every picture selected but the rejects at full size into
     /// `folder`, one after another, each with its own settings, or, never
-    /// opened, the look on screen with its autos as opening it would give it.
-    /// Each is metered on its own preview-sized decode, so it prints as it
-    /// would on screen. The names are the picture's and the film's, as
-    /// Export's; a name already taken gets a number.
-    func exportSelected(to folder: URL, format: Exporter.Format) {
+    /// opened, the look on screen with its autos as opening it would give it,
+    /// and write each at Export's size (`longEdge`). Each is metered on its
+    /// own preview-sized decode, so it prints as it would on screen. The names
+    /// are the picture's and the film's, as Export's; a name already taken
+    /// gets a number.
+    func exportSelected(to folder: URL, format: Exporter.Format, longEdge: Int? = nil) {
         guard browser.batch == nil else { return }
         recordCurrent()
         let urls = browser.selectedForBatch
@@ -984,7 +1091,7 @@ final class DocumentModel: ObservableObject {
                 self?.browser.batch?.current = job.url.lastPathComponent
                 let result = await Task.detached(priority: .utility) {
                     Result { try DocumentModel.printSelected(job.url, edits: job.edits, previewSize: proxy,
-                                                             to: job.target, format: format) }
+                                                             to: job.target, format: format, longEdge: longEdge) }
                 }.value
                 if case .failure(let error) = result {
                     failures.append("\(job.url.lastPathComponent): \(error.localizedDescription)")
@@ -1013,7 +1120,7 @@ final class DocumentModel: ObservableObject {
     /// One picture of a batch, as Export prints the one on screen: metered on
     /// its decode at the preview's size, then printed at full size.
     nonisolated static func printSelected(_ url: URL, edits: ImageEdits, previewSize: Int, to target: URL,
-                                          format: Exporter.Format) throws {
+                                          format: Exporter.Format, longEdge: Int? = nil) throws {
         let film = try? PackLibrary.shared.pack(edits.recipe.filmStock)
         var options = RawLoader.Options(whiteBalance: edits.whiteBalance,
                                         filmReference: film?.referenceIlluminant ?? "D55",
@@ -1025,13 +1132,16 @@ final class DocumentModel: ObservableObject {
                                              height: proxy.height)
         }
         options.maxDimension = nil
-        try printFullSize(url, options: options, resolved: resolved, to: target, format: format)
+        try printFullSize(url, options: options, resolved: resolved, to: target, format: format, longEdge: longEdge)
     }
 
     /// Decode `source` at full size and print it with `resolved`, every meter
-    /// already read, into `url`: Export's render, the batch's too.
+    /// already read, into `url`, shrunk to `longEdge` when that is smaller:
+    /// Export's render, the batch's too. Returns the size written.
+    @discardableResult
     nonisolated static func printFullSize(_ source: URL, options: RawLoader.Options, resolved: Recipe, to url: URL,
-                                          format: Exporter.Format) throws {
+                                          format: Exporter.Format,
+                                          longEdge: Int? = nil) throws -> (width: Int, height: Int) {
         try autoreleasepool {
             let full = try RawLoader.load(url: source, options: options)
             let renderer = try Renderer()
@@ -1044,11 +1154,11 @@ final class DocumentModel: ObservableObject {
             }
             _ = try renderer.render(setup: setup, recipe: resolved)
             guard let linear = renderer.readLinear() else { throw Exporter.ExportError.renderFailed }
-            try Exporter.write(linear: linear, width: Int(renderer.outputSize.width),
-                               height: Int(renderer.outputSize.height),
-                               to: url, format: format, colorSpace: resolved.outputColorSpace,
-                               metadata: RawLoader.metadata(of: source),
-                               provenance: Exporter.Provenance(recipe: resolved))
+            return try Exporter.write(linear: linear, width: Int(renderer.outputSize.width),
+                                      height: Int(renderer.outputSize.height),
+                                      to: url, format: format, colorSpace: resolved.outputColorSpace,
+                                      metadata: RawLoader.metadata(of: source),
+                                      provenance: Exporter.Provenance(recipe: resolved), longEdge: longEdge)
         }
     }
 
@@ -1437,6 +1547,52 @@ final class PrintPreview: ObservableObject {
         map = output.map
         histogram = output.histogram
         milliseconds = output.milliseconds
+    }
+}
+
+/// What a decode ahead waits on between the bands it renders (`RawLoader.load`'s
+/// `between`), on its own thread: set by the model from its frames and its
+/// opening, so a slider moved or a picture opened meanwhile waits for one band
+/// at most; and whether the decode is still wanted. Each decode ahead has a
+/// ticket: the last issued is wanted, and one a step waits for is never
+/// stopped or held.
+final class AheadGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var rendering = false
+    private var opening = false
+    private var lastFrame: Date?
+    private var issued = 0
+    private var wanted = 0
+    private var hurried = 0
+
+    private func locked<T>(_ body: () -> T) -> T { lock.lock(); defer { lock.unlock() }; return body() }
+
+    /// A new decode ahead's ticket, the one wanted from now on.
+    func issue() -> Int { locked { issued += 1; wanted = issued; return issued } }
+    /// None is wanted any more: the one under way stops at its next band,
+    /// unless a step waits for it.
+    func dropAll() { locked { wanted = 0 } }
+    /// A step waits for decode `ticket`: it goes on to the end, unpaused.
+    func hurry(_ ticket: Int) { locked { hurried = ticket } }
+    func set(rendering: Bool) { locked { self.rendering = rendering } }
+    func set(opening: Bool) { locked { self.opening = opening } }
+    func set(lastFrame: Date?) { locked { self.lastFrame = lastFrame } }
+
+    /// Asked before each band of decode `ticket`: false to stop it, true once
+    /// it may go on, when the frames of the picture on screen have paused for
+    /// half a second (as `DocumentModel.framesComing` has it) and no picture
+    /// is being decoded to open.
+    func proceed(_ ticket: Int) -> Bool {
+        while true {
+            let (go, hold): (Bool, Bool) = locked {
+                if ticket == hurried { return (true, false) }
+                let paused = !rendering && !opening && (lastFrame.map { Date().timeIntervalSince($0) >= 0.5 } ?? true)
+                return (wanted == ticket, !paused)
+            }
+            if !go { return false }
+            if !hold { return true }
+            Thread.sleep(forTimeInterval: 0.01)
+        }
     }
 }
 

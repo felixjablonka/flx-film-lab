@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 # the Mac release this port matches
-project(flx_film_lab_win VERSION 2.0.0 LANGUAGES CXX)
+project(flx_film_lab_win VERSION 2.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -27,6 +27,7 @@ set(ENGINE_SOURCES
     engine/MaskRasterizer.cpp
     engine/LogFormats.cpp
     engine/LookLUT.cpp
+    engine/Resampler.cpp
 )
 
 # The kernels, GLSL 440 compute, baked by qsb into SPIR-V (Vulkan), HLSL 5.0
@@ -145,6 +146,7 @@ set(RAW_KERNELS
     engine/shaders/raw_lens.comp
     engine/shaders/raw_turn.comp
     engine/shaders/raw_lanczos.comp
+    engine/shaders/raw_hold.comp
 )
 qt_add_executable(flxport-decode tools/port-decode/main.cpp engine/RawUnpackRawSpeed.cpp engine/RawUnpackLibRaw.cpp
     engine/RawDecoder.cpp engine/RawDetail.cpp engine/GpuDecoder.cpp engine/AppleColour.cpp engine/LensCorrection.cpp
@@ -215,7 +217,7 @@ flx_tool(flxport-export tools/port-export/main.cpp)
 target_sources(flxport-export PRIVATE ${MOTION_SOURCES})
 target_link_libraries(flxport-export PRIVATE flx_ffmpeg)
 # the library's records hold clips' looks too (ImageLibrary), in the Mac's form
-target_sources(flxport-checks PRIVATE app/ImageLibrary.cpp app/AppSettings.cpp ${MOTION_SOURCES})
+target_sources(flxport-checks PRIVATE app/ImageLibrary.cpp app/AppSettings.cpp engine/RawDetail.cpp ${MOTION_SOURCES})
 target_link_libraries(flxport-checks PRIVATE flx_ffmpeg)
 target_compile_definitions(flxport-checks PRIVATE FLX_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 

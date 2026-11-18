@@ -132,6 +132,15 @@ float localGradeOfRow(bool masks, int row)
     return masks ? kLocalGradeMin + (kLocalGradeMax - kLocalGradeMin) * float(row) / float(kToneLutHeight - 1) : 0;
 }
 
+// The rows of a tone table differ only in a mask's local grade: without one,
+// every row is the first, worked out once and copied (ToneCurve.copyFirstRow).
+void copyFirstRow(std::vector<float> &data)
+{
+    const size_t row = size_t(kToneLutWidth) * 4;
+    for (int r = 1; r < kToneLutHeight; ++r)
+        std::copy(data.begin(), data.begin() + std::ptrdiff_t(row), data.begin() + std::ptrdiff_t(row * size_t(r)));
+}
+
 } // namespace
 
 LightnessScale::LightnessScale(const ProfilePack &medium, const SharedData &shared,
@@ -296,7 +305,7 @@ ToneLut buildLUT(const ProfilePack &paper, const Recipe &recipe, float softest, 
     lut.axisStep = step;
     lut.data.assign(size_t(kToneLutWidth) * kToneLutHeight * 4, 0.0f);
     const bool masks = anyMaskGrade(recipe);
-    for (int row = 0; row < kToneLutHeight; ++row) {
+    for (int row = 0; row < (masks ? kToneLutHeight : 1); ++row) {
         const float localGrade = localGradeOfRow(masks, row);
         for (int col = 0; col < kToneLutWidth; ++col) {
             const float x = logE0 + float(col) * step;
@@ -306,6 +315,8 @@ ToneLut buildLUT(const ProfilePack &paper, const Recipe &recipe, float softest, 
             lut.data[base + 3] = 1;
         }
     }
+    if (!masks)
+        copyFirstRow(lut.data);
     return lut;
 }
 
@@ -322,7 +333,7 @@ ToneLut buildTransparencyLUT(const ProfilePack &film, const Recipe &recipe, cons
     lut.axisStep = step;
     lut.data.assign(size_t(kToneLutWidth) * kToneLutHeight * 4, 0.0f);
     const bool masks = anyMaskGrade(recipe);
-    for (int row = 0; row < kToneLutHeight; ++row) {
+    for (int row = 0; row < (masks ? kToneLutHeight : 1); ++row) {
         const float localGrade = localGradeOfRow(masks, row);
         for (int col = 0; col < kToneLutWidth; ++col) {
             const float d = start + float(col) * step;
@@ -336,6 +347,8 @@ ToneLut buildTransparencyLUT(const ProfilePack &film, const Recipe &recipe, cons
             lut.data[base + 3] = 1;
         }
     }
+    if (!masks)
+        copyFirstRow(lut.data);
     return lut;
 }
 
