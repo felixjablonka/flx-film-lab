@@ -1,5 +1,7 @@
 #include "Clip.h"
 
+#include "Paths.h"
+
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
@@ -122,7 +124,7 @@ CameraTags cameraTags(const AVFormatContext *fmt, const std::string &path)
     if (tags.make.empty() && tags.model.rfind("Apple ", 0) == 0)
         tags.make = "Apple";
 
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(fsPath(path), std::ios::binary);
     if (!in)
         return tags;
     in.seekg(0, std::ios::end);

@@ -16,6 +16,30 @@ final class ClipExporter: @unchecked Sendable {
         var display: LookLUT.Output
         /// nil exports the whole clip.
         var timeRange: CMTimeRange?
+        /// ProRes's flavour, HEVC's level and its rate under Custom, as a
+        /// look's `ExportSettings` keep them.
+        var proRes: ProResFlavour = .hq
+        var hevcLevel: HEVCLevel = .standard
+        var hevcCustomMegabits: Double = 100
+
+        init(codec: ExportCodec, display: LookLUT.Output, timeRange: CMTimeRange?) {
+            self.codec = codec
+            self.display = display
+            self.timeRange = timeRange
+        }
+
+        /// As a look's export settings say.
+        init(_ export: ExportSettings, timeRange: CMTimeRange? = nil) {
+            self.init(codec: export.codec, display: export.display, timeRange: timeRange)
+            proRes = export.flavour
+            hevcLevel = export.level
+            hevcCustomMegabits = export.customMegabits
+        }
+
+        var settings: ExportSettings {
+            ExportSettings(codec: codec, display: display, proRes: proRes, hevcLevel: hevcLevel,
+                           hevcCustomMegabits: hevcCustomMegabits)
+        }
     }
 
     enum ExportError: Error, LocalizedError {
@@ -40,8 +64,9 @@ final class ClipExporter: @unchecked Sendable {
     private var isCancelled: Bool { lock.withLock { cancelled } }
     private func fail(_ error: Error) { lock.withLock { if failure == nil { failure = error }; cancelled = true } }
 
-    static func videoSettings(codec: ExportCodec, width: Int, height: Int,
-                              frameRate: Double, sourceDataRate: Float) -> [String: Any] {
+    /// The writer's settings for a clip `width` x `height` at `frameRate`:
+    /// ProRes at its flavour, HEVC 10-bit at its data rate (`ExportSettings`).
+    static func videoSettings(_ options: Options, width: Int, height: Int, frameRate: Double) -> [String: Any] {
         var settings: [String: Any] = [
             AVVideoWidthKey: width,
             AVVideoHeightKey: height,
@@ -51,14 +76,17 @@ final class ClipExporter: @unchecked Sendable {
                 AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2,
             ],
         ]
-        switch codec {
+        switch options.codec {
         case .proRes422HQ:
-            settings[AVVideoCodecKey] = AVVideoCodecType.proRes422HQ
+            switch options.proRes {
+            case .proxy: settings[AVVideoCodecKey] = AVVideoCodecType.proRes422Proxy
+            case .lt: settings[AVVideoCodecKey] = AVVideoCodecType.proRes422LT
+            case .standard: settings[AVVideoCodecKey] = AVVideoCodecType.proRes422
+            case .hq: settings[AVVideoCodecKey] = AVVideoCodecType.proRes422HQ
+            }
         case .hevc10:
             settings[AVVideoCodecKey] = AVVideoCodecType.hevc
-            // A graded image carries more fine detail than flat log footage,
-            // so give it a little more than the source had.
-            let bitRate = min(max(Double(sourceDataRate) * 1.25, 30e6), 300e6)
+            let bitRate = options.settings.megabits(width: width, height: height, frameRate: frameRate) * 1_000_000
             var compression: [String: Any] = [
                 kVTCompressionPropertyKey_ProfileLevel as String: kVTProfileLevel_HEVC_Main10_AutoLevel,
                 AVVideoAverageBitRateKey: bitRate,
@@ -69,15 +97,20 @@ final class ClipExporter: @unchecked Sendable {
         return settings
     }
 
-    /// The source's metadata, with FLX Film Lab, its version and the film,
-    /// filter and paper in place of the camera's software and description.
+    /// The source's metadata, with FLX Film Lab and its version in place of
+    /// the camera's software, and the comment Settings asks for (the film,
+    /// filter and paper or print film) in place of its description. With no
+    /// comment asked for, the camera's description stays.
     static func metadata(_ source: [AVMetadataItem], provenance: Exporter.Provenance) -> [AVMetadataItem] {
-        let replaced: Set<AVMetadataIdentifier> = [.quickTimeMetadataSoftware, .quickTimeMetadataDescription,
-                                                   .quickTimeUserDataSoftware, .quickTimeUserDataDescription,
-                                                   .commonIdentifierSoftware, .commonIdentifierDescription]
+        var replaced: Set<AVMetadataIdentifier> = [.quickTimeMetadataSoftware, .quickTimeUserDataSoftware,
+                                                   .commonIdentifierSoftware]
+        var written = [(AVMetadataIdentifier.quickTimeMetadataSoftware, provenance.software)]
+        if !provenance.description.isEmpty {
+            replaced.formUnion([.quickTimeMetadataDescription, .quickTimeUserDataDescription, .commonIdentifierDescription])
+            written.append((.quickTimeMetadataDescription, provenance.description))
+        }
         var items = source.filter { item in item.identifier.map { !replaced.contains($0) } ?? true }
-        for (identifier, value) in [(AVMetadataIdentifier.quickTimeMetadataSoftware, provenance.software),
-                                    (.quickTimeMetadataDescription, provenance.description)] {
+        for (identifier, value) in written {
             let item = AVMutableMetadataItem()
             item.identifier = identifier
             item.value = value as NSString
@@ -89,7 +122,7 @@ final class ClipExporter: @unchecked Sendable {
 
     /// Export `source` graded with `look` (its print already baked into
     /// `lut`) to `destination`. `progress` runs on an arbitrary queue.
-    func export(source: URL, to destination: URL, look: MotionLook, lut: LookLUT,
+    func export(source: URL, to destination: URL, look: MotionLook, lut: LookLUT, grain: ClipGrain? = nil,
                 options: Options, progress: @escaping @Sendable (Double) -> Void) async throws {
         let info = try await ClipInfo.load(source)
         let asset = AVURLAsset(url: source)
@@ -117,8 +150,7 @@ final class ClipExporter: @unchecked Sendable {
         let width = Int(info.size.width), height = Int(info.size.height)
         let videoInput = AVAssetWriterInput(
             mediaType: .video,
-            outputSettings: Self.videoSettings(codec: options.codec, width: width, height: height,
-                                               frameRate: info.frameRate, sourceDataRate: info.dataRate))
+            outputSettings: Self.videoSettings(options, width: width, height: height, frameRate: info.frameRate))
         videoInput.transform = info.transform
         videoInput.expectsMediaDataInRealTime = false
         let adaptor = AVAssetWriterInputPixelBufferAdaptor(
@@ -186,7 +218,9 @@ final class ClipExporter: @unchecked Sendable {
                     var buffer: CVPixelBuffer?
                     CVPixelBufferPoolCreatePixelBuffer(nil, pool, &buffer)
                     guard let buffer else { throw ExportError.cannotWrite("out of frame buffers") }
-                    try pipeline.renderExport(frame, into: buffer, effects: look.effects,
+                    // each frame its own grains, numbered by its time as the preview's are
+                    let frameGrain = grain?.frame(FrameGrain.frameNumber(at: time.seconds, frameRate: info.frameRate))
+                    try pipeline.renderExport(frame, into: buffer, effects: look.effects, grain: frameGrain,
                                               settings: look.input, display: options.display)
                     guard adaptor.append(buffer, withPresentationTime: time) else {
                         throw ExportError.cannotWrite(writer.error?.localizedDescription ?? "a frame was refused")
@@ -241,6 +275,13 @@ final class ClipExporter: @unchecked Sendable {
         await writer.finishWriting()
         guard writer.status == .completed else {
             throw ExportError.cannotWrite(writer.error?.localizedDescription ?? "unknown error")
+        }
+        // VideoToolbox labels HEVC Main tier, climbing levels with the rate:
+        // the file says the lowest level and tier that hold it instead.
+        if options.codec == .hevc10 {
+            let rate = options.settings.megabits(width: width, height: height, frameRate: info.frameRate)
+            _ = try? HEVCLevels.relabel(destination, as: HEVCLevels.label(width: width, height: height,
+                                                                      frameRate: info.frameRate, megabits: rate))
         }
         progress(1)
     }

@@ -138,6 +138,8 @@ std::string motionChangeName(const MotionLook &a, const MotionLook &b, bool silv
     std::vector<std::string> names = recipeChangeNames(a.recipe, b.recipe, Vocabulary::Photographic, silver);
     if (!(a.effects == b.effects))
         names.push_back("Effects");
+    if (a.grain != b.grain)
+        names.push_back("Grain");
     if (!(a.input == b.input))
         names.push_back("Log Input");
     return stepName(names);

@@ -74,3 +74,8 @@ struct UnreadableFormat : std::runtime_error {
 // The metadata RawSpeed reads none of (orientation, the exposure's, the lens), from
 // LibRaw's parse of the file alone; left as they are where it cannot read it.
 void readMetadataWithLibRaw(const std::string &path, RawMosaic &m);
+// When the picture was taken, seconds since 1970 as LibRaw reads the date and
+// time of the original (local time, to the second), from its parse of the
+// file alone; 0 where the file records none or cannot be read. For a folder
+// sorted by the date shot.
+long long captureTimeWithLibRaw(const std::string &path);

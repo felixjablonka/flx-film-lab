@@ -1,9 +1,14 @@
 #include "Motion.h"
 
+#include "Filters.h"
+#include "HEVCLevels.h"
+
+#include <QFileInfo>
 #include <QJsonDocument>
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 
 // MARK: - Settings
@@ -32,6 +37,155 @@ std::string matrixName(InputSettings::Matrix m)
 std::string exportCodecName(ExportCodec c)
 {
     return c == ExportCodec::HEVC10 ? "HEVC 10-bit" : "ProRes 422 HQ";
+}
+
+std::string exportCodecTitle(ExportCodec c)
+{
+    return c == ExportCodec::HEVC10 ? "HEVC 10-bit" : "ProRes 422";
+}
+
+std::vector<ProResFlavour> proResFlavours()
+{
+    return {ProResFlavour::Proxy, ProResFlavour::LT, ProResFlavour::Standard, ProResFlavour::HQ};
+}
+
+std::string proResFlavourName(ProResFlavour f)
+{
+    switch (f) {
+    case ProResFlavour::Proxy: return "Proxy";
+    case ProResFlavour::LT: return "LT";
+    case ProResFlavour::Standard: return "422";
+    case ProResFlavour::HQ: return "HQ";
+    }
+    return {};
+}
+
+std::string proResFlavourTitle(ProResFlavour f)
+{
+    return f == ProResFlavour::Standard ? "ProRes 422" : "ProRes 422 " + proResFlavourName(f);
+}
+
+double proResMegabits(ProResFlavour f, int width, int height, double frameRate)
+{
+    double at1080p30 = 220;
+    switch (f) {
+    case ProResFlavour::Proxy: at1080p30 = 45; break;
+    case ProResFlavour::LT: at1080p30 = 102; break;
+    case ProResFlavour::Standard: at1080p30 = 147; break;
+    case ProResFlavour::HQ: at1080p30 = 220; break;
+    }
+    return at1080p30 * double(width * height) / (1920 * 1080) * std::max(frameRate, 1.0) / 29.97;
+}
+
+std::vector<HEVCLevel> hevcLevels()
+{
+    return {HEVCLevel::Smaller, HEVCLevel::Standard, HEVCLevel::High, HEVCLevel::Maximum, HEVCLevel::Custom};
+}
+
+std::string hevcLevelName(HEVCLevel l)
+{
+    switch (l) {
+    case HEVCLevel::Smaller: return "Smaller";
+    case HEVCLevel::Standard: return "Standard";
+    case HEVCLevel::High: return "High";
+    case HEVCLevel::Maximum: return "Maximum";
+    case HEVCLevel::Custom: return "Custom";
+    }
+    return {};
+}
+
+std::optional<double> hevcLevelMegabits(HEVCLevel l, int width, int height, double frameRate)
+{
+    const std::vector<double> steps = hevclevels::steps(width, height, frameRate);
+    switch (l) {
+    case HEVCLevel::Smaller: return steps[0] / 2;
+    case HEVCLevel::Standard: return steps[0];
+    case HEVCLevel::High: return steps[1];
+    case HEVCLevel::Maximum: return steps[2];
+    case HEVCLevel::Custom: return std::nullopt;
+    }
+    return std::nullopt;
+}
+
+double ExportSettings::customMegabits() const
+{
+    return std::clamp(hevcCustomMegabits.value_or(100), minMegabits, maxMegabits);
+}
+
+double ExportSettings::megabits(int width, int height, double frameRate) const
+{
+    if (codec == ExportCodec::ProRes422HQ)
+        return proResMegabits(flavour(), width, height, frameRate);
+    return megabits(level(), width, height, frameRate);
+}
+
+double ExportSettings::megabits(HEVCLevel l, int width, int height, double frameRate) const
+{
+    const double rate = hevcLevelMegabits(l, width, height, frameRate).value_or(customMegabits());
+    return std::clamp(rate, minMegabits, maxMegabits);
+}
+
+std::string ExportSettings::compressionTitle() const
+{
+    if (codec == ExportCodec::ProRes422HQ)
+        return proResFlavourName(flavour());
+    return level() == HEVCLevel::Custom ? rate(customMegabits()) : hevcLevelName(level());
+}
+
+std::string ExportSettings::title() const
+{
+    if (codec == ExportCodec::ProRes422HQ)
+        return proResFlavourTitle(flavour());
+    return exportCodecTitle(codec) + ", " + compressionTitle();
+}
+
+std::string ExportSettings::rate(double megabits)
+{
+    char text[32];
+    std::snprintf(text, sizeof text, megabits < 10 ? "%.1f Mbit/s" : "%.0f Mbit/s", megabits);
+    return text;
+}
+
+std::vector<FilmGauge> filmGauges()
+{
+    return {FilmGauge::Sixteen, FilmGauge::ThirtyFive, FilmGauge::Seventy};
+}
+
+std::string filmGaugeName(FilmGauge g)
+{
+    switch (g) {
+    case FilmGauge::Sixteen: return "16 mm";
+    case FilmGauge::ThirtyFive: return "35 mm";
+    case FilmGauge::Seventy: return "70 mm";
+    }
+    return {};
+}
+
+std::pair<double, double> filmGaugeFrameMM(FilmGauge g)
+{
+    switch (g) {
+    case FilmGauge::Sixteen: return {12.52, 7.41};
+    case FilmGauge::ThirtyFive: return {24.89, 18.66};
+    case FilmGauge::Seventy: return {52.48, 23.01};
+    }
+    return {24.89, 18.66};
+}
+
+uint32_t FrameGrain::seed() const
+{
+    return table->stockSeed ^ (clipSeed * 0x9E3779B9u) ^ (uint32_t(frame) * 0x85EBCA6Bu);
+}
+
+uint32_t FrameGrain::clipSeedFor(const std::string &path)
+{
+    return fnv1a(QFileInfo(QString::fromStdString(path)).fileName().toStdString());
+}
+
+int FrameGrain::frameNumber(double seconds, double frameRate)
+{
+    if (!std::isfinite(seconds) || !(frameRate > 0))
+        return 0;
+    return int(std::round(seconds * frameRate));
 }
 
 MotionLook MotionLook::initial()
@@ -118,11 +272,24 @@ QJsonObject motionLookToJson(const MotionLook &look)
     QJsonObject input{{"levels", qs(levelsName(look.input.levels))}, {"matrix", qs(matrixName(look.input.matrix))}};
     if (look.input.format)
         input.insert("format", qs(logFormatName(*look.input.format)));
+    const ExportSettings &ex = look.exportSettings;
+    QJsonObject exported{{"codec", qs(exportCodecName(ex.codec))}, {"display", qs(lutOutputName(ex.display))}};
+    // only what has been chosen, as the Mac's optionals are written
+    if (ex.proRes)
+        exported.insert("proRes", qs(proResFlavourName(*ex.proRes)));
+    if (ex.hevcLevel)
+        exported.insert("hevcLevel", qs(hevcLevelName(*ex.hevcLevel)));
+    if (ex.hevcCustomMegabits)
+        exported.insert("hevcCustomMegabits", *ex.hevcCustomMegabits);
     QJsonObject o{{"recipe", recipeToJson(look.recipe)},
                   {"input", input},
-                  {"export", QJsonObject{{"codec", qs(exportCodecName(look.exportSettings.codec))},
-                                         {"display", qs(lutOutputName(look.exportSettings.display))}}},
+                  {"export", exported},
                   {"version", look.version}};
+    if (look.grain)
+        o.insert("grain", QJsonObject{{"enabled", look.grain->enabled},
+                                      {"gauge", qs(filmGaugeName(look.grain->gauge))},
+                                      {"amount", look.grain->amount},
+                                      {"size", look.grain->size}});
     // Glow's look in its own form, as the recipe's effects are written
     Recipe holder;
     holder.effects = look.effects;
@@ -156,6 +323,25 @@ MotionLook motionLookFromJson(const QJsonObject &o)
     for (LutOutput d : {LutOutput::SRGB, LutOutput::AppleDisplay, LutOutput::BT1886})
         if (ex.value("display").toString() == qs(lutOutputName(d)))
             look.exportSettings.display = d;
+    for (ProResFlavour f : proResFlavours())
+        if (ex.value("proRes").toString() == qs(proResFlavourName(f)))
+            look.exportSettings.proRes = f;
+    for (HEVCLevel l : hevcLevels())
+        if (ex.value("hevcLevel").toString() == qs(hevcLevelName(l)))
+            look.exportSettings.hevcLevel = l;
+    if (ex.value("hevcCustomMegabits").isDouble())
+        look.exportSettings.hevcCustomMegabits = ex.value("hevcCustomMegabits").toDouble();
+    if (o.value("grain").isObject()) {
+        const QJsonObject g = o.value("grain").toObject();
+        MotionGrain grain;
+        grain.enabled = g.value("enabled").toBool(false);
+        for (FilmGauge gauge : filmGauges())
+            if (g.value("gauge").toString() == qs(filmGaugeName(gauge)))
+                grain.gauge = gauge;
+        grain.amount = g.value("amount").toDouble(1);
+        grain.size = g.value("size").toDouble(1);
+        look.grain = grain;
+    }
     // before the clip meter, Auto exposure was forced off rather than chosen
     if (o.value("version").toInt() != 2)
         look.recipe.autoExposure = true;
@@ -305,6 +491,22 @@ struct ExportBlock {
     IVec4 chroma;
 };
 
+// film_grain_layer's, as the film renderer's (FilmRenderer.cpp)
+struct GrainLayerBlock {
+    Vec4 tableTop;
+    Vec4 scale;                     // pixelArea, sizeSquared, amount
+    uint32_t ids[4];                // seed, monochrome, layer, samples
+    uint32_t origin[4];             // where the pixels lie: a whole frame's start at 0
+};
+struct GrainConvolveBlock {
+    IVec4 params;                   // radius, axis, first layer
+};
+struct GrainLightBlock {
+    Vec4 tableTop;                  // print density at the table's last sample, per record
+    Vec4 scale;                     // pixelArea, sizeSquared, amount
+    uint32_t ids[4];                // samples, monochrome
+    Vec4 kept[3];                   // per layer, per record: (sum of the clouds' taps' squares)^2
+};
 } // namespace
 
 FramePipeline::FramePipeline(QRhi *rhi)
@@ -371,12 +573,14 @@ QRhiTexture *FramePipeline::grade(const VideoFrame &f, const FrameReading &r, QS
 }
 
 std::vector<uint8_t> FramePipeline::renderScreen(const VideoFrame &f, const FrameReading &r, QSize size, Mode mode,
-                                                 const EffectsParams &effects, double *seconds)
+                                                 const EffectsParams &effects, double *seconds, const FrameGrain *grain)
 {
     beginLayout();
     QRhiTexture *picture = grade(f, r, size, mode);
     if (mode == Mode::Graded && effects.active())
         picture = applyEffects(picture, effects, QRhiTexture::RGBA32F);
+    if (mode == Mode::Graded && grain && grain->table && grain->settings.isVisible())
+        picture = grained(picture, *grain);
     QRhiTexture *screen = texture(QRhiTexture::RGBA8, size, true);
     m_passSize = size;
     pass("motion_screen", {input(0, picture), B::imageStore(1, kCompute, screen, 0)});
@@ -389,12 +593,14 @@ std::vector<uint8_t> FramePipeline::renderScreen(const VideoFrame &f, const Fram
 }
 
 std::vector<float> FramePipeline::renderLinear(const VideoFrame &f, const FrameReading &r, QSize size, Mode mode,
-                                              const EffectsParams &effects)
+                                              const EffectsParams &effects, const FrameGrain *grain)
 {
     beginLayout();
     QRhiTexture *picture = grade(f, r, size, mode);
     if (mode == Mode::Graded && effects.active())
         picture = applyEffects(picture, effects, QRhiTexture::RGBA32F);
+    if (mode == Mode::Graded && grain && grain->table && grain->settings.isVisible())
+        picture = grained(picture, *grain);
     endLayout();
     QRhiReadbackResult result;
     run({{picture, &result}});
@@ -402,7 +608,8 @@ std::vector<float> FramePipeline::renderLinear(const VideoFrame &f, const FrameR
 }
 
 void FramePipeline::renderExport(const VideoFrame &f, const FrameReading &r, const EffectsParams &effects,
-                                 LutOutput display, Chroma chroma, std::vector<uint16_t> planes[3])
+                                 LutOutput display, Chroma chroma, std::vector<uint16_t> planes[3],
+                                 const FrameGrain *grain)
 {
     beginLayout();
     const QSize size(f.width, f.height);
@@ -410,6 +617,8 @@ void FramePipeline::renderExport(const VideoFrame &f, const FrameReading &r, con
     if (effects.active())
         picture = applyEffects(picture, effects,
                                qint64(f.width) * f.height > 12'000'000 ? QRhiTexture::RGBA16F : QRhiTexture::RGBA32F);
+    if (grain && grain->table && grain->settings.isVisible())
+        picture = grained(picture, *grain);
     const int sx = chroma == Chroma::C444 ? 0 : 1, sy = chroma == Chroma::C420 ? 1 : 0;
     const QSize chromaSize((f.width + (1 << sx) - 1) >> sx, (f.height + (1 << sy) - 1) >> sy);
     QRhiTexture *y = texture(QRhiTexture::R16, size, true);
@@ -429,4 +638,74 @@ void FramePipeline::renderExport(const VideoFrame &f, const FrameReading &r, con
         planes[plane].resize(size_t(result->data.size()) / 2);
         std::memcpy(planes[plane].data(), result->data.constData(), size_t(result->data.size()));
     }
+}
+
+QRhiTexture *FramePipeline::grained(QRhiTexture *lit, const FrameGrain &grain)
+{
+    const PrintGrainTable &table = *grain.table;
+    const QSize size = lit->pixelSize();
+    // The density, two scratch fields, and the grainy density, which the
+    // three layers are added into in full precision; past 12 MP the first
+    // three in half precision, as the film renderer's intermediates.
+    const QRhiTexture::Format working =
+        qint64(size.width()) * size.height() > 12'000'000 ? QRhiTexture::RGBA16F : QRhiTexture::RGBA32F;
+    QRhiTexture *clean = texture(working, size, true);
+    QRhiTexture *scratch1 = texture(working, size, true);
+    QRhiTexture *scratch2 = texture(working, size, true);
+    QRhiTexture *grainy = texture(QRhiTexture::RGBA32F, size, true);
+    QRhiTexture *out = texture(QRhiTexture::RGBA32F, size, true);
+    m_passSize = size;
+    pass("motion_grain_density", {input(0, lit), B::imageStore(1, kCompute, clean, 0)});
+
+    const auto [longMM, shortMM] = filmGaugeFrameMM(grain.settings.gauge);
+    const float pitch = pixelSizeUm(size.width(), size.height(), longMM, shortMM);
+    const float scale = float(grain.settings.size), amount = float(grain.settings.amount);
+    const uint32_t seed = grain.seed();
+    QRhiBuffer *selwyn = storage(table.selwynUm2.data(), table.selwynUm2.size() * sizeof(float));
+    Vec4 kept[3];
+    for (uint32_t layer = 0; layer < 3; ++layer) {
+        const GrainLayerBlock u{{table.tableDensityMax[0], table.tableDensityMax[1], table.tableDensityMax[2], 0},
+                                {pitch * pitch, scale * scale, amount, 0},
+                                {seed, table.monochrome ? 1u : 0u, layer, uint32_t(table.samples)},
+                                {0, 0, 0, 0}};
+        pass("film_grain_layer", {input(0, clean), B::imageStore(1, kCompute, scratch1, 0),
+                                  B::uniformBuffer(2, kCompute, uniform(u)), B::bufferLoad(3, kCompute, selwyn)});
+        // each record's clouds for this layer, in pixels, padded to one radius
+        std::vector<double> kernels[3];
+        size_t radius = 0;
+        float keptHere[3];
+        for (int c = 0; c < 3; ++c) {
+            kernels[c] = cloudFilter(double(table.cloudUm[c * 3 + int(layer)] * scale / pitch));
+            radius = std::max(radius, kernels[c].size() / 2);
+            double squares = 0;
+            for (double k : kernels[c])
+                squares += k * k;
+            keptHere[c] = float(squares * squares);
+        }
+        kept[layer] = {keptHere[0], keptHere[1], keptHere[2], 0};
+        std::vector<Vec4> taps;
+        for (size_t i = 0; i <= 2 * radius; ++i) {
+            float v[3];
+            for (int c = 0; c < 3; ++c) {
+                const long j = long(i) - long(radius) + long(kernels[c].size() / 2);
+                v[c] = j >= 0 && j < long(kernels[c].size()) ? float(kernels[c][size_t(j)]) : 0;
+            }
+            taps.push_back({v[0], v[1], v[2], 0});
+        }
+        QRhiBuffer *w = storage(taps.data(), taps.size() * sizeof(Vec4));
+        pass("grain_convolve", {input(0, scratch1), B::imageStore(1, kCompute, scratch2, 0), B::bufferLoad(2, kCompute, w),
+                                B::uniformBuffer(3, kCompute, uniform(GrainConvolveBlock{{int(radius), 0, 0, 0}}))});
+        pass("grain_convolve_add",
+             {input(0, scratch2), input(1, clean), B::imageLoadStore(2, kCompute, grainy, 0), B::bufferLoad(3, kCompute, w),
+              B::uniformBuffer(4, kCompute, uniform(GrainConvolveBlock{{int(radius), 1, layer == 0 ? 1 : 0, 0}}))});
+    }
+    const GrainLightBlock light{{table.tableDensityMax[0], table.tableDensityMax[1], table.tableDensityMax[2], 0},
+                                {pitch * pitch, scale * scale, amount, 0},
+                                {uint32_t(table.samples), table.monochrome ? 1u : 0u, 0, 0},
+                                {kept[0], kept[1], kept[2]}};
+    QRhiBuffer *response = storage(table.response.data(), table.response.size() * sizeof(float));
+    pass("motion_grain_light", {input(0, grainy), input(1, clean), B::imageStore(2, kCompute, out, 0),
+                                B::uniformBuffer(3, kCompute, uniform(light)), B::bufferLoad(4, kCompute, selwyn),
+                                B::bufferLoad(5, kCompute, response)});
+    return out;
 }

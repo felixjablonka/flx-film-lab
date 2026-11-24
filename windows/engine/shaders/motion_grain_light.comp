@@ -1,0 +1,92 @@
+#version 440
+// Each record's grain, mixed as the print mixes the negative's layers, and
+// back to light (motion.metal grain_light). `grainy` holds the print density
+// with each record's own grain added, in the negative's density
+// (film_grain_layer drew it from the record's coefficient at the negative
+// density that prints the pixel's tone); each channel takes every record's,
+// by how much its print density answers that record's (`response`). The
+// grain is Gaussian in density and light is 10^-density, so it would brighten
+// every pixel by exp(variance ln(10)^2 / 2): taken out here, exactly, from
+// the mixed grain's variance at the pixel's clean density. The mean stays
+// the grain-free frame's, as in Stills (grain_restore_mean).
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2D grainy;
+layout(binding = 1) uniform sampler2D clean;
+layout(binding = 2, rgba32f) uniform writeonly image2D dst;
+layout(std140, binding = 3) uniform GrainLight {
+    vec4 tableTop;         // print density at the table's last sample, per record
+    vec4 scale;            // pixelArea (um^2 of film), sizeSquared, amount
+    uvec4 ids;             // samples per record, monochrome (one record: the layers' grain shared by the three)
+    vec4 kept0;            // per layer, per record: the share of the noise's variance its
+    vec4 kept1;            // clouds keep, (sum of the taps' squares)^2
+    vec4 kept2;
+} u;
+layout(std430, binding = 4) readonly buffer Selwyn {
+    float selwyn[];        // [record][sample][layer], OD^2 um^2
+};
+layout(std430, binding = 5) readonly buffer Response {
+    float response[];      // [channel][sample][record]
+};
+
+// Entry `k` of row `row` of a [row][sample][3] table, at density `d` of a
+// scale up to `top`.
+float selwynAt(uint row, uint k, float d, float top)
+{
+    uint samples = u.ids.x;
+    float x = clamp(max(d, 0.0) / max(top, 1e-4), 0.0, 1.0) * float(samples - 1u);
+    uint i = min(uint(x), samples - 2u);
+    float t = x - float(i);
+    return mix(selwyn[(row * samples + i) * 3u + k], selwyn[(row * samples + i + 1u) * 3u + k], t);
+}
+
+float responseAt(uint row, uint k, float d, float top)
+{
+    uint samples = u.ids.x;
+    float x = clamp(max(d, 0.0) / max(top, 1e-4), 0.0, 1.0) * float(samples - 1u);
+    uint i = min(uint(x), samples - 2u);
+    float t = x - float(i);
+    return mix(response[(row * samples + i) * 3u + k], response[(row * samples + i + 1u) * 3u + k], t);
+}
+
+void main()
+{
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(dst);
+    if (gid.x >= size.x || gid.y >= size.y) return;
+    vec3 density = texelFetch(clean, gid, 0).rgb;
+    vec3 g = texelFetch(grainy, gid, 0).rgb - density;
+    // each layer's grain, its standard deviation in each record
+    vec3 sd[3];
+    for (int layer = 0; layer < 3; ++layer) {
+        vec3 v;
+        for (int r = 0; r < 3; ++r) {
+            float s = selwynAt(uint(r), uint(layer), density[r], u.tableTop[r]);
+            v[r] = sqrt(max(s, 0.0) * u.scale.y / u.scale.x) * u.scale.z;
+        }
+        sd[layer] = v;
+    }
+    vec3 kept[3] = vec3[3](u.kept0.rgb, u.kept1.rgb, u.kept2.rgb);
+    vec3 shifted, variance;
+    for (int c = 0; c < 3; ++c) {
+        vec3 answer = vec3(responseAt(uint(c), 0u, density[c], u.tableTop[c]),
+                           responseAt(uint(c), 1u, density[c], u.tableTop[c]),
+                           responseAt(uint(c), 2u, density[c], u.tableTop[c]));
+        shifted[c] = density[c] + dot(answer, g);
+        float v = 0.0;
+        for (int layer = 0; layer < 3; ++layer) {
+            if (u.ids.y != 0u) {
+                // one random field, shared: the records' parts add before squaring
+                float a = dot(answer, sd[layer]);
+                v += a * a * kept[layer].x;
+            } else {
+                vec3 a = answer * sd[layer];
+                v += dot(a * a, kept[layer]);
+            }
+        }
+        variance[c] = v;
+    }
+    const float ln10 = 2.302585093;
+    imageStore(dst, gid, vec4(exp(-ln10 * shifted - 0.5 * ln10 * ln10 * variance), 1.0));
+}

@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Build black-and-white film and paper profiles from manufacturer datasheets.
 
-Six stocks, each from its maker's own sheet in `film spec sheets/`:
+Each stock from its maker's own sheet in `film spec sheets/`:
 
 - Kodak Tri-X 400 (F-4017): spectral sensitivity and the D-76 characteristic
   curves, both vector plots, read exactly. Also pushed two stops: Kodak's D-76
@@ -25,10 +25,24 @@ Six stocks, each from its maker's own sheet in `film spec sheets/`:
   (`fujifilm_bw_sheets`).
 - Ilford Multigrade RC Deluxe: spectral sensitivity and the curves for each
   filter grade, bitmaps, traced.
+- Ilford Multigrade FB Classic (HARMAN technology, Oct 2013): spectral
+  sensitivity and the curves for each filter grade, Excel charts exported as
+  vectors, each grade its own colour (`multigrade_fb_sheet`). The sheet plots
+  density over the paper base and gives the base no figure: RC Deluxe's is
+  taken.
 - Ilford Delta 100, Delta 400, FP4 Plus, Pan F Plus and Ortho Plus (HARMAN
   technology's technical information, 2018-19): the wedge spectrogram and the
   characteristic curve for the developer and time each sheet names, bitmaps
   on a ruled grid, traced (`harman_sheet`).
+- Kodak T-Max P3200 (F-4001, revised 04-19): spectral sensitivity, a vector
+  plot, and the T-MAX Developer small-tank curves, bitmaps, three of them
+  dashed, traced from the right each along its own course
+  (`kodak_bitmap_curves`). Kodak's EI 3200 time, 12 minutes, lies between the
+  11 and 13 minute curves and is interpolated like Tri-X's push.
+- Ilford Delta 3200 (HARMAN technology, Nov 2018, and its edition of May
+  2010): the wedge spectrogram, a bitmap, and the MICROPHEN curves, read off
+  the 2010 edition's vectors, which the 2018 sheet repeats as a bitmap
+  (`delta_3200_sheet`).
 - Kodak Double-X 5222, Kodak's black-and-white motion picture negative, and
   Kodak 2302, the release print film it is printed on (H-1-5222 in its
   editions of 2003 and 2022, H-1-2302): `kodak_bw_cine_sheets`. 2302 is the
@@ -83,6 +97,22 @@ Choices the datasheets leave open, and how they are made here:
   gives filter factors of 2.6x yellow, 4.3x orange (No. 22) and 7.5x red
   against Fujifilm's 2, 4 (No. 21) and 8 for daylight. Read as it stands the
   red comes out 6.6x.
+- T-Max P3200's edition of 03-18 has the same development tables as the
+  revision of 04-19 but plots other curves, and as plotted they put the ISO
+  speed point at ISO 140 to 185, three stops under the film's rating. The
+  04-19 curves at 8 and 9 minutes, near Kodak's times for EI 400 and 800, give
+  ISO 957 and 1207, where Kodak rates the film EI 1000 in T-MAX Developer;
+  they are the ones read. Its spectral curve gives Wratten filter factors of
+  2.0 (No. 8), 10.8 (No. 25), 5.6 (No. 47) and 6.5 (No. 58), where the sheet's
+  daylight table says 1.5, 8, 8 and 6.
+- Delta 3200's sheet plots relative log exposure, rates the film ISO 1000 in
+  ID-11, and gives its EI 3200 curve in MICROPHEN. The axis is made
+  lux-seconds by putting ISO 1000 at the speed point of the MICROPHEN
+  development that meets ISO 6's contrast, 7.7 minutes (`iso_axis_offset`):
+  as if MICROPHEN at that contrast gave ID-11's speed. Its spectrogram, the
+  same in the editions of 2002, 2010 and 2018 and in Delta 400's sheet of
+  2018, is as high at 670 nm as at 550: the film sees red further than the
+  eye.
 - Multigrade's native curve is grade 1 (ISO R110 on Ilford's table): the
   app's Contrast is relative to a paper's own curve with 115 as neutral, so the
   slider then reads close to Multigrade's real ISO-R grades.
@@ -151,6 +181,14 @@ MULTIGRADE_NATIVE_GRADE = "1"     # ISO R110 on Ilford's table
 DOUBLE_X_MINUTES = 6.5            # D-96 at 21 C: the curve the exposure index's "gamma of 0.65" names
 DOUBLE_X_EI = 250                 # daylight, the light its curves are exposed to; 200 to tungsten
 PRINT_2302_GAMMA = 2.5            # the middle of 2302's control gamma, 2.4 to 2.6, on its gamma plot
+P3200_SHEET = "f4001_tmax_p3200-2019.pdf"
+P3200_MINUTES = 12.0              # T-MAX Developer, small tank, 20 C: Kodak's time for EI 3200
+P3200_EI = 3200
+DELTA3200_SHEET = "Delta-3200_201811.pdf"
+DELTA3200_VECTORS = "Delta-3200_2010.pdf"     # the same plots, as vectors
+DELTA3200_MINUTES = 9.0           # MICROPHEN stock, 20 C: Ilford's time for EI 3200
+DELTA3200_EI = 3200
+DELTA3200_ISO = 1000              # Ilford's ISO speed, measured in ID-11 at 20 C
 # A projected print's mid-grey, agx's rule for every print film: 18.4% of the
 # projector's light through it.
 MID_GREY_TRANSMISSION_DENSITY = float(-np.log10(0.184))           # 0.735
@@ -222,6 +260,16 @@ ORTHO = Film("ilford_ortho_plus", "Ilford Ortho Plus", 80,
              "HARMAN technology, ILFORD ORTHO PLUS technical information (Oct 2019), ID-11 stock 8 min at 20 C, "
              "intermittent agitation: the lower of the sheet's two pictorial curves, G-bar 0.62 (Ilford calls "
              "0.62-0.70 normal for camera use, and rates the film ISO 80 to daylight in ID-11 at normal contrast).")
+P3200 = Film("kodak_t_max_p3200", "Kodak T-Max P3200", P3200_EI,
+             "Kodak Alaris F-4001 (revised 04/2019), KODAK PROFESSIONAL T-MAX P3200 Black & White Negative Film / "
+             f"3200TMZ, T-MAX Developer, small tank, {P3200_MINUTES:g} min at 20 C, Kodak's time for EI 3200, "
+             "interpolated between the published 11 and 13 minute curves along exposure at each density "
+             "(bitmaps, traced); diffuse visual density.")
+DELTA3200 = Film("ilford_delta_3200", "Ilford Delta 3200", DELTA3200_EI,
+                 "HARMAN technology, ILFORD DELTA 3200 PROFESSIONAL technical information (Nov 2018), MICROPHEN "
+                 f"stock, {DELTA3200_MINUTES:g} min at 20 C with intermittent agitation, Ilford's time for EI 3200, "
+                 "read off the 2010 edition's vector plot of the same curves (the 2018 sheet's bitmap repeats it, "
+                 "to 0.004 density median).")
 DOUBLEX = Film("kodak_double_x_5222", "Kodak Double-X 5222", DOUBLE_X_EI,
                 "Kodak H-1-5222 (3-22), EASTMAN DOUBLE-X Negative Film 5222 / 7222: its characteristic curve "
                 f"for D-96 at 21 C, {DOUBLE_X_MINUTES:g} min (gamma 0.66), the development its exposure index "
@@ -647,6 +695,68 @@ def multigrade_sheet() -> tuple[np.ndarray, dict[str, np.ndarray]]:
     return spectral, curves
 
 
+def _chart_line(page, colour: tuple[float, float, float], frame, legend) -> np.ndarray:
+    """One series of an Excel chart HARMAN exported as vectors: every straight
+    segment stroked in `colour` inside `frame` (x0, y0, x1, y1), the legend's
+    sample inside `legend` left out, as page points left to right."""
+    points = []
+    for drawing in page.get_drawings():
+        stroke = drawing.get("color")
+        if not stroke or any(abs(a - b) > 0.02 for a, b in zip(stroke, colour)):
+            continue
+        for item in drawing["items"]:
+            if item[0] != "l":
+                continue
+            ends = [(item[1].x, item[1].y), (item[2].x, item[2].y)]
+            if all(legend[0] <= x <= legend[2] and legend[1] <= y <= legend[3] for x, y in ends):
+                continue
+            points += [(x, y) for x, y in ends if frame[0] - 3 <= x <= frame[2] + 3 and frame[1] - 3 <= y <= frame[3] + 3]
+    pts = np.array(sorted(set(points)))
+    return pts[np.r_[True, np.diff(pts[:, 0]) > 1e-6]]
+
+
+MULTIGRADE_FB_SHEET = "MULTIGRADE FB CLASSIC technical data sheet.pdf"
+
+
+def multigrade_fb_sheet() -> tuple[np.ndarray, dict[str, np.ndarray]]:
+    """(wavelength, relative sensitivity) and {grade: (relative log E, density)}
+    off HARMAN's MULTIGRADE FB CLASSIC technical information (Oct 2013): Excel
+    charts exported as vectors, each grade in its own colour."""
+    page1, page2 = (pymupdf.open(str(SHEETS / MULTIGRADE_FB_SHEET))[n] for n in (0, 1))
+
+    # Page 1, "Wedge spectrogram to tungsten light (2856K)": one navy series on
+    # a category axis of 10 nm steps from 300 to 720 nm, the first category
+    # centred half a step in from the frame's left edge, lettered every 50 nm.
+    # No vertical scale is printed. Where the curve runs along the floor, below
+    # 350 nm and past 560, the paper is plotted as seeing nothing, and is left
+    # unplotted, as Multigrade RC Deluxe's sheet leaves it.
+    frame = (332.9, 253.7, 524.1, 319.7)
+    step = (frame[2] - frame[0]) / 43
+    pts = _chart_line(page1, (0.0, 0.0, 0.5), frame, (0, 0, 0, 0))
+    nm = 300.0 + (pts[:, 0] - (frame[0] + step / 2)) / step * 10.0
+    height = frame[3] - pts[:, 1]
+    above = np.flatnonzero(height > 0.05)
+    keep = slice(max(above[0] - 1, 0), above[-1] + 2)
+    spectral = np.stack([nm[keep], height[keep] / height.max()], axis=-1)
+
+    # Page 2, "Characteristic curves": filters 00 to 3 on one chart, 4 and 5,
+    # exposed longer, on another; each frame is log E 0 to 2.5 across and
+    # density 0 to 2.5 up, as lettered.
+    curves = {}
+    for frame, legend, series in (
+            ((345.7, 120.4, 526.7, 212.2), (411.3, 199.0, 518.6, 208.4),
+             {"00": (0.0, 0.0, 0.5), "0": (1.0, 0.0, 1.0), "1": (0.0, 1.0, 0.0), "2": (0.0, 1.0, 1.0),
+              "3": (1.0, 0.0, 0.0)}),
+            ((345.5, 283.6, 526.6, 375.4), (475.9, 360.8, 518.5, 370.0),
+             {"4": (0.0, 0.0, 0.5), "5": (1.0, 0.4, 0.0)})):
+        for grade, colour_ in series.items():
+            p = _chart_line(page2, colour_, frame, legend)
+            e = (p[:, 0] - frame[0]) / (frame[2] - frame[0]) * 2.5
+            d = (frame[3] - p[:, 1]) / (frame[3] - frame[1]) * 2.5
+            curves[grade] = np.stack([e, d], axis=-1)
+    return spectral, curves
+
+
 def harman_spectrogram(pdf: str, page: int, index: int) -> np.ndarray:
     """(wavelength, value as plotted) off one of HARMAN's 2018-19 wedge
     spectrograms: one black curve in a frame (light grey on Ortho Plus), a tick
@@ -758,6 +868,146 @@ def harman_sheet(film: Film) -> tuple[np.ndarray, np.ndarray]:
     return spectral, curve[np.argsort(curve[:, 0])]
 
 
+def kodak_bitmap_curves(pdf: str, page: int, index: int, names: tuple[str, ...],
+                        x_range=(-4.0, 1.0), y_range=(0.0, 4.0), top_density: float = 3.05,
+                        start: float = -3.8, stop: float = 0.05) -> dict[str, np.ndarray]:
+    """(log H, density) for each curve of a Kodak characteristic-curve bitmap,
+    named densest first: the frame is the axes (`x_range` across, `y_range`
+    up), checked against its tick marks; the caption above `top_density` and
+    the legend's box are left out. The curves are told apart by being followed:
+    from the right, where they are far apart, each leftwards along its own
+    course, so a dashed one is carried across its gaps, and a stroke another
+    curve is nearer to is left to it, until the curves meet in the toe."""
+    img = _bitmap(pdf, page, index)
+    dark = img < 140
+    h, w = dark.shape
+    cols, rows = _lines(dark.sum(axis=0), 0.6 * h), _lines(dark.sum(axis=1), 0.6 * w)
+    left, right, top, bottom = cols[0], cols[-1], rows[0], rows[-1]
+    kx = (x_range[1] - x_range[0]) / (right - left)
+    ky = (y_range[1] - y_range[0]) / (top - bottom)
+    to_x = lambda c: x_range[0] + (c - left) * kx                  # noqa: E731
+    to_y = lambda r: y_range[0] + (r - bottom) * ky                # noqa: E731
+    to_col = lambda x: left + (x - x_range[0]) / kx                # noqa: E731
+    to_row = lambda y: bottom + (y - y_range[0]) / ky              # noqa: E731
+    # the ticks inside the bottom edge, at every whole decade, where the frame says
+    strip = dark[int(bottom) - 7:int(bottom) - 2, int(left) + 3:int(right) - 3]
+    ticks = [to_x(g.mean() + int(left) + 3) for g in _runs(strip.sum(axis=0) >= 4, gap=1)]
+    assert ticks and max(abs(t - round(t)) for t in ticks) < 0.02, (pdf, "ticks", ticks)
+    clean = dark.copy()
+    clean[:int(to_row(top_density)), :] = False
+    clean[:, :int(left) + 3] = False
+    clean[:, int(right) - 2:] = False
+    clean[int(bottom) - 8:, :] = False
+    box_rows = [r for r in _lines(dark[:, :int(to_col(-1.5))].sum(axis=1), 0.25 * (to_col(-1.5) - left))
+                if to_row(top_density) < r < to_row(1.5)]
+    if len(box_rows) >= 2:
+        clean[int(box_rows[0]) - 2:int(box_rows[-1]) + 3, :int(to_col(-1.5))] = False
+    columns = list(range(int(to_col(stop)), int(to_col(start)) - 1, -1))
+    runs = {c: [r.mean() for r in _runs(clean[:, c]) if len(r) <= 12] for c in columns}
+    n = len(names)
+    first = next(c for c in columns if len(runs[c]) == n and min(np.diff(sorted(runs[c]))) > 6)
+    tracks = {k: [(first, y)] for k, y in enumerate(sorted(runs[first]))}
+    for c in columns[columns.index(first) + 1:]:
+        preds = {}
+        for k in range(n):
+            pts = np.array(tracks[k][-10:])
+            slope = np.polyfit(pts[:, 0], pts[:, 1], 1)[0] if len(pts) >= 4 else 0.0
+            preds[k] = (pts[-1, 1] + slope * (c - pts[-1, 0]), 2.5 + 0.08 * abs(pts[-1, 0] - c))
+        for k in range(n):
+            y0, reach = preds[k]
+            near = [y for y in runs[c] if abs(y - y0) <= reach]
+            if not near:
+                continue
+            y = min(near, key=lambda v: abs(v - y0))
+            if any(abs(preds[j][0] - y) < abs(y0 - y) - 0.5 and abs(preds[j][0] - y0) > 3.0
+                   for j in range(n) if j != k):
+                continue
+            tracks[k].append((c, y))
+    out = {}
+    for k, name in enumerate(names):
+        pts = np.array(sorted(tracks[k]))
+        out[name] = np.stack([to_x(pts[:, 0]), to_y(pts[:, 1])], axis=-1)
+    return out
+
+
+def _p3200_small_tank_curves() -> dict[float, np.ndarray]:
+    """Page 8, upper left, of the 2019 revision: T-MAX P3200 in T-MAX Developer,
+    small tank, 20 C, at 8, 9, 11 and 13 minutes, a bitmap, traced. (The March
+    2018 edition plots other curves under the same development tables, three
+    stops slower than the film's rating: see the module notes.)"""
+    curves = kodak_bitmap_curves(str(SHEETS / P3200_SHEET), 7, 0, ("13", "11", "9", "8"))
+    return {float(k): v for k, v in curves.items()}
+
+
+def t_max_p3200_sheet() -> tuple[np.ndarray, np.ndarray]:
+    """(wavelength, log sensitivity) and (log H in lux-seconds, density) at
+    Kodak's small-tank time for EI 3200, 12 minutes, between the 11 and 13
+    minute curves."""
+    pdf = str(SHEETS / P3200_SHEET)
+    # Page 7, "Spectral Sensitivity Curves": the upper curve D = 0.3 over
+    # D-min, the lower D = 1.0, the conventional one, which runs off the plot
+    # at 670 nm, two decades down. D-76 at 20 C, effective exposure 1.4 s.
+    _, curves = _vector_plot(pdf, 6, (250, 750))
+    spectral = min(curves, key=lambda c: c[:, 1].max())
+    curve = between_times(_p3200_small_tank_curves(), P3200_MINUTES, np.linspace(-3.75, 0.03, 760))
+    return spectral, curve
+
+
+def delta_3200_curves(developer: str = "MICROPHEN") -> dict[float, np.ndarray]:
+    """(relative log E, density) at 7, 9, 12 and 16 minutes, 20 C, in ILFOTEC
+    DD-X 1+4 or MICROPHEN stock, off page 6 of the 2010 edition, where the plots
+    are vectors (their labels drawn as outlines): calibrated on their gridlines,
+    every 0.5 in relative log E from 0.5 to 4.0 and in density from 0.5 to 2.5.
+    The 2018 sheet repeats them as bitmaps, to 0.004 density median."""
+    from vector_plots import VectorPlot, by_order
+    top = {"MICROPHEN": 308.88, "DD-X": 99.0}[developer]
+    xs = (106.08, 126.72, 147.24, 167.82, 188.4, 208.98, 229.56, 250.08)
+    ys = (328.92 - 308.88, 349.2 - 308.88, 369.48 - 308.88, 389.7 - 308.88, 409.98 - 308.88)
+    plot = VectorPlot(str(SHEETS / DELTA3200_VECTORS), 5, (86.4, top, 270.72, top + 121.44),
+                      tuple(zip(xs, np.arange(0.5, 4.01, 0.5))),
+                      tuple(zip((top + y for y in ys), (2.5, 2.0, 1.5, 1.0, 0.5))))
+    curves = by_order(plot, ("16", "12", "9", "7"), at_x=4.0, polylines=True)
+    return {float(k): v[np.argsort(v[:, 0])] for k, v in curves.items()}
+
+
+def iso_contrast(curve: np.ndarray) -> float:
+    """ISO 6's contrast: the density gained over the 1.30 log H past the speed
+    point; a speed is an ISO speed where it is 0.80."""
+    e = np.linspace(curve[:, 0].min(), curve[:, 0].max(), 2000)
+    d = ds.resample(curve[np.argsort(curve[:, 0])], e)
+    net = d - d.min()
+    return float(np.interp(speed_point(e, net) + 1.30, e, net) - SPEED_POINT_NET_DENSITY)
+
+
+def iso_axis_offset(by_time: dict[float, np.ndarray], iso: float, grid: np.ndarray) -> tuple[float, float, float]:
+    """For a sheet plotted against relative log E: what to add to it to make it
+    lux-seconds, given the maker's ISO speed, by placing that speed at the
+    speed point of the development, between the sheet's curves, that meets
+    ISO 6's contrast. Returns the offset, that development's time and its
+    contrast check."""
+    times = sorted(by_time)
+    contrasts = [iso_contrast(by_time[t]) for t in times]
+    minutes = float(np.interp(0.80, contrasts, times))
+    curve = between_times(by_time, minutes, grid)
+    e = curve[:, 0]
+    net = curve[:, 1] - curve[:, 1].min()
+    return float(np.log10(0.8 / iso) - speed_point(e, net)), minutes, iso_contrast(curve)
+
+
+def delta_3200_sheet() -> tuple[np.ndarray, np.ndarray, float, str]:
+    """(wavelength, relative log sensitivity), (relative log E, density) in
+    MICROPHEN at Ilford's time for EI 3200, and the offset that makes the
+    sheet's relative axis lux-seconds, with how it was found."""
+    spectral = harman_spectrogram(DELTA3200_SHEET, 0, 1)
+    curves = delta_3200_curves("MICROPHEN")
+    offset, minutes, check = iso_axis_offset(curves, DELTA3200_ISO, np.linspace(0.05, 4.2, 830))
+    note = (f"on the sheet's relative axis made absolute by Ilford's ISO speed, ISO {DELTA3200_ISO} (measured in "
+            f"ID-11), placed at the speed point of the MICROPHEN development that meets ISO 6's contrast ("
+            f"{minutes:.1f} min, between the sheet's 7 and 9 minute curves; 0.80 over 1.30 log H, {check:.3f} as "
+            "interpolated), as if MICROPHEN gave ID-11's speed at that contrast")
+    return spectral, curves[DELTA3200_MINUTES], offset, note
+
+
 # --------------------------------------------------------------------------
 # Profiles
 # --------------------------------------------------------------------------
@@ -853,12 +1103,15 @@ def assemble(info: ProfileInfo, log_sensitivity: np.ndarray, base_density: float
 def build_film(film: Film, spectral: np.ndarray, curve: np.ndarray, sensitivity_note: str,
                cross_check=None, metered_at: int | None = None, created: str = "2026-10-14",
                normal_log_h: float | None = None, normal_note: str = "", use: str = "still",
-               target_print: str = PAPER_STOCK, densitometer: str = "diffuse_visual") -> Profile:
+               target_print: str = PAPER_STOCK, densitometer: str = "diffuse_visual",
+               axis_offset: float | None = None, axis_note: str = "") -> Profile:
     """`metered_at`: place mid-grey where a meter set to that exposure index
     puts it on the sheet's absolute lux-second axis, for a film whose rating
-    is not its ISO speed. `normal_log_h`: mid-grey at that log H on the
-    sheet's axis, the maker's own normal exposure (`normal_note` says whose
-    and why). Otherwise mid-grey is 1.007 decades above the ISO speed point."""
+    is not its ISO speed; for a sheet plotted against relative log E,
+    `axis_offset` is what makes its axis lux-seconds (`axis_note` says how it
+    was found). `normal_log_h`: mid-grey at that log H on the sheet's axis,
+    the maker's own normal exposure (`normal_note` says whose and why).
+    Otherwise mid-grey is 1.007 decades above the ISO speed point."""
     if normal_log_h is not None:
         anchor = lambda e, net: normal_log_h
         sheet = np.linspace(curve[:, 0].min(), curve[:, 0].max(), 1024)
@@ -872,13 +1125,14 @@ def build_film(film: Film, spectral: np.ndarray, curve: np.ndarray, sensitivity_
         placement = (f"with the ISO speed point (0.10 over base + fog) {MID_TONE_ABOVE_SPEED_POINT:.3f} "
                      f"decades below mid-grey, box speed ISO {film.iso}")
     else:
-        anchor = lambda e, net: float(np.log10(0.65 * 12.5 / metered_at))
+        offset = axis_offset or 0.0
+        anchor = lambda e, net: float(np.log10(0.65 * 12.5 / metered_at)) - offset
         sheet = np.linspace(curve[:, 0].min(), curve[:, 0].max(), 1024)
         density = ds.resample(curve, sheet)
-        iso = 0.8 / 10 ** speed_point(sheet, density - density.min())
-        placement = (f"with mid-grey where a meter set to EI {metered_at} puts it on the sheet's absolute "
-                     f"axis (log H {np.log10(0.65 * 12.5 / metered_at):.3f}); the curve's own ISO speed "
-                     f"point is ISO {iso:.0f}")
+        iso = 0.8 / 10 ** (speed_point(sheet, density - density.min()) + offset)
+        where = "on the sheet's absolute axis" if axis_offset is None else axis_note
+        placement = (f"with mid-grey where a meter set to EI {metered_at} puts it {where} (log H "
+                     f"{np.log10(0.65 * 12.5 / metered_at):.3f}); the curve's own ISO speed point is ISO {iso:.0f}")
         print(f"    {film.stock}: ISO speed point of the sheet curve ISO {iso:.0f}, rated EI {metered_at}")
     net, base, shift, model = characteristic(curve, anchor, extend=FILM_CURVE_EXTENSION)
 
@@ -915,11 +1169,31 @@ def iso_range(e: np.ndarray, d: np.ndarray) -> float:
     return 100.0 * (shoulder - toe)
 
 
-def build_paper(spectral: np.ndarray, curves: dict[str, np.ndarray]) -> Profile:
+RC_DELUXE_SOURCE = (
+    "Traced off the bitmaps of HARMAN technology, 'New MGRC vs MGIVRC' technical information "
+    f"(Mar 2020): MULTIGRADE RC DELUXE (new) through filter grade {MULTIGRADE_NATIVE_GRADE}, "
+    "MULTIGRADE developer 1+9, 1 min at 20 C;")
+FB_PAPER_STOCK = "ilford_multigrade_fb_classic"
+FB_PAPER_NAME = "Ilford Multigrade FB Classic"
+FB_SOURCE = (
+    "Read off the vector charts of HARMAN technology, MULTIGRADE FB CLASSIC technical information "
+    f"(Oct 2013): MULTIGRADE FB CLASSIC glossy through filter grade {MULTIGRADE_NATIVE_GRADE} (ISO R110 on "
+    "Ilford's table, as on RC Deluxe's), MULTIGRADE developer 1+9, 2 min at 20 C; the sheet plots density "
+    "over the paper base (its curves start at 0.00), and gives the base no figure, so it is Multigrade RC "
+    "Deluxe's, whose sheet plots gross density, an estimate;")
+
+
+def build_paper(spectral: np.ndarray, curves: dict[str, np.ndarray], stock: str = PAPER_STOCK,
+                name: str = PAPER_NAME, source: str = RC_DELUXE_SOURCE, base: float | None = None,
+                created: str = "2026-10-14") -> Profile:
+    """A Multigrade paper at its native grade. `base`, for a sheet that plots
+    density over the paper base, is the base density added under its curves."""
     for g, c in curves.items():
         grid = np.linspace(c[:, 0].min(), c[:, 0].max(), 1024)
         print(f"    grade {g:>2s}: traced ISO R{iso_range(grid, ds.resample(c, grid)):.0f}")
     curve = curves[MULTIGRADE_NATIVE_GRADE]
+    if base is not None:
+        curve = np.stack([curve[:, 0], curve[:, 1] - curve[:, 1].min() + base], axis=-1)
     # A print of a mid-grey negative is mid-grey: log E = 0 lands on 18% reflectance.
     base_guess = float(curve[:, 1].min())
     anchor = lambda e, net: float(np.interp(MID_GREY_REFLECTION_DENSITY - base_guess, net, e))
@@ -929,21 +1203,19 @@ def build_paper(spectral: np.ndarray, curves: dict[str, np.ndarray]) -> Profile:
     log_s = on_grid(spectral, WAVELENGTHS)
     log_s += _paper_level(log_s)
 
-    info = ProfileInfo(stock=PAPER_STOCK, name=PAPER_NAME, type="negative", support="paper",
+    info = ProfileInfo(stock=stock, name=name, type="negative", support="paper",
                        stage="printing", use="still", antihalation="strong", target_print=None,
                        channel_model="bw", densitometer="diffuse_visual",
                        log_sensitivity_density_over_min=1.0, reference_illuminant="TH-KG3",
                        viewing_illuminant="D50")
     datasource = (
-        "Traced off the bitmaps of HARMAN technology, 'New MGRC vs MGIVRC' technical information "
-        f"(Mar 2020): MULTIGRADE RC DELUXE (new) through filter grade {MULTIGRADE_NATIVE_GRADE}, "
-        "MULTIGRADE developer 1+9, 1 min at 20 C; spectral sensitivity read as relative log "
+        f"{source} spectral sensitivity read as relative log "
         "sensitivity, peak 1.0, level set so the paper sees as much of the enlarger lamp as "
         f"Kodak Portra Endura does through its neutral filtration. Base {base:.3f}; mid-grey "
         "(18% reflectance) at log E 0. One silver layer, carried as three identical channels."
     )
-    profile = assemble(info, log_s, base, net, model, datasource)
-    print(f"  {PAPER_STOCK:28s} base {base:.3f}  D-max net {net[:, 0].max():.2f}  "
+    profile = assemble(info, log_s, base, net, model, datasource, created)
+    print(f"  {stock:28s} base {base:.3f}  D-max net {net[:, 0].max():.2f}  "
           f"axis shift {shift:+.3f}  fit RMS {model['rms']:.4f}  "
           f"native ISO R{iso_range(LOG_EXPOSURE, net[:, 0] + base):.0f}")
     return profile
@@ -1125,8 +1397,22 @@ def main() -> int:
                      cross_check=lambda shift: f"Fujifilm's absolute axis puts mid-grey {(-shift) - absolute:+.3f} "
                                                f"decades from ISO {ACROS2.iso}'s",
                      created="2026-11-12"))
+    spectral, curve = t_max_p3200_sheet()
+    write(build_film(P3200, spectral, curve,
+                     "Spectral sensitivity: the D = 1.0 over D-min curve (equal-energy, erg/cm^2, effective exposure "
+                     "1.4 s, D-76 at 20 C), which runs off the plot at 670 nm, two decades down.",
+                     metered_at=P3200_EI, created="2026-11-22"))
+    spectral, curve, offset, note = delta_3200_sheet()
+    write(build_film(DELTA3200, spectral, curve,
+                     "Spectral sensitivity: Ilford's wedge spectrogram to tungsten light (2856K), read as relative "
+                     "log sensitivity, as the other HARMAN sheets' are; it runs on to about 690 nm.",
+                     metered_at=DELTA3200_EI, axis_offset=offset, axis_note=note, created="2026-11-22"))
     spectral, curves = multigrade_sheet()
-    write(build_paper(spectral, curves))
+    rc = build_paper(spectral, curves)
+    write(rc)
+    spectral, curves = multigrade_fb_sheet()
+    write(build_paper(spectral, curves, FB_PAPER_STOCK, FB_PAPER_NAME, FB_SOURCE,
+                      base=float(np.nanmin(np.asarray(rc.data.base_density, float))), created="2026-11-22"))
 
     import kodak_bw_cine_sheets as cine
     write(build_print_film())

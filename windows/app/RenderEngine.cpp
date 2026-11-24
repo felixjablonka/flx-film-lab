@@ -403,7 +403,7 @@ std::optional<RenderEngine::Output> RenderEngine::render(const Recipe &recipe, i
 }
 
 QSize RenderEngine::exportTo(const Recipe &recipe, const DecodeKey &key, const QString &path, ExportFormat format,
-                             int longEdge)
+                             int longEdge, const ExportComment &comment)
 {
     ensureDevice();
     // exactly the values on screen, metered on the same decode
@@ -516,7 +516,7 @@ QSize RenderEngine::exportTo(const Recipe &recipe, const DecodeKey &key, const Q
     metadata.longitudeRef = m.photo.longitudeRef;
     metadata.altitudeRef = m.photo.altitudeRef;
     metadata.gpsStatus = m.photo.gpsStatus;
-    const Provenance made = provenance(resolved, *m_packs, FLX_VERSION_TEXT);
+    const Provenance made = provenance(resolved, *m_packs, FLX_VERSION_TEXT, comment);
     metadata.software = QString::fromStdString(made.software);
     metadata.provenance = QString::fromStdString(made.description);
     return writeExport(linear, out.width(), out.height(), path, format, resolved.outputColorSpace, metadata, longEdge);

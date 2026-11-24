@@ -23,7 +23,7 @@ cd "$(dirname "$0")"
 
 APP_NAME="FLX Film Lab"
 # The version a release is built as; the release workflow sets it from the tag.
-VERSION="${VERSION:-2.1.0}"
+VERSION="${VERSION:-2.2.0}"
 # The binary inside the bundle, which refuse_if_running looks for.
 EXECUTABLE="FLXFilmLab"
 # The oldest macOS this is built to run on, on Apple Silicon only (since 1.1.2;
@@ -75,6 +75,7 @@ ENGINE_SOURCES=(
   FLXFilmLab/Engine/SLog3.swift
   FLXFilmLab/Engine/ILog.swift
   FLXFilmLab/Engine/LookLUT.swift
+  FLXFilmLab/Engine/PrintGrain.swift
 )
 
 # The video path: the Motion mode's log clip grading, on the same engine.
@@ -86,6 +87,8 @@ MOTION_CORE_SOURCES=(
   FLXFilmLab/Motion/Video/ClipExporter.swift
   FLXFilmLab/Motion/Video/LookBakeEngine.swift
   FLXFilmLab/Motion/Video/ClipMeter.swift
+  FLXFilmLab/Motion/Video/FilmGrain.swift
+  FLXFilmLab/Motion/Video/HEVCLevels.swift
 )
 
 # One app, two modes: Stills (FLXFilmLab/) and Motion (FLXFilmLab/Motion/), switched in

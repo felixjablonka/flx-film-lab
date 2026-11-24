@@ -20,6 +20,12 @@ actor LookBakeEngine {
         try ready().bake(recipe: recipe, size: size, input: input, output: .bt1886)
     }
 
+    /// The look's grain as its print shows it, for the frames' grain: nil
+    /// for a film without grain data.
+    func printGrain(_ recipe: Recipe) throws -> PrintGrainTable? {
+        try ready().printGrain(recipe: recipe)
+    }
+
     /// The look as a .cube file for other software.
     func cube(_ recipe: Recipe, size: Int, input: LookLUT.Input, output: LookLUT.Output,
               title: String, comments: [String]) throws -> String {

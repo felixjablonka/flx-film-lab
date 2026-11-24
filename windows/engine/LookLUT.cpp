@@ -1,6 +1,7 @@
 #include "LookLUT.h"
 
 #include "FilmRenderer.h"
+#include "Filters.h"
 #include "SetupBuilder.h"
 
 #include <algorithm>
@@ -157,4 +158,51 @@ LookLUT LookBaker::bake(const Recipe &recipe, int size, LutInput input, LutOutpu
         for (size_t c = 0; c < 3; ++c)
             lut.values[i * 3 + c] = float(lutOutputEncode(output, double(linear[i * 4 + c])));
     return lut;
+}
+
+std::optional<PrintGrainTable> LookBaker::printGrain(const Recipe &recipe)
+{
+    const Recipe r = perPixel(recipe);
+    const int count = 512;
+    const float step = 0.01f;
+    BuiltSetup built = m_builder->build(r, float(r.exposureEV), count, 1);
+    const RenderSetup &s = built.setup;
+    if (s.selwyn.floats.empty() || s.grain.samples < 2)
+        return std::nullopt;
+    const std::vector<float> ramp = PrintGrainTable::greyRamp(count);
+    m_renderer->setPicture(ramp.data(), count, 1);
+    m_lattice.reset();
+    struct Restore {
+        FilmRenderer &renderer;
+        ~Restore() { renderer.setNegativeOffset(0, 0, 0); }
+    } restore{*m_renderer};
+    const auto rendered = [&](float cyan, float magenta, float yellow, std::vector<float> *negative) {
+        m_renderer->setNegativeOffset(cyan, magenta, yellow);
+        m_renderer->load(s);
+        std::vector<float> light;
+        if (negative) {
+            FilmRenderer::Taps taps;
+            m_renderer->render(&taps);
+            light = std::move(taps.rgbOut);
+            *negative = std::move(taps.cmy);
+        } else {
+            m_renderer->render(nullptr, &light);
+        }
+        if (light.size() < size_t(count) * 4 || (negative && negative->size() < size_t(count) * 4))
+            throw std::runtime_error("the engine produced no pixels for the grey ramp");
+        return light;
+    };
+    std::vector<float> negative;
+    const std::vector<float> print = rendered(0, 0, 0, &negative);
+    std::vector<float> denser[3], thinner[3];
+    for (int record = 0; record < 3; ++record) {
+        float offset[3] = {0, 0, 0};
+        offset[record] = step;
+        denser[record] = rendered(offset[0], offset[1], offset[2], nullptr);
+        offset[record] = -step;
+        thinner[record] = rendered(offset[0], offset[1], offset[2], nullptr);
+    }
+    return PrintGrainTable::build(negative, print, denser, thinner, step, count, s.selwyn.floats,
+                                  s.grain.tableDensityMax, s.grain.samples, s.grain.cloudUm, s.monochrome,
+                                  fnv1a(s.stock.toStdString()));
 }

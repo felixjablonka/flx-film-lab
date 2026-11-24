@@ -1,5 +1,7 @@
 #include "LensCorrection.h"
 
+#include "Paths.h"
+
 #include <pugixml.hpp>
 
 #include <algorithm>
@@ -28,7 +30,7 @@ public:
 
 class FileSource : public Source {
 public:
-    explicit FileSource(const std::string &path) : in(std::filesystem::path(path), std::ios::binary) {}
+    explicit FileSource(const std::string &path) : in(fsPath(path), std::ios::binary) {}
     bool read(uint64_t at, void *to, size_t n) override
     {
         in.clear();
@@ -621,7 +623,7 @@ public:
         if (!db) {
             db = std::make_unique<Lensfun>();
             std::error_code error;
-            for (const auto &entry : std::filesystem::directory_iterator(std::filesystem::path(dir), error))
+            for (const auto &entry : std::filesystem::directory_iterator(fsPath(dir), error))
                 if (entry.path().extension() == ".xml")
                     db->read(entry.path());
         }

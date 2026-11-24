@@ -346,6 +346,104 @@ struct ExportSizeChoice: View {
     }
 }
 
+/// A toolbar pop-up's face: its title and a small chevron.
+private func popUpFace(_ title: String, width: CGFloat) -> some View {
+    (Text(title + " ") + Text(Image(systemName: "chevron.down")).font(.system(size: 9, weight: .semibold)))
+        .frame(width: width)
+}
+
+/// A clip's codec, by its family's name: ProRes 422 or HEVC 10-bit. How hard
+/// it compresses is beside it (`CompressionChoice`).
+struct CodecChoice: View {
+    @Binding var export: ExportSettings
+    var width: CGFloat = 96
+
+    var body: some View {
+        Button(action: popUp) { popUpFace(export.codec.title, width: width) }
+    }
+
+    private func popUp() {
+        let menu = NSMenu()
+        let target = MenuTarget<ExportCodec> { export.codec = $0 }
+        var current: NSMenuItem?
+        for codec in ExportCodec.allCases {
+            let item = NSMenuItem(title: codec.title, action: #selector(MenuTarget<ExportCodec>.choose(_:)),
+                                  keyEquivalent: "")
+            item.target = target
+            item.representedObject = codec
+            if codec == export.codec {
+                item.state = .on
+                current = item
+            }
+            menu.addItem(item)
+        }
+        popUpUnderPointer(menu, positioning: current)
+        withExtendedLifetime(target) {}
+    }
+}
+
+/// How hard a clip is compressed, each choice with the data rate it comes to
+/// for `clip`, the one on screen: ProRes's flavours at Apple's target rates,
+/// HEVC's levels, and a rate of its own, which `setRate` asks for.
+struct CompressionChoice: View {
+    @Binding var export: ExportSettings
+    var clip: (width: Int, height: Int, frameRate: Double)?
+    let setRate: () -> Void
+    var width: CGFloat = 140
+
+    private enum Choice { case flavour(ProResFlavour), level(HEVCLevel), setRate }
+
+    var body: some View {
+        Button(action: popUp) { popUpFace(title, width: width) }
+    }
+
+    private var title: String {
+        guard let clip else { return export.compressionTitle }
+        let rate = ExportSettings.rate(export.megabits(width: clip.width, height: clip.height, frameRate: clip.frameRate))
+        return export.codec == .hevc10 && export.level == .custom ? rate : "\(export.compressionTitle) · \(rate)"
+    }
+
+    private func popUp() {
+        let menu = NSMenu()
+        let target = MenuTarget<Choice> { choice in
+            switch choice {
+            case .flavour(let flavour): export.proRes = flavour
+            case .level(let level): export.hevcLevel = level
+            case .setRate: setRate()
+            }
+        }
+        var current: NSMenuItem?
+        func add(_ title: String, _ choice: Choice, on: Bool) {
+            let item = NSMenuItem(title: title, action: #selector(MenuTarget<Choice>.choose(_:)), keyEquivalent: "")
+            item.target = target
+            item.representedObject = choice
+            if on {
+                item.state = .on
+                current = item
+            }
+            menu.addItem(item)
+        }
+        func rate(_ megabits: (Int, Int, Double) -> Double) -> String {
+            clip.map { " · " + ExportSettings.rate(megabits($0.width, $0.height, $0.frameRate)) } ?? ""
+        }
+        switch export.codec {
+        case .proRes422HQ:
+            for flavour in ProResFlavour.allCases {
+                add(flavour.title + rate(flavour.megabits), .flavour(flavour), on: flavour == export.flavour)
+            }
+        case .hevc10:
+            for level in HEVCLevel.allCases {
+                add(level.rawValue + rate { export.megabits(level, width: $0, height: $1, frameRate: $2) },
+                    .level(level), on: level == export.level)
+            }
+            menu.addItem(.separator())
+            add("Set Data Rate…", .setRate, on: false)
+        }
+        popUpUnderPointer(menu, positioning: current)
+        withExtendedLifetime(target) {}
+    }
+}
+
 private final class MenuTarget<Value>: NSObject {
     let chosen: (Value) -> Void
     init(_ chosen: @escaping (Value) -> Void) { self.chosen = chosen }

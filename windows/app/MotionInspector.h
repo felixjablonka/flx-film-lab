@@ -47,6 +47,7 @@ private:
     void buildTone();
     void buildColour();
     void buildEffects();
+    void buildGrain();
     void buildInput();
     void buildExport();
 

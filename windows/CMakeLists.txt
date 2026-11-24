@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 # the Mac release this port matches
-project(flx_film_lab_win VERSION 2.1.0 LANGUAGES CXX)
+project(flx_film_lab_win VERSION 2.2.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -27,6 +27,7 @@ set(ENGINE_SOURCES
     engine/MaskRasterizer.cpp
     engine/LogFormats.cpp
     engine/LookLUT.cpp
+    engine/PrintGrain.cpp
     engine/Resampler.cpp
 )
 
@@ -69,6 +70,9 @@ set(ENGINE_KERNELS
     engine/shaders/motion_screen.comp
     engine/shaders/motion_luma.comp
     engine/shaders/motion_chroma.comp
+    engine/shaders/motion_grain_density.comp
+    engine/shaders/motion_grain_light.comp
+    engine/shaders/negative_offset.comp
 )
 
 # LibRaw, compiled in (cmake/LibRaw.cmake): the fallback decoder.
@@ -206,7 +210,7 @@ else()
 endif()
 
 # Motion's sources, which read and write movies with FFmpeg
-set(MOTION_SOURCES engine/Clip.cpp engine/Motion.cpp engine/ClipExport.cpp engine/ClipAudio.cpp)
+set(MOTION_SOURCES engine/Clip.cpp engine/Motion.cpp engine/ClipExport.cpp engine/ClipAudio.cpp engine/HEVCLevels.cpp)
 add_executable(flxport-clip tools/port-clip/main.cpp engine/Clip.cpp engine/LogFormats.cpp)
 target_include_directories(flxport-clip PRIVATE engine)
 target_link_libraries(flxport-clip PRIVATE flx_ffmpeg)

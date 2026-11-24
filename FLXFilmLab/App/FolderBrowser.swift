@@ -27,6 +27,60 @@ final class FolderBrowser: ObservableObject {
     init(kind: Kind = .pictures) {
         self.kind = kind
         thumbnails = ThumbnailStore(kind: kind)
+        // The order is one setting for Stills and Motion, set from either
+        // sidebar or the View menu: each follows it wherever it is set.
+        defaultsObserver = NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.followStoredOrder() }
+        }
+    }
+
+    /// How the sidebar orders a folder: by name as Finder sorts them, or by
+    /// when each was shot (the camera's own date and time, to the hundredth
+    /// where it records them; a movie's creation time; for a file with
+    /// neither, when the file was made), names in order where those agree.
+    enum Order: String, CaseIterable, Identifiable {
+        case name
+        case dateShot
+        var id: String { rawValue }
+        var title: String { self == .name ? "File Name" : "Date Shot" }
+
+        static let key = "folderOrder"
+        static var stored: Order { Order(rawValue: UserDefaults.standard.string(forKey: key) ?? "") ?? .name }
+    }
+
+    @Published private(set) var order: Order = .stored
+    /// When each picture or clip of the folder was shot, once read.
+    private var shotDates: [URL: Date] = [:]
+    private var defaultsObserver: NSObjectProtocol?
+
+    /// Sorts the folder by `order`, here and in the other mode's sidebar.
+    func setOrder(_ order: Order) {
+        UserDefaults.standard.set(order.rawValue, forKey: Order.key)
+        followStoredOrder()
+    }
+
+    private func followStoredOrder() {
+        let stored = Order.stored
+        guard stored != order else { return }
+        order = stored
+        items = ordered(items)
+    }
+
+    /// `items` in the sidebar's order, the dates read that are not yet.
+    private func ordered(_ items: [Item]) -> [Item] {
+        switch order {
+        case .name:
+            return items.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        case .dateShot:
+            let unread = items.map(\.url).filter { shotDates[$0] == nil }
+            if !unread.isEmpty { shotDates.merge(Self.shotDates(unread, kind: kind)) { _, new in new } }
+            return items.sorted { a, b in
+                let first = shotDates[a.url] ?? .distantFuture, second = shotDates[b.url] ?? .distantFuture
+                if first != second { return first < second }
+                return a.name.localizedStandardCompare(b.name) == .orderedAscending
+            }
+        }
     }
 
     struct Item: Identifiable, Hashable {
@@ -123,8 +177,9 @@ final class FolderBrowser: ObservableObject {
     }
 
     func show(_ folder: URL, items: [Item], records: [URL: ImageLibrary.Record]) {
+        if folder != self.folder { shotDates = [:] }
         self.folder = folder
-        self.items = items
+        self.items = ordered(items)
         flags = records.compactMapValues(\.flag)
         // A picture's settings of its own, a clip's look.
         edited = Set(records.filter { kind == .pictures ? $0.value.edits != nil : $0.value.look != nil }.keys)
@@ -172,6 +227,115 @@ final class FolderBrowser: ObservableObject {
             return Item(url: canonical(url), size: Int64(values.fileSize ?? 0))
         }
         .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    /// When each of `urls` was shot, for `Order.dateShot`: a picture's EXIF
+    /// date and time of the original, a movie's creation time, and for a file
+    /// that records neither, when the file was made. Read side by side, about
+    /// half a millisecond a NEF on an M4 Pro (4 ms one after another).
+    nonisolated static func shotDates(_ urls: [URL], kind: Kind) -> [URL: Date] {
+        var found = [Date?](repeating: nil, count: urls.count)
+        found.withUnsafeMutableBufferPointer { buffer in
+            // each iteration writes its own slot, and none reads another's
+            nonisolated(unsafe) let slots = buffer
+            DispatchQueue.concurrentPerform(iterations: urls.count) { i in
+                let url = urls[i]
+                slots[i] = (kind == .pictures ? photoDate(url) : movieDate(url))
+                    ?? (try? url.resourceValues(forKeys: [.creationDateKey]))?.creationDate
+            }
+        }
+        var dates: [URL: Date] = [:]
+        for (i, url) in urls.enumerated() {
+            if let date = found[i] { dates[url] = date }
+        }
+        return dates
+    }
+
+    /// A picture's EXIF date and time of the original, with its hundredths
+    /// and its time zone where the camera wrote them; else when it was
+    /// digitised, or the TIFF date.
+    nonisolated static func photoDate(_ url: URL) -> Date? {
+        let options = [kCGImageSourceShouldCache: false] as CFDictionary
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, options),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, options) as? [CFString: Any] else {
+            return nil
+        }
+        let exif = properties[kCGImagePropertyExifDictionary] as? [CFString: Any]
+        if let original = exif?[kCGImagePropertyExifDateTimeOriginal] as? String,
+           let date = exifDate(original, subseconds: exif?[kCGImagePropertyExifSubsecTimeOriginal] as? String,
+                               offset: exif?[kCGImagePropertyExifOffsetTimeOriginal] as? String) {
+            return date
+        }
+        if let digitized = exif?[kCGImagePropertyExifDateTimeDigitized] as? String,
+           let date = exifDate(digitized, subseconds: exif?[kCGImagePropertyExifSubsecTimeDigitized] as? String,
+                               offset: exif?[kCGImagePropertyExifOffsetTimeDigitized] as? String) {
+            return date
+        }
+        let tiff = properties[kCGImagePropertyTIFFDictionary] as? [CFString: Any]
+        return (tiff?[kCGImagePropertyTIFFDateTime] as? String).flatMap { exifDate($0, subseconds: nil, offset: nil) }
+    }
+
+    /// "2026:10:14 13:15:13", its hundredths ("28") and its offset ("+02:00")
+    /// as a date. Without an offset the time is read as UTC, so pictures of
+    /// one camera keep their order among themselves.
+    nonisolated static func exifDate(_ text: String, subseconds: String?, offset: String?) -> Date? {
+        let numbers = text.split { !$0.isNumber }.compactMap { Int($0) }
+        guard numbers.count >= 6, numbers[0] > 0, numbers[1] > 0, numbers[2] > 0 else { return nil }
+        var seconds = 0
+        if let offset, offset.count >= 6, let sign = offset.first, sign == "+" || sign == "-" {
+            let parts = offset.dropFirst().split(separator: ":").compactMap { Int($0) }
+            if parts.count == 2 { seconds = (sign == "-" ? -1 : 1) * (parts[0] * 3600 + parts[1] * 60) }
+        }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: seconds) ?? .gmt
+        let parts = DateComponents(year: numbers[0], month: numbers[1], day: numbers[2],
+                                   hour: numbers[3], minute: numbers[4], second: numbers[5])
+        guard let date = calendar.date(from: parts) else { return nil }
+        let digits = subseconds?.filter(\.isNumber) ?? ""
+        return date.addingTimeInterval(digits.isEmpty ? 0 : Double("0." + digits) ?? 0)
+    }
+
+    /// A movie's creation time, from its movie header (`moov`'s `mvhd`):
+    /// seconds since 1904, which cameras set to when they began recording.
+    /// Only box headers are read, wherever in the file the movie box lies.
+    nonisolated static func movieDate(_ url: URL) -> Date? {
+        guard let file = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? file.close() }
+        guard let size = try? file.seekToEnd() else { return nil }
+        func be(_ data: Data, _ at: Int, _ count: Int) -> UInt64 {
+            data[at..<(at + count)].reduce(0) { $0 << 8 | UInt64($1) }
+        }
+        func box(at offset: UInt64, reading count: Int) -> (length: UInt64, header: UInt64, type: String, data: Data)? {
+            guard (try? file.seek(toOffset: offset)) != nil,
+                  let data = try? file.read(upToCount: count), data.count >= 8 else { return nil }
+            var length = be(data, 0, 4), header: UInt64 = 8
+            if length == 1 {
+                guard data.count >= 16 else { return nil }
+                length = be(data, 8, 8)
+                header = 16
+            } else if length == 0 {
+                length = size - offset
+            }
+            guard length >= header else { return nil }
+            return (length, header, String(decoding: data[4..<8], as: UTF8.self), data)
+        }
+        var at: UInt64 = 0
+        while at + 8 <= size, let top = box(at: at, reading: 16) {
+            if top.type == "moov" {
+                var child = at + top.header
+                while child + 8 <= at + top.length, let inner = box(at: child, reading: 28) {
+                    if inner.type == "mvhd", inner.data.count >= 28 {
+                        let body = Int(inner.header)
+                        let created = inner.data[body] == 1 ? be(inner.data, body + 4, 8) : be(inner.data, body + 4, 4)
+                        return created > 0 ? Date(timeIntervalSince1970: TimeInterval(created) - 2_082_844_800) : nil
+                    }
+                    child += inner.length
+                }
+                return nil
+            }
+            at += top.length
+        }
+        return nil
     }
 }
 

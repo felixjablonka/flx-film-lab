@@ -40,6 +40,7 @@ struct FolderSidebar: View, Equatable {
             if let folder = browser.folder {
                 FolderHeader(folder: folder, noun: noun, summary: summary, filter: browser.filter,
                              setFilter: { [browser] in browser.filter = $0 },
+                             order: browser.order, setOrder: { [browser] in browser.setOrder($0) },
                              openFolder: openFolder)
                     .equatable()
                 Divider()
@@ -236,7 +237,8 @@ struct FolderSidebar: View, Equatable {
     }
 }
 
-/// The sidebar's head: the folder, its menu, the filter and the count. A view
+/// The sidebar's head: the folder, its menu (another folder, Finder, the
+/// order), the filter and the count. A view
 /// of its own, equal to itself while they are the same, so selecting or
 /// opening a picture leaves it alone. Updated while a click or a key was being
 /// handled, the segmented filter was laid out at its ideal width for a moment,
@@ -247,11 +249,14 @@ struct FolderHeader: View, Equatable {
     let summary: String
     let filter: FolderBrowser.Filter
     let setFilter: (FolderBrowser.Filter) -> Void
+    let order: FolderBrowser.Order
+    let setOrder: (FolderBrowser.Order) -> Void
     let openFolder: () -> Void
 
     nonisolated static func == (a: FolderHeader, b: FolderHeader) -> Bool {
         MainActor.assumeIsolated {
             a.folder == b.folder && a.noun == b.noun && a.summary == b.summary && a.filter == b.filter
+                && a.order == b.order
         }
     }
 
@@ -265,11 +270,16 @@ struct FolderHeader: View, Equatable {
                 Menu {
                     Button("Open Folder…", action: openFolder)
                     Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([folder]) }
+                    Divider()
+                    Picker("Sort By", selection: Binding(get: { order }, set: setOrder)) {
+                        ForEach(FolderBrowser.Order.allCases) { Text($0.title).tag($0) }
+                    }
+                    .pickerStyle(.inline)
                 } label: {
                     Image(systemName: "ellipsis.circle").font(.panel(13))
                 }
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-                .help("Open another folder, or show this one in Finder.")
+                .help("Open another folder, show this one in Finder, or sort its \(noun)s by file name or by the date they were shot.")
             }
             // Its own view too: a flag changes the count, not the filter.
             FilterPicker(filter: filter, noun: noun, setFilter: setFilter).equatable()

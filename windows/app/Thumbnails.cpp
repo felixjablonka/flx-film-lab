@@ -3,6 +3,7 @@
 #include "DisplayColour.h"
 
 #include "MotionEngine.h"
+#include "Paths.h"
 #include "SetupBuilder.h"
 
 #include "libraw/libraw.h"
@@ -464,7 +465,7 @@ QImage ThumbnailStore::cameraPreview(const QString &path)
         // The smallest of the previews the camera embedded that still fills
         // the thumbnail: a NEF's 640 px JPEG rather than its full-size one.
         auto raw = std::make_unique<LibRaw>();
-        if (raw->open_file(QFileInfo(path).absoluteFilePath().toStdString().c_str()) == LIBRAW_SUCCESS) {
+        if (raw->open_file(fsPath(QFileInfo(path).absoluteFilePath().toStdString()).c_str()) == LIBRAW_SUCCESS) {
             const libraw_thumbnail_list_t &list = raw->imgdata.thumbs_list;
             int best = -1, bestSide = 0;
             for (int i = 0; i < list.thumbcount; ++i) {

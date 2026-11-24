@@ -99,6 +99,18 @@ public:
     // for the checks.
     bool printedFromKeptExposure() const { return m_printedFromKept; }
 
+    // For the look's bakes alone: a density added to each record of the
+    // developed negative before it is printed, so that a bake can read how
+    // the print answers each layer's density (LookBaker::printGrain). Zero
+    // for every picture; the developed negative itself is left as it is.
+    // Taken by the next load.
+    void setNegativeOffset(float cyan, float magenta, float yellow)
+    {
+        m_negativeOffset[0] = cyan;
+        m_negativeOffset[1] = magenta;
+        m_negativeOffset[2] = yellow;
+    }
+
     // Dodge & burn's map (MaskRasterizer: RGBA, stops and local grade, on the
     // frame), or none when empty. Uploaded with the next load, only when it
     // has changed.
@@ -126,6 +138,7 @@ private:
     void printNegative(QRhiTexture *negative, QRhiTexture *into, int kept);
 
     Blur m_blurKind;
+    float m_negativeOffset[3] = {0, 0, 0};
     const RenderSetup *m_setup = nullptr;           // during load()
     // the film stage's passes, and what its inputs hash to
     bool m_skipsUnchangedFilm = false;

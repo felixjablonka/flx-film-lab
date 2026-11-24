@@ -35,6 +35,21 @@ private struct GeneralSettings: View {
     @AppStorage(PanelScale.key) private var textSize = PanelScale.standard.rawValue
     @AppStorage("vocabulary") private var vocabularyRaw = Vocabulary.photographic.rawValue
     @AppStorage(ImageLibrary.sidecarsKey) private var savesSidecars = false
+    @AppStorage(Exporter.ExportComment.editedWithKey) private var commentEditedWith = true
+    @AppStorage(Exporter.ExportComment.filmKey) private var commentFilm = true
+    @AppStorage(Exporter.ExportComment.paperKey) private var commentPaper = true
+    @AppStorage(Exporter.ExportComment.filterKey) private var commentFilter = true
+
+    /// The comment the ticks would write, on Tri-X through a red filter on
+    /// Multigrade.
+    private var commentExample: String {
+        var recipe = Recipe().loadingFilm("kodak_tri_x_400")
+        recipe.lensFilter = "red"
+        let comment = Exporter.ExportComment(editedWith: commentEditedWith, film: commentFilm, paper: commentPaper,
+                                             filter: commentFilter)
+        let said = Exporter.Provenance(recipe: recipe, comment: comment).description
+        return said.isEmpty ? "Nothing is written there." : "For example: \(said)"
+    }
 
     var body: some View {
         Form {
@@ -58,6 +73,13 @@ private struct GeneralSettings: View {
             SwiftUI.Section("Library") {
                 Toggle("Save settings beside images", isOn: $savesSidecars)
                 note("Each picture's settings, or clip's look, and its flag also go into a small file beside it, DSC_0871.NEF.flx, which travels with the folder to another drive, another Mac or the Windows app. They are always kept in the app's library too; of the two, the newer counts.")
+            }
+            SwiftUI.Section("Comment in Exported Files") {
+                Toggle("Edited with FLX Film Lab", isOn: $commentEditedWith)
+                Toggle("Film profile", isOn: $commentFilm)
+                Toggle("Paper or print film", isOn: $commentPaper)
+                Toggle("Camera filter", isOn: $commentFilter)
+                note("What an exported picture's EXIF comment says, and its description where the camera left none, and an exported clip's description. A slide and an instant print, seen as they are, name no paper. With none ticked, nothing is written there; a camera's own comment and description stay either way. \(commentExample)")
             }
         }
         .formStyle(.grouped)

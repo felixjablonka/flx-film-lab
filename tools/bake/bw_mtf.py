@@ -127,6 +127,25 @@ def kodak_t_max_100_mtf() -> np.ndarray:
     return curve[np.concatenate([[True], np.diff(curve[:, 0]) > 1e-6])]
 
 
+def kodak_t_max_p3200_mtf() -> np.ndarray:
+    """Kodak's T-MAX P3200 MTF (F-4001 page 7, revised 04/2019: D-76 at 20 C,
+    small tank, tungsten) as (cycles/mm, fraction). A vector plot, both axes
+    logarithmic, labelled in text, calibrated on its gridlines and frame (1 and
+    600 cycles/mm, 1% and 200%), which a logarithmic scale fits to 0.01."""
+    from vector_plots import VectorPlot, by_position
+    plot = VectorPlot(str(SHEETS / "f4001_tmax_p3200-2019.pdf"), 6, (361.2, 77.0, 563.7, 230.0),
+                      tuple((x, np.log10(v)) for x, v in ((361.2, 1), (382.9, 2), (395.6, 3), (404.9, 4), (411.5, 5),
+                                                          (432.9, 10), (455.5, 20), (484.5, 50), (506.2, 100),
+                                                          (527.6, 200))),
+                      tuple((y, np.log10(v)) for y, v in ((77.0, 200), (96.2, 100), (106.8, 70), (116.4, 50),
+                                                          (131.2, 30), (142.9, 20), (163.1, 10), (173.3, 7),
+                                                          (183.6, 5), (197.7, 3), (210.4, 2), (230.0, 1))))
+    data = by_position(plot, ("mtf",))["mtf"]
+    curve = 10 ** data[np.argsort(data[:, 0])]
+    curve[:, 1] /= 100
+    return curve[np.concatenate([[True], np.diff(curve[:, 0]) > 1e-6])]
+
+
 def agfa_apx_mtf(film: int) -> np.ndarray:
     """Agfa's APX 100 or 400 MTF (daylight, visual filter) as (cycles/mm,
     fraction), off the film's own 1995 sheet (`agfa_bw_sheets`). The 1998
@@ -150,6 +169,11 @@ SHEET_MTF = {"agfa_apx_25": lambda: (lambda c: c[c[:, 0] <= 50])(agfa_apx25_mtf(
              # (200 and 63, F-4016, D-76), and its RMS 7 against T-Max's 8:
              # it takes T-Max 100's measured curve, an estimate.
              "fujifilm_neopan_100_acros_ii": lambda: (lambda c: c[c[:, 0] <= 50])(kodak_t_max_100_mtf()),
+             "kodak_t_max_p3200": lambda: (lambda c: c[c[:, 0] <= 50])(kodak_t_max_p3200_mtf()),
+             # HARMAN publishes no MTF or resolving power for Delta 3200; it
+             # takes T-Max P3200's measured curve, the Kodak film of its class,
+             # as its grain does (bake_packs.BW_RMS_GRANULARITY): an estimate.
+             "ilford_delta_3200": lambda: (lambda c: c[c[:, 0] <= 50])(kodak_t_max_p3200_mtf()),
              # Kodak H-1-5222 (2003), tungsten, D-96 to the control gamma; the
              # 2022 edition's bitmap repeats it (`kodak_bw_cine_sheets`).
              "kodak_double_x_5222": lambda: (lambda c: c[c[:, 0] <= 50])(

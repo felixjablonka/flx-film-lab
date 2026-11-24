@@ -343,6 +343,43 @@ final class LookBaker {
         return LookLUT(size: size, input: input, output: output, values: values)
     }
 
+    /// The look's grain as its print shows it (`PrintGrainTable`): the look's
+    /// grey scale rendered as a ramp of light, exactly as the LUT bakes it,
+    /// then again with each layer of the negative 0.01 denser and thinner, and
+    /// the negative's densities, the print's, and the print's answer to each
+    /// layer read off each step. Nil for a film with no grain data. Replaces
+    /// the lattice, so the next bake uploads it again.
+    func printGrain(recipe: Recipe) throws -> PrintGrainTable? {
+        let r = Self.perPixel(recipe)
+        let setup = try RenderSetupBuilder.build(recipe: r)
+        guard let grain = setup.film.defaults.grain else { return nil }
+        let count = 512, step: Float = 0.01
+        renderer.setImage(PrintGrainTable.greyRamp(count: count), width: count, height: 1)
+        latticeKey = nil
+        defer { renderer.negativeOffset = .zero }
+        func ramp(_ offset: SIMD3<Float>) throws -> [Float] {
+            renderer.negativeOffset = offset
+            _ = try renderer.render(setup: setup, recipe: r)
+            guard let light = renderer.readLinear(), light.count >= count * 4 else { throw BakeError.noPixels }
+            return light
+        }
+        let print = try ramp(.zero)
+        guard let negative = renderer.readTap("cmy_film"), negative.count >= count * 4 else {
+            throw BakeError.noPixels
+        }
+        var denser: [[Float]] = [], thinner: [[Float]] = []
+        for record in 0..<3 {
+            var offset = SIMD3<Float>(repeating: 0)
+            offset[record] = step
+            denser.append(try ramp(offset))
+            offset[record] = -step
+            thinner.append(try ramp(offset))
+        }
+        return PrintGrainTable.build(negative: negative, print: print, denser: denser, thinner: thinner, step: step,
+                                     count: count, grain: grain, monochromeFilm: setup.film.isMonochrome,
+                                     stockSeed: Renderer.fnv1a(setup.film.stock))
+    }
+
     /// The engine's own answer for arbitrary inputs (lattice coordinates, not
     /// linear), in the LUT's output encoding: the reference a LUT is checked
     /// against. Replaces the lattice, so the next bake uploads it again.

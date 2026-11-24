@@ -5,7 +5,8 @@
 // tools/compare.
 //
 //   flxport-motion <movie> <out.png> [--at SECONDS] [--width PX] [--film STOCK] [--exposure EV]
-//                  [--linear OUT.f32] [--bloom] [--glow] [--log] [--packs DIR] [--backend NAME]
+//                  [--linear OUT.f32] [--bloom] [--glow] [--log] [--grain 16|35|70] [--grain-amount A]
+//                  [--grain-size S] [--packs DIR] [--backend NAME]
 
 #include "Dump.h"
 #include "Motion.h"
@@ -71,6 +72,9 @@ int main(int argc, char **argv)
     const QString exposure = option("--exposure", {});
     const QString linearPath = option("--linear", {});
     const bool bloom = flag("--bloom"), glow = flag("--glow"), log = flag("--log");
+    const QString grainGauge = option("--grain", {});
+    const double grainAmount = option("--grain-amount", "1").toDouble();
+    const double grainSize = option("--grain-size", "1").toDouble();
     if (args.size() != 2) {
         std::fprintf(stderr, "usage: flxport-motion <movie> <out.png> [--at SECONDS] [--width PX] [--film STOCK] "
                              "[--exposure EV] [--linear OUT.f32] [--bloom] [--glow] [--log]\n");
@@ -134,15 +138,34 @@ int main(int argc, char **argv)
             e.glowT0 = float(look.effects.glow.threshold / 100);
         }
         const FramePipeline::Mode mode = log ? FramePipeline::Mode::Log : FramePipeline::Mode::Graded;
+        // the look's grain, the frame's own grains, numbered by its time as the app's are
+        std::optional<PrintGrainTable> grainTable;
+        std::optional<FrameGrain> grain;
+        if (!grainGauge.isEmpty()) {
+            MotionGrain settings;
+            settings.enabled = true;
+            settings.gauge = grainGauge == "16" ? FilmGauge::Sixteen : grainGauge == "70" ? FilmGauge::Seventy
+                                                                                         : FilmGauge::ThirtyFive;
+            settings.amount = grainAmount;
+            settings.size = grainSize;
+            clock.restart();
+            grainTable = baker.printGrain(recipe);
+            if (!grainTable)
+                throw std::runtime_error("the film has no grain data");
+            std::printf("the grain's table made in %.0f ms\n", double(clock.nsecsElapsed()) / 1e6);
+            grain = FrameGrain{&*grainTable, settings, FrameGrain::clipSeedFor(path),
+                               FrameGrain::frameNumber(frame->time, info.frameRate)};
+        }
+        const FrameGrain *frameGrain = grain ? &*grain : nullptr;
         double seconds = 0;
-        const std::vector<uint8_t> rgba = pipeline.renderScreen(*frame, reading, size, mode, e, &seconds);
+        const std::vector<uint8_t> rgba = pipeline.renderScreen(*frame, reading, size, mode, e, &seconds, frameGrain);
         seconds = 0;
-        pipeline.renderScreen(*frame, reading, size, mode, e, &seconds);     // the second, kernels built
+        pipeline.renderScreen(*frame, reading, size, mode, e, &seconds, frameGrain);   // the second, kernels built
         QImage image(rgba.data(), size.width(), size.height(), QImage::Format_RGBA8888);
         if (!image.save(args[1]))
             throw std::runtime_error("cannot write " + args[1].toStdString());
         if (!linearPath.isEmpty()) {
-            const std::vector<float> linear = pipeline.renderLinear(*frame, reading, size, mode, e);
+            const std::vector<float> linear = pipeline.renderLinear(*frame, reading, size, mode, e, frameGrain);
             writeDump(linearPath, size.width(), size.height(), 4, linear.data());
         }
         std::printf("%s: %s read as %s, %+.2f EV (%s), the look baked in %.0f ms; frame %.3f s graded at %dx%d in "

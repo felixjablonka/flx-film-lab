@@ -4,10 +4,12 @@
 #include "DisplayColour.h"
 #include "Document.h"
 #include "FolderSidebar.h"
+#include "HEVCLevels.h"
 #include "Inspector.h"
 #include "MainWindow.h"
 #include "MotionDocument.h"
 #include "MotionInspector.h"
+#include "RawUnpack.h"
 #include "Resampler.h"
 #include "SettingsDialog.h"
 #include "Theme.h"
@@ -37,10 +39,12 @@
 #include <QToolButton>
 #include <QWheelEvent>
 #include <QThread>
+#include <QTimeZone>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <functional>
 #include <set>
 
@@ -223,6 +227,15 @@ void pictureChecks(MainWindow &window, Document &doc, const QString &pictures, c
     check(made == QStringList({QFileInfo(one).completeBaseName() + "_" + film + ".jpg",
                                QFileInfo(items[3].path).completeBaseName() + "_" + film + ".jpg"}),
           QStringLiteral("each named by the picture and its film: %1").arg(made.join(", ")));
+    // the comment, as EXIF writes a user comment: its character code, then the text
+    auto bytesOf = [](const QString &path) {
+        QFile file(path);
+        return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
+    };
+    const QByteArray commented = QByteArray("ASCII\0\0\0", 8) + "Edited with FLX Film Lab. Film profile: ";
+    check(!made.isEmpty() && std::all_of(made.begin(), made.end(), [&](const QString &name) {
+              return bytesOf(QDir(out).filePath(name)).contains(commented);
+          }), QStringLiteral("each says in its comment it was edited here, and with which film"));
 
     std::printf("export at a long edge\n");
     // the size beside the format, chosen in the toolbar's menu and kept as
@@ -256,6 +269,24 @@ void pictureChecks(MainWindow &window, Document &doc, const QString &pictures, c
               .arg(sizeOf(fullPrint).width()).arg(sizeOf(fullPrint).height()));
     check(doc.status() == QStringLiteral("Exported single.jpg, %1 × %2").arg(singleWant.width()).arg(singleWant.height()),
           QStringLiteral("and the status line says how large: %1").arg(doc.status()));
+    const std::string said = provenance(doc.recipe(), doc.packs(), "").description;
+    check(bytesOf(single).contains(QByteArray("ASCII\0\0\0", 8) + QByteArray::fromStdString(said))
+              && QString::fromStdString(said).startsWith(QStringLiteral("Edited with FLX Film Lab. Film profile: ")),
+          QStringLiteral("its comment names the film and the paper: %1").arg(QString::fromStdString(said)));
+    setExportComment({false, true, true, true});
+    const QString uncredited = QDir(scratch).filePath(QStringLiteral("uncredited.jpg"));
+    doc.exportTo(uncredited, ExportFormat::Jpeg, 300);
+    const bool uncreditedDone = waitUntil([&] { return !doc.isExporting(); }, 300000);
+    check(uncreditedDone && bytesOf(uncredited).contains(QByteArray("ASCII\0\0\0", 8) + "Film profile: ")
+              && !bytesOf(uncredited).contains("Edited with FLX Film Lab"),
+          QStringLiteral("the credit switched off, the comment starts at the film"));
+    setExportComment(ExportComment::none());
+    const QString silent = QDir(scratch).filePath(QStringLiteral("silent.jpg"));
+    doc.exportTo(silent, ExportFormat::Jpeg, 300);
+    const bool silentDone = waitUntil([&] { return !doc.isExporting(); }, 300000);
+    setExportComment({});
+    check(silentDone && !bytesOf(silent).contains("Edited with FLX Film Lab") && bytesOf(silent).contains("FLX Film Lab"),
+          QStringLiteral("with nothing asked for in Settings, no comment: FLX Film Lab only as the software"));
     const QString outSmall = QDir(scratch).filePath(QStringLiteral("Prints small"));
     QDir().mkpath(outSmall);
     doc.browser().setSelection({items[1].path, items[2].path, items[3].path});
@@ -329,6 +360,77 @@ void clipChecks(MainWindow &window, MotionDocument &motion, const QString &clips
     check(waitUntil([&] { return QFileInfo::exists(graded); }, 60000),
           QStringLiteral("its frame graded with its look, for the sidebar"));
 
+    std::printf("grain on clips\n");
+    const QImage plain = motion.image().convertToFormat(QImage::Format_RGBA8888);
+    MotionLook grained = motion.look();
+    MotionGrain grain;
+    grain.enabled = true;
+    grain.gauge = FilmGauge::Sixteen;
+    grain.amount = 2;
+    grained.grain = grain;
+    motion.setLook(grained);
+    const auto shownChanged = [&](const QImage &from) {
+        return waitUntil([&] {
+            return !motion.isRendering() && motion.image().convertToFormat(QImage::Format_RGBA8888) != from;
+        }, 60000);
+    };
+    check(shownChanged(plain), QStringLiteral("Grain redraws the frame"));
+    // the frame's own grains: every pixel moved, the picture's light kept
+    const QImage withGrain = motion.image().convertToFormat(QImage::Format_RGBA8888);
+    double moved = 0, shift = 0;
+    qint64 samples = 0;
+    if (withGrain.size() == plain.size())
+        for (int y = 0; y < plain.height(); y += 2) {
+            const uchar *a = plain.constScanLine(y), *b = withGrain.constScanLine(y);
+            for (int x = 0; x < plain.width(); x += 2)
+                for (int c = 0; c < 3; ++c) {
+                    const int d = int(b[x * 4 + c]) - int(a[x * 4 + c]);
+                    moved += std::abs(d);
+                    shift += d;
+                    ++samples;
+                }
+        }
+    const double n = double(std::max<qint64>(samples, 1));
+    check(samples > 0 && moved / n > 1.0 && std::abs(shift / n) < 0.6,
+          QStringLiteral("16 mm grain on the frame: %1 levels a pixel on average, the light kept (%2)")
+              .arg(moved / n, 0, 'f', 2).arg(shift / n, 0, 'f', 2));
+    check(waitUntil([&] { return motion.history().undoName() == std::optional<std::string>("Grain"); }, 5000),
+          QStringLiteral("an undo step of its own: %1")
+              .arg(QString::fromStdString(motion.history().undoName().value_or("nothing to undo"))));
+    grained.grain->enabled = false;
+    motion.setLook(grained);
+    check(waitUntil([&] {
+              return !motion.isRendering() && motion.image().convertToFormat(QImage::Format_RGBA8888) == plain;
+          }, 60000),
+          QStringLiteral("and off again, the frame as it was"));
+    grained.grain->enabled = true;
+    motion.setLook(grained);
+    check(shownChanged(plain), QStringLiteral("on again, for the export"));
+
+    std::printf("compression\n");
+    MotionLook compressed = motion.look();
+    compressed.exportSettings.codec = ExportCodec::HEVC10;
+    compressed.exportSettings.hevcLevel = HEVCLevel::High;
+    motion.setLook(compressed);
+    QApplication::processEvents();
+    QComboBox *compression = nullptr;
+    for (QComboBox *box : window.findChildren<QComboBox *>())
+        if (box->count() > 0 && box->itemText(0).startsWith(QStringLiteral("Smaller")))
+            compression = box;
+    const ClipInfo &shown = *motion.clip();
+    QStringList levels;
+    for (HEVCLevel l : {HEVCLevel::Smaller, HEVCLevel::Standard, HEVCLevel::High, HEVCLevel::Maximum})
+        levels << QString::fromStdString(hevcLevelName(l)) + QStringLiteral(" · ")
+                      + QString::fromStdString(ExportSettings::rate(
+                          compressed.exportSettings.megabits(l, shown.width, shown.height, shown.frameRate)));
+    QStringList menu;
+    if (compression)
+        for (int i = 0; i < compression->count(); ++i)
+            menu << compression->itemText(i);
+    check(compression && menu.mid(0, 4) == levels && compression->currentText() == levels[2]
+              && menu.last() == QStringLiteral("Set Data Rate…"),
+          QStringLiteral("the toolbar's HEVC levels, each with its rate for the clip: %1").arg(menu.join(", ")));
+
     std::printf("flags, copy and paste\n");
     motion.browser().setSelection({items[0].path});
     motion.flagSelection(Flag::Pick);
@@ -353,6 +455,23 @@ void clipChecks(MainWindow &window, MotionDocument &motion, const QString &clips
     check(made.size() == 1 && made[0].startsWith(QFileInfo(smallest.path).completeBaseName() + " ")
               && QFileInfo(QDir(out).filePath(made[0])).size() > 0,
           QStringLiteral("the clip written with its look: %1").arg(made.join(", ")));
+    if (made.size() == 1) {
+        // as HEVC at High, labelled the lowest level and tier that hold it
+        const std::string file = QDir(out).filePath(made[0]).toStdString();
+        const ClipInfo source = readClipInfo(smallest.path.toStdString());
+        const ClipInfo written = readClipInfo(file);
+        const double asked = compressed.exportSettings.megabits(source.width, source.height, source.frameRate);
+        const hevclevels::Label wanted = hevclevels::label(source.width, source.height, source.frameRate, asked);
+        const auto label = hevclevels::labelOf(file);
+        check(written.codecName == "HEVC" && label == wanted,
+              QStringLiteral("as HEVC at High, %1 Mbit/s asked, %2 written, labelled %3")
+                  .arg(asked, 0, 'f', 0).arg(written.dataRate / 1e6, 0, 'f', 1)
+                  .arg(QString::fromStdString(label ? label->description() : "nothing")));
+        QFile movie(QDir(out).filePath(made[0]));
+        const QByteArray bytes = movie.open(QIODevice::ReadOnly) ? movie.readAll() : QByteArray();
+        check(bytes.contains("com.apple.quicktime.description") && bytes.contains("Edited with FLX Film Lab. Film profile: "),
+              QStringLiteral("its description says it was edited here, and with which film"));
+    }
 }
 
 // The previews colour-managed for a monitor with a profile of its own: a
@@ -852,6 +971,26 @@ void settingsChecks(MainWindow &window, Document &doc, const QString &scratch)
           QStringLiteral("turned on in Settings, the picture on screen gets its .flx"));
     settings->chooseSidecars(sidecarsBefore);
 
+    std::printf("the comment in exported files\n");
+    check(exportComment() == ExportComment{} && settings->commentExampleText()
+              == QStringLiteral("For example: Edited with FLX Film Lab. Film profile: Kodak Tri-X 400; camera filter: Red, "
+                                "Wratten 25; paper: Ilford Multigrade RC Deluxe"),
+          QStringLiteral("the film, the filter and the paper, as the example says: %1").arg(settings->commentExampleText()));
+    settings->chooseExportComment({true, true, false, true});
+    check(exportComment() == ExportComment{true, true, false, true} && !appSettings().value("exportCommentPaper").toBool()
+              && settings->commentExampleText().endsWith(QStringLiteral("camera filter: Red, Wratten 25")),
+          QStringLiteral("the paper switched off, kept as the Mac keeps it: %1").arg(settings->commentExampleText()));
+    settings->chooseExportComment({false, true, true, true});
+    check(!appSettings().value("exportCommentEditedWith").toBool()
+              && settings->commentExampleText()
+                     == QStringLiteral("For example: Film profile: Kodak Tri-X 400; camera filter: Red, Wratten 25; paper: "
+                                       "Ilford Multigrade RC Deluxe"),
+          QStringLiteral("without the credit: %1").arg(settings->commentExampleText()));
+    settings->chooseExportComment(ExportComment::none());
+    check(settings->commentExampleText() == QStringLiteral("Nothing is written there."),
+          QStringLiteral("all off: %1").arg(settings->commentExampleText()));
+    settings->chooseExportComment({});
+
     std::printf("the monitor\n");
     const QString file = QDir(scratch).filePath(QStringLiteral("wide-gamut-monitor.icc"));
     qputenv("FLX_DISPLAY_PROFILE", file.toLocal8Bit());
@@ -1097,6 +1236,146 @@ void listingChecks(const QString &scratch)
           QStringLiteral("the NEF, DNG, ARW, CR3 and RAF, not the TIFF, JPEG or PNG: %1").arg(listed.join(", ")));
 }
 
+// Sorting a folder (FolderBrowser::Order, tests/app's folderOrder): by file
+// name, or by the date shot, as LibRaw reads it, ties by name; one order for
+// both halves and every menu that shows it, kept. In a folder whose name has
+// a letter outside ASCII, which Windows' narrow file calls misread. The
+// clips' dates are the creation times AVFoundation reads on the Mac.
+void orderChecks(MainWindow &window, Document &doc, MotionDocument &motion, const QString &pictures,
+                 const QString &clips, const QString &scratch)
+{
+    using Kind = FolderBrowser::Kind;
+    using Order = FolderBrowser::Order;
+    std::printf("sort a folder by the date shot\n");
+    std::vector<QString> originals;
+    for (const FolderBrowser::Item &item : FolderBrowser::listing(pictures, Kind::Pictures))
+        if (originals.size() < 4 && QFileInfo(item.path).suffix().compare(QStringLiteral("nef"), Qt::CaseInsensitive) == 0)
+            originals.push_back(item.path);
+    if (originals.size() < 4) {
+        check(false, QStringLiteral("four NEFs to sort in %1").arg(pictures));
+        return;
+    }
+    const std::map<QString, qint64> dates = FolderBrowser::shotDates(originals, Kind::Pictures);
+    // the test pictures' DateTimeOriginal, as macOS's ImageIO reads it: the
+    // camera's clock, here local time as LibRaw reads it
+    const std::map<QString, QDateTime> known{
+        {QStringLiteral("DSC_0036.NEF"), QDateTime(QDate(2025, 11, 25), QTime(11, 45, 6))},
+        {QStringLiteral("DSC_0086.NEF"), QDateTime(QDate(2026, 4, 23), QTime(22, 11, 3))},
+        {QStringLiteral("DSC_0280.NEF"), QDateTime(QDate(2026, 5, 3), QTime(3, 32, 53))},
+        {QStringLiteral("DSC_0336.NEF"), QDateTime(QDate(2026, 5, 3), QTime(5, 26, 4))}};
+    QStringList read, wrong;
+    for (const QString &path : originals) {
+        const QString name = QFileInfo(path).fileName();
+        const QDateTime when = QDateTime::fromSecsSinceEpoch(dates.at(path));
+        read << QStringLiteral("%1 %2").arg(name, when.toString(Qt::ISODate));
+        if (known.count(name) && known.at(name) != when)
+            wrong << name;
+    }
+    check(wrong.isEmpty(), QStringLiteral("each picture's date and time as the camera wrote them: %1").arg(read.join(", ")));
+
+    // named against the order they were shot in, the last shot first
+    std::vector<QString> byDate = originals;
+    std::stable_sort(byDate.begin(), byDate.end(), [&](const QString &a, const QString &b) { return dates.at(a) < dates.at(b); });
+    const QString folder = QDir(scratch).filePath(QStringLiteral("Ausfl\u00FCge \u00E9t\u00E9"));
+    QDir().mkpath(folder);
+    const QStringList letters{"A", "B", "C", "D"};
+    std::map<QString, QString> copyOf;              // the copy's name: the picture it is
+    for (int i = 0; i < 4; ++i) {
+        // copied in the order of their names, so their files' own dates go by name
+        const QString name = letters[i] + QStringLiteral(".NEF");
+        QFile::copy(byDate[size_t(3 - i)], QDir(folder).filePath(name));
+        copyOf[name] = byDate[size_t(3 - i)];
+    }
+    std::vector<QString> copies;
+    for (const QString &name : letters)
+        copies.push_back(FolderBrowser::canonical(QDir(folder).filePath(name + QStringLiteral(".NEF"))));
+    const std::map<QString, qint64> copied = FolderBrowser::shotDates(copies, Kind::Pictures);
+    bool same = true;
+    for (const QString &path : copies)
+        same = same && copied.at(path) == dates.at(copyOf.at(QFileInfo(path).fileName()));
+    check(same, QStringLiteral("read the same in a folder named %1").arg(QFileInfo(folder).fileName()));
+    RawMosaic there, here;
+    readMetadataWithLibRaw(copies[0].toStdString(), there);
+    readMetadataWithLibRaw(copyOf.at(QStringLiteral("A.NEF")).toStdString(), here);
+    check(here.exposure.iso > 0 && there.exposure.iso == here.exposure.iso && there.orientation == here.orientation
+              && there.lensModel == here.lensModel,
+          QStringLiteral("and the rest of what the camera wrote, its ISO %1 there, %2 here")
+              .arg(there.exposure.iso).arg(here.exposure.iso));
+
+    const bool stored = foldersByDateShot();
+    doc.browser().setOrder(Order::Name);
+    window.openFile(folder);
+    check(names(doc.browser().items()) == QStringList({"A.NEF", "B.NEF", "C.NEF", "D.NEF"}),
+          QStringLiteral("by file name: %1").arg(names(doc.browser().items()).join(", ")));
+    // every menu that shows the order: both sidebars' and the View menu's
+    auto ticked = [&](const QString &text) {
+        int on = 0, all = 0;
+        for (QAction *action : window.findChildren<QAction *>())
+            if (action->text() == text) {
+                ++all;
+                on += action->isChecked();
+            }
+        return all >= 3 && on == all;
+    };
+    check(ticked(QStringLiteral("&File Name")), QStringLiteral("File Name ticked in the sidebars' menus and the View menu"));
+    doc.browser().setOrder(Order::DateShot);
+    check(names(doc.browser().items()) == QStringList({"D.NEF", "C.NEF", "B.NEF", "A.NEF"}),
+          QStringLiteral("by the date shot, the first shot first: %1").arg(names(doc.browser().items()).join(", ")));
+    check(motion.browser().order() == Order::DateShot && foldersByDateShot() && ticked(QStringLiteral("&Date Shot")),
+          QStringLiteral("for the clips too, kept, and ticked in every menu"));
+    const QString d = copies[3], c = copies[2];
+    check(doc.browser().neighbour(d, 1) == std::optional<QString>(c),
+          QStringLiteral("Next in Folder goes by the date"));
+    doc.browser().setOrder(Order::Name);
+    check(names(doc.browser().items()) == QStringList({"A.NEF", "B.NEF", "C.NEF", "D.NEF"}) && !foldersByDateShot()
+              && motion.browser().order() == Order::Name,
+          QStringLiteral("and back by file name"));
+    doc.browser().setOrder(stored ? Order::DateShot : Order::Name);
+    waitUntil([&] { return !doc.isDecoding() && !doc.isRendering(); }, 60000);
+
+    std::printf("a clip's date\n");
+    const std::map<QString, QDateTime> clipDates{
+        {QStringLiteral("A001_10221746_C282.mov"), QDateTime(QDate(2026, 10, 22), QTime(15, 46, 20), QTimeZone::UTC)},
+        {QStringLiteral("A001_10221747_C283.mov"), QDateTime(QDate(2026, 10, 22), QTime(15, 47, 4), QTimeZone::UTC)}};
+    if (!clips.isEmpty()) {
+        QStringList found;
+        int matched = 0;
+        for (const FolderBrowser::Item &item : FolderBrowser::listing(clips, Kind::Clips)) {
+            const std::optional<qint64> made = FolderBrowser::movieDate(item.path);
+            found << QStringLiteral("%1 %2").arg(item.name(), made ? QDateTime::fromSecsSinceEpoch(*made, QTimeZone::UTC)
+                                                                          .toString(Qt::ISODate)
+                                                                    : QStringLiteral("none"));
+            if (clipDates.count(item.name()) && made && *made == clipDates.at(item.name()).toSecsSinceEpoch())
+                ++matched;
+        }
+        check(matched == 2, QStringLiteral("from its movie header, as AVFoundation reads it: %1").arg(found.join(", ")));
+        // the smallest clip in a folder named as the pictures' was: its date,
+        // and its log tag, which its own boxes carry
+        const std::vector<FolderBrowser::Item> all = FolderBrowser::listing(clips, Kind::Clips);
+        if (!all.empty()) {
+            const FolderBrowser::Item smallest = *std::min_element(
+                all.begin(), all.end(), [](const auto &a, const auto &b) { return a.size < b.size; });
+            const QString reels = QDir(scratch).filePath(QStringLiteral("Clips \u00E9t\u00E9"));
+            QDir().mkpath(reels);
+            const QString there = QDir(reels).filePath(smallest.name());
+            QFile::copy(smallest.path, there);
+            const ClipInfo here = readClipInfo(smallest.path.toStdString()), away = readClipInfo(there.toStdString());
+            check(!here.camera.logTransfer.empty() && away.camera.logTransfer == here.camera.logTransfer
+                      && away.camera.make == here.camera.make && FolderBrowser::movieDate(there) == FolderBrowser::movieDate(smallest.path),
+                  QStringLiteral("and in a folder named %1, its date and its log tag, %2")
+                      .arg(QFileInfo(reels).fileName(), QString::fromStdString(away.camera.logTransfer)));
+        }
+    }
+    const QString note = QDir(folder).filePath(QStringLiteral("notes.mov"));
+    QFile file(note);
+    if (file.open(QIODevice::WriteOnly))
+        file.write("not a movie");
+    file.close();
+    const std::map<QString, qint64> noted = FolderBrowser::shotDates({note}, Kind::Clips);
+    check(!FolderBrowser::movieDate(note) && std::abs(noted.at(note) - QDateTime::currentSecsSinceEpoch()) < 600,
+          QStringLiteral("and a file with none goes by when it was made"));
+}
+
 int runSelfTest(MainWindow &window, Document &document, MotionDocument &motion, const QString &pictures,
                 const QString &clips, const QString &scratch)
 {
@@ -1114,6 +1393,7 @@ int runSelfTest(MainWindow &window, Document &document, MotionDocument &motion, 
     settingsChecks(window, document, scratch);
     filmSettingsChecks(window, document, motion, scratch);
     filmAndPaperChecks(window, document, motion, pictures, scratch);
+    orderChecks(window, document, motion, pictures, clips, scratch);
     std::printf(g_failures == 0 ? "\nall app checks pass\n" : "\n%d app check(s) failed\n", g_failures);
     return g_failures;
 }

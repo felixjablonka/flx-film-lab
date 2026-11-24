@@ -131,6 +131,14 @@ and 11 stay within ΔE2000 0.00024 (Portra, plain), 0.024 (Portra with
 controls) and 0.027 (Tri-X through the red filter), never more than one 8-bit
 level off.
 
+Followed to the Mac's 2.2.0: grain on clips (`engine/PrintGrain`, equal to the
+Mac's to a correlation of 0.9999 on Metal and Direct3D) and the clip exports'
+compression (`engine/HEVCLevels`); T-Max P3200, Delta 3200, Multigrade FB
+Classic and Fujifilm's Crystal Archive Type CA, DP II and Maxima come with the
+packs, the port's own setups within 1.2e-7 of the Mac's and its renders on
+Direct3D 12 within ΔE2000 0.027; and folders sorted by the date shot and
+Settings' comment in exported files, as the Mac's.
+
 Past 12 MP the intermediates are half precision, as the Mac's. The shaped
 print (`apply_geometry`), dodge & burn (MaskRasterizer) and Glow's effects
 (Core Image kernels on the Mac) are ported with the app (below), and the RAW
@@ -180,9 +188,34 @@ moves, with Glow's bloom, glow and halation on top, at the size the frame
 is shown. The format comes from the clip's tags or its maker (N-Log, V-Log,
 Apple Log and Apple Log 2, F-Log and F-Log2, Canon Log 2 and 3, S-Log3 in
 both gamuts, I-Log), the exposure is metered once across the clip, and the
-pointer reads the code values, IRE and stops beneath it. Export
-(`engine/ClipExport`) writes every frame at full size into ProRes 422 HQ or
-HEVC Main 10 (on NVIDIA's, AMD's or Intel's encoder; *FFmpeg*), tagged
+pointer reads the code values, IRE and stops beneath it. Grain, as the
+Mac's (`engine/PrintGrain`, FramePipeline's `grained`), goes on each
+finished frame after the look and the effects, every frame with grains of
+its own, numbered by its time: the stock's Selwyn coefficients at the
+negative density that prints each pixel's tone, mixed as the print mixes
+the negative's layers, the mixing read off the look's grey scale rendered
+with each layer of the negative 0.01 denser and thinner (LookBaker's
+`printGrain`, FilmRenderer's `setNegativeOffset`), sized by the gauge the
+clip is taken to be shot on, 16, 35 or 70 mm. Against the Mac's own grain on
+the same frames (Vision3 250D and 500T at 35 mm, Portra 800 at 70 mm with
+glow, Tri-X at 16 mm), the port's correlates at 0.99994 to 1.00000, its
+RMS within 0.11%, the largest difference 0.23 of an 8-bit level, on Metal,
+Direct3D 12 and Direct3D 11 alike, and the frame's mean light within 0.03%
+of the Mac's, whose half-float textures brighten it a little. Export
+(`engine/ClipExport`) writes every frame at full size into ProRes 422
+Proxy, LT, 422 or HQ, each near Apple's target rate, or HEVC Main 10 (on
+NVIDIA's, AMD's or Intel's encoder; *FFmpeg*) at the Mac's levels, HEVC's
+own limits for the clip's size and frame rate (`engine/HEVCLevels`:
+Standard is the most the level the clip needs allows at High tier, 100
+Mbit/s for 4K up to 30 fps; High and Maximum the next two levels', Smaller
+half of Standard) or a rate of its own, the menu beside the codec showing
+each choice's rate for the clip on screen. The file is labelled with the
+lowest level and tier that hold it: the GPUs' encoders are told it, its
+peaks held to that level's limit, and a file VideoToolbox wrote, which
+knows no High tier, is relabelled. NVENC writes about 40 Mbit more than the
+rate over a clip, its buffer's first second spent, as HEVC's buffer model
+allows: 2% over 21 s of 4K grain at Standard, 8% over 5 s. The status line
+says what the file came out at. Every file is tagged
 Rec.709 and written with the curve its displays decode: sRGB's for Windows
 displays (the default here, as Windows shows video on the screen as it is),
 a 1.961 power for Apple displays, 2.4 for a BT.1886 monitor; the sound
@@ -218,6 +251,16 @@ screen are decoded ahead on an engine of their own, so stepping to one shows
 it at once, and the toolbar's states, the status line's notes and the white
 balance's "decoding…" wait 0.3 s before showing, so stepping does not flash
 them. Only the last 30 pictures visited keep their undo history.
+
+A folder is sorted by file name, as Explorer sorts them, or by the date shot:
+Sort By in the ••• menu beside the folder's name, or View > Sort Folder By
+(`FolderBrowser::Order`), one order for Stills and Motion, kept under the
+Mac's key (`folderOrder`). The date shot is a RAW file's date and time of
+the original as LibRaw reads it, to the second, a clip's creation time from
+its movie header, as AVFoundation reads it on the Mac, and for a file with
+neither, when the file was made; names go in order where those agree. The
+dates are read side by side, only when a folder is sorted by them: 100 NEFs
+in 9 ms on the PC.
 
 Each picture's settings and flag, and each clip's look and flag, are kept
 between launches in a library in `%APPDATA%\FLX Film Lab\Library`, one file
@@ -262,7 +305,15 @@ panels are made again at the new size in their places, each section open or
 closed as it was left, so nothing they show is lost. Control names
 (Photographic or Darkroom, the Stills sliders; Motion's keep the
 photographic names, as on the Mac), Preview size, Save settings beside
-images, and the monitor's colour are there too; the inspector's Output
+images, and the monitor's colour are there too, and the Comment in Exported
+Files (`ExportComment`, `engine/Provenance`): what an exported picture's EXIF
+comment says, and its description where the camera left none, and an
+exported clip's description, "Edited with FLX Film Lab. Film profile: Kodak
+Tri-X 400; camera filter: Red, Wratten 25; paper: Ilford Multigrade RC
+Deluxe", the credit, the film, the filter and the paper each switched on or
+off (without the credit it starts at the film; a motion picture film names
+its print film; a slide seen as one and an instant print name no paper),
+with none on nothing written there; the inspector's Output
 section keeps the picture's own colour space and gamut compression. Its Film
 & Paper tab is the Mac's (`NewPictures`, `PaperRule` in `engine/Packs`,
 `startingRecipe` and `pickingFilm` in `engine/SetupBuilder`): what a picture
@@ -339,8 +390,13 @@ recipe on the file first, `--bench N` times N renders, `--size WxH` and
 `--preview N` set the window and the preview. With a movie, `--at SECONDS`
 shows that frame, `--play SECONDS`
 plays first and counts the frames shown, `--codec prores|hevc` chooses
-what `--export` writes, and `--export-lut PATH` writes the look's .cube.
-`flxport-export` writes a clip as the app's Export does. `--save-original
+what `--export` writes, `--compression` how hard (ProRes's flavour, HEVC's
+level or a rate in Mbit/s) and `--grain 16|35|70` lays grain on, and
+`--export-lut PATH` writes the look's .cube. `flxport-export` writes a clip
+as the app's Export does, with the same choices and grain's Amount and Size,
+and says the rate the file came out at and HEVC's label; `flxport-motion
+--grain` and the Mac's `flxmotion --grain` draw one frame's grain each, for
+tools/compare. `--save-original
 PNG` writes the original in the print's place. The file may be a
 folder, and `--screenshot` then waits for the sidebar's pictures too;
 `--library DIR` keeps the library, the cached prints and the settings (an INI
@@ -352,8 +408,11 @@ through without a load showing, settings and flags kept and found again by a
 new library, the print kept from the screen, Paste Settings to Selected and
 its undo step, Export Selected, Export and Export Selected at a long edge, the
 sidecars; and the two smallest of CLIPS
-copied into DIR as a folder of clips, a look kept, its graded frame, Paste
-Look and Export Selected; and the previews on a
+copied into DIR as a folder of clips, a look kept, its graded frame, grain
+on the frame and its undo step, the frame as it was with it off, the
+toolbar's HEVC levels with their rates for the clip, Paste Look and Export
+Selected, as HEVC at High with grain, labelled the level and tier that hold
+it; and the previews on a
 wide-gamut monitor (`FLX_DISPLAY_PROFILE` names a profile to use as the
 monitor's): the print, the surround, the sidebar's pictures and Motion's
 frame converted, a Display P3 print reaching it unclipped; and Settings:
@@ -376,9 +435,17 @@ and Settings' Film & Paper tab: the defaults with nothing set, a default film
 bringing its own paper, a default slide with none, the paper following the
 film or staying with its kind as Stills and Motion change film, the paper
 last used shared between them, and two pictures opened afresh, with the look
-before and with the default film and paper (96 checks on the Mac build, all
-passing on Metal, which only reports the menus; 100 on Direct3D 12, all
-passing, which adds the menus' names at each text size). `--text-size
+before and with the default film and paper; the comment in the exported
+prints and clip, Settings' example, the comment without the credit, and
+nothing with none asked for; and a
+folder sorted by file name and by the date shot, in a folder named with
+letters outside ASCII: the four NEFs named against the order they were shot
+in, their dates as the camera wrote them, the order shared by both halves
+and ticked in every menu that shows it, Next in Folder following it, and the
+clips' dates from their headers, a log clip's tag read in such a folder too
+(124 checks on the Mac build, all passing on Metal, which only reports the
+menus; 128 on Direct3D 12, all passing, which adds the menus' names at each
+text size). `--text-size
 SIZE` shows the panels at a text size for one run, without keeping it.
 
 A slider's tick at the 2560 px preview, all of it (meters, setup, GPU,
@@ -417,7 +484,11 @@ The Mac app decodes with Apple's decoder (CIRAWFilter, set up in
   RawSpeed's list. Both are compiled in from their sources
   (`cmake/RawSpeed.cmake`, `cmake/LibRaw.cmake`). They read the same
   values; RawSpeed's camera list has each camera's measured clipping point,
-  and it decodes in half the time.
+  and it decodes in half the time. Paths go to LibRaw, as to the port's own
+  readers of a clip's tags and a RAW file's lens data, by their wide names
+  on Windows (`engine/Paths.h`): a narrow path there is read in the ANSI
+  code page, and a picture in a folder named "Ausflüge" lost what LibRaw
+  reads of it, its ISO, turn, lens and date, and a log clip its log tag.
 - **The port's own steps:**
   - black and white levels;
   - the white balance;

@@ -31,6 +31,10 @@ public:
     enum class Kind { Pictures, Clips };
     // Which pictures the sidebar lists.
     enum class Filter { All, Picks, WithoutRejects };
+    // How the sidebar orders a folder (FolderBrowser.Order on the Mac): by
+    // name as Explorer sorts them, or by when each was shot, names in order
+    // where those agree. One setting for Stills and Motion, kept.
+    enum class Order { Name, DateShot };
     using Flag = ImageLibrary::Flag;
 
     struct Item {
@@ -63,6 +67,10 @@ public:
     const std::set<QString> &edited() const { return m_edited; }
     Filter filter() const { return m_filter; }
     void setFilter(Filter filter);
+    Order order() const { return m_order; }
+    // Sorts the folder by `order`, here and in the other mode's sidebar, and
+    // keeps it for folders opened later.
+    void setOrder(Order order);
     // The image on screen, for the sidebar to mark.
     const QString &current() const { return m_current; }
     void setCurrent(const QString &path);
@@ -109,10 +117,20 @@ public:
     // them, none hidden; sidecars (.flx) are not pictures.
     static std::vector<Item> listing(const QString &folder, Kind kind);
     static bool isPicture(const QString &path);
+    // When each of `paths` was shot, seconds since 1970, for Order::DateShot:
+    // a RAW file's date and time of the original as LibRaw reads it (to the
+    // second), a movie's creation time from its header, and for a file with
+    // neither, when the file was made. Read side by side.
+    static std::map<QString, qint64> shotDates(const std::vector<QString> &paths, Kind kind);
+    // A movie's creation time from its movie header (moov's mvhd), as
+    // AVFoundation reads it on the Mac; none where there is none.
+    static std::optional<qint64> movieDate(const QString &path);
 
 signals:
-    // The folder, its pictures or the filter: the rows themselves.
+    // The folder, its pictures, the filter or the order: the rows themselves.
     void listChanged();
+    // The order, for the menus that show it.
+    void orderChanged();
     // The flags or the settings of their own: how rows look.
     void rowsChanged();
     // The selection, or the picture on screen.
@@ -121,7 +139,13 @@ signals:
     void stateChanged();
 
 private:
+    // `items` in the order, the dates read that are not yet.
+    std::vector<Item> ordered(std::vector<Item> items);
+    void applyOrder(Order order);
+
     Kind m_kind;
+    Order m_order = Order::Name;
+    std::map<QString, qint64> m_shotDates;
     QString m_folder;
     std::vector<Item> m_items;
     std::set<QString> m_selection;

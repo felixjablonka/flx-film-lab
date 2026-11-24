@@ -44,6 +44,8 @@ public:
     void chooseVocabulary(Vocabulary vocabulary);
     void choosePreviewSize(int pixels);
     void chooseSidecars(bool on);
+    // What an exported picture's or clip's comment names (ExportComment).
+    void chooseExportComment(const ExportComment &comment);
     // A film in the Film menu or left out; a group's films, every film with
     // an empty group.
     void chooseFilmShown(const std::string &stock, bool shown);
@@ -65,6 +67,9 @@ public:
     void refresh();
     QString monitorText() const;
     QString filmsShownText() const;      // "58 of 61 films shown"
+    // The comment the switches would write, on Tri-X through a red filter on
+    // Multigrade, or that nothing is.
+    QString commentExampleText();
 
 signals:
     // MainWindow builds the inspectors and the sidebars again
@@ -88,6 +93,8 @@ private:
     Segmented *m_textSize;
     QComboBox *m_names, *m_preview;
     Switch *m_sidecars;
+    Switch *m_commentEditedWith, *m_commentFilm, *m_commentPaper, *m_commentFilter;
+    QLabel *m_commentExample;
     QLabel *m_monitor;
     QRadioButton *m_carryLook, *m_defaultStocks, *m_followsFilm, *m_staysWithKind;
     StockPicker *m_defaultFilm, *m_defaultPaper;

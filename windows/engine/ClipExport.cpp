@@ -1,5 +1,7 @@
 #include "ClipExport.h"
 
+#include "HEVCLevels.h"
+#include "Paths.h"
 #include "SetupBuilder.h"
 
 extern "C" {
@@ -34,11 +36,6 @@ std::string error(int code)
 [[noreturn]] void cannotWrite(const std::string &why)
 {
     throw std::runtime_error("Could not write the export: " + why);
-}
-
-std::filesystem::path fsPath(const std::string &utf8)
-{
-    return std::filesystem::path(reinterpret_cast<const char8_t *>(utf8.c_str()));
 }
 
 struct InputCloser {
@@ -100,57 +97,103 @@ Encoder open(const char *name, AVPixelFormat format, const Picture &p,
     return c;
 }
 
-// ProRes 422 HQ for editing and grading further: Apple's own vendor code, so
-// every application takes it for Apple's.
-Encoder openProRes(const Picture &p)
+// ProRes 422 for editing and grading further, at its flavour (Proxy, LT, 422
+// or HQ, each its own FourCC): Apple's own vendor code, so every application
+// takes it for Apple's.
+Encoder openProRes(const Picture &p, ProResFlavour flavour)
 {
-    return open("prores_ks", AV_PIX_FMT_YUV422P10LE, p, [](AVCodecContext *c) {
-        av_opt_set(c->priv_data, "profile", "hq", 0);
+    const char *profile = flavour == ProResFlavour::Proxy ? "proxy"
+        : flavour == ProResFlavour::LT                    ? "lt"
+        : flavour == ProResFlavour::Standard              ? "standard"
+                                                          : "hq";
+    return open("prores_ks", AV_PIX_FMT_YUV422P10LE, p, [profile](AVCodecContext *c) {
+        av_opt_set(c->priv_data, "profile", profile, 0);
         av_opt_set(c->priv_data, "vendor", "apl0", 0);
     });
 }
 
-// HEVC Main 10 for sharing, on the GPU's encoder where there is one. A graded
-// image carries more fine detail than flat log footage, so it is given a
-// little more than the source had (ClipExporter.videoSettings).
-Encoder openHEVC(const Picture &p, double sourceDataRate)
+// HEVC Main 10 for sharing, on the GPU's encoder where there is one, at
+// `megabits` on average (ClipExporter.videoSettings), its peaks held to what
+// `label` allows over a second's buffer, which is that level's buffer, and
+// labelled so: the level and tier told to the encoders that take them. An
+// encoder that refuses them is opened without, and its file relabelled.
+Encoder openHEVC(const Picture &p, double megabits, const hevclevels::Label &label)
 {
-    const int64_t rate = int64_t(std::clamp(sourceDataRate * 1.25, 30e6, 300e6));
+    const int64_t rate = int64_t(std::llround(megabits * 1e6));
+    const int64_t peak = std::max<int64_t>(rate, int64_t(std::llround(label.megabits() * 1e6)));
     const int gop = std::max(int(std::lround(av_q2d(p.frameRate))), 1);
-    auto common = [rate, gop](AVCodecContext *c) {
+    auto common = [rate, peak, gop](AVCodecContext *c) {
         c->bit_rate = rate;
-        c->rc_max_rate = rate * 2;
-        c->rc_buffer_size = int(std::min<int64_t>(rate * 2, INT32_MAX));
+        c->rc_max_rate = peak;
+        c->rc_buffer_size = int(std::min<int64_t>(peak, INT32_MAX));
         c->gop_size = gop;
         c->profile = AV_PROFILE_HEVC_MAIN_10;
     };
+    const char *tier = label.high ? "high" : "main";
+    const int64_t level = label.idc;
+    const std::string x265 = "level-idc=" + label.level() + ":high-tier=" + (label.high ? "1" : "0");
     struct Candidate {
         const char *name;
         AVPixelFormat format;
         std::function<void(AVCodecContext *)> options;
+        std::function<void(AVCodecContext *)> labelled;
     };
     const Candidate candidates[] = {
+        // NVENC writes about 40 Mbit more than the rate over a clip at
+        // Standard, its buffer's first second spent (8% over 5 s of 4K grain,
+        // 2% over 21 s), as HEVC's buffer model allows; the same in constant
+        // rate, which would also keep a clip without grain from coming out
+        // smaller
         {"hevc_nvenc", AV_PIX_FMT_P010LE,
          [](AVCodecContext *c) {
              av_opt_set(c->priv_data, "preset", "p6", 0);
              av_opt_set(c->priv_data, "tune", "hq", 0);
              av_opt_set(c->priv_data, "rc", "vbr", 0);
              av_opt_set(c->priv_data, "profile", "main10", 0);
+         },
+         [tier, level](AVCodecContext *c) {
+             av_opt_set(c->priv_data, "tier", tier, 0);
+             av_opt_set_int(c->priv_data, "level", level, 0);
          }},
         {"hevc_amf", AV_PIX_FMT_P010LE,
-         [](AVCodecContext *c) { av_opt_set(c->priv_data, "quality", "quality", 0); }},
+         [](AVCodecContext *c) { av_opt_set(c->priv_data, "quality", "quality", 0); },
+         [tier, level](AVCodecContext *c) {
+             av_opt_set(c->priv_data, "profile_tier", tier, 0);
+             av_opt_set_int(c->priv_data, "level", level, 0);
+         }},
         {"hevc_qsv", AV_PIX_FMT_P010LE,
-         [](AVCodecContext *c) { av_opt_set(c->priv_data, "preset", "slower", 0); }},
-        {"hevc_videotoolbox", AV_PIX_FMT_P010LE, [](AVCodecContext *) {}},
+         [](AVCodecContext *c) { av_opt_set(c->priv_data, "preset", "slower", 0); },
+         [tier, level](AVCodecContext *c) {
+             av_opt_set(c->priv_data, "tier", tier, 0);
+             c->level = int(level);
+         }},
+        // VideoToolbox knows no tier or level, so the file is relabelled; and
+        // its peak limit is a hard one it keeps well under (70 Mbit/s for 100
+        // asked), so it is given the average alone, as the Mac app gives it
+        {"hevc_videotoolbox", AV_PIX_FMT_P010LE,
+         [](AVCodecContext *c) {
+             c->rc_max_rate = 0;
+             c->rc_buffer_size = 0;
+         },
+         {}},
         {"libx265", AV_PIX_FMT_YUV420P10LE,
-         [](AVCodecContext *c) { av_opt_set(c->priv_data, "preset", "fast", 0); }},
+         [](AVCodecContext *c) { av_opt_set(c->priv_data, "preset", "fast", 0); },
+         [x265](AVCodecContext *c) { av_opt_set(c->priv_data, "x265-params", x265.c_str(), 0); }},
     };
-    for (const Candidate &k : candidates)
+    for (const Candidate &k : candidates) {
+        if (k.labelled)
+            if (Encoder e = open(k.name, k.format, p, [&](AVCodecContext *c) {
+                    common(c);
+                    k.options(c);
+                    k.labelled(c);
+                }))
+                return e;
         if (Encoder e = open(k.name, k.format, p, [&](AVCodecContext *c) {
                 common(c);
                 k.options(c);
             }))
             return e;
+    }
     return nullptr;
 }
 
@@ -202,6 +245,23 @@ void copyMetadata(AVDictionary **to, const AVDictionary *from)
 }
 
 } // namespace
+
+ClipExportOptions::ClipExportOptions(const ExportSettings &s)
+    : codec(s.codec), display(s.display), proRes(s.flavour()), hevcLevel(s.level()),
+      hevcCustomMegabits(s.customMegabits())
+{
+}
+
+ExportSettings ClipExportOptions::settings() const
+{
+    ExportSettings s;
+    s.codec = codec;
+    s.display = display;
+    s.proRes = proRes;
+    s.hevcLevel = hevcLevel;
+    s.hevcCustomMegabits = hevcCustomMegabits;
+    return s;
+}
 
 std::string exportClip(QRhi *rhi, const std::string &source, const std::string &destination, const LookLUT &lut,
                        const GlowLook &effects, const InputSettings &input, LogFormat format,
@@ -258,8 +318,11 @@ std::string exportClip(QRhi *rhi, const std::string &source, const std::string &
     if (videoIn->codecpar->sample_aspect_ratio.num > 0)
         picture.aspect = videoIn->codecpar->sample_aspect_ratio;
     picture.globalHeader = (out->oformat->flags & AVFMT_GLOBALHEADER) != 0;
-    Encoder encoder = options.codec == ExportCodec::ProRes422HQ ? openProRes(picture)
-                                                                 : openHEVC(picture, info.dataRate);
+    // HEVC's rate for this clip, and the lowest level and tier that hold it
+    const double megabits = options.settings().megabits(info.width, info.height, info.frameRate);
+    const hevclevels::Label label = hevclevels::label(info.width, info.height, info.frameRate, megabits);
+    Encoder encoder = options.codec == ExportCodec::ProRes422HQ ? openProRes(picture, options.proRes)
+                                                                 : openHEVC(picture, megabits, label);
     if (!encoder)
         cannotWrite(options.codec == ExportCodec::ProRes422HQ ? "this build has no ProRes encoder"
                                                                : "no HEVC 10-bit encoder would open on this computer");
@@ -383,6 +446,8 @@ std::string exportClip(QRhi *rhi, const std::string &source, const std::string &
 
     FramePipeline pipeline(rhi);
     pipeline.setLUT(lut);
+    const bool grained = options.grainTable && options.grain && options.grain->isVisible();
+    const uint32_t clipSeed = FrameGrain::clipSeedFor(source);
     const EffectsParams fx = effectsFor(effects, std::max(info.width, info.height));
     const Chroma chroma = options.codec == ExportCodec::ProRes422HQ ? Chroma::C422 : Chroma::C420;
     std::unique_ptr<AVFrame, FrameCloser> frame(av_frame_alloc());
@@ -398,7 +463,13 @@ std::string exportClip(QRhi *rhi, const std::string &source, const std::string &
             break;
         if (progress && !progress(span > 0 ? std::clamp(v->time / span, 0.0, 1.0) : 0))
             throw ExportCancelled();
-        pipeline.renderExport(*v, readingOf(*v, input, format), fx, options.display, chroma, planes);
+        // each frame its own grains, numbered by its time as the preview's are
+        std::optional<FrameGrain> grain;
+        if (grained)
+            grain = FrameGrain{options.grainTable, *options.grain, clipSeed,
+                               FrameGrain::frameNumber(v->time, info.frameRate)};
+        pipeline.renderExport(*v, readingOf(*v, input, format), fx, options.display, chroma, planes,
+                              grain ? &*grain : nullptr);
         if (int e = av_frame_make_writable(frame.get()); e < 0)
             cannotWrite(error(e));
         const int chromaWidth = chroma == Chroma::C422 || chroma == Chroma::C420 ? (v->width + 1) / 2 : v->width;
@@ -417,6 +488,10 @@ std::string exportClip(QRhi *rhi, const std::string &source, const std::string &
     if (int e = av_write_trailer(out.get()); e < 0)
         cannotWrite(error(e));
     avio_closep(&out->pb);
+    // the lowest level and tier that hold it, where the encoder said otherwise
+    if (options.codec == ExportCodec::HEVC10)
+        if (const auto said = hevclevels::labelOf(partialName); said && *said != label)
+            hevclevels::relabel(partialName, label);
 
     // the file the save dialog was told to replace, if there is one
     std::error_code failed;

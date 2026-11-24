@@ -731,12 +731,13 @@ do {
 print("black-and-white stocks print in silver")
 do {
     let bw = ["kodak_tri_x_400", "kodak_tri_x_400_push2", "ilford_hp5_plus", "fujifilm_neopan_1600", "agfa_apx_25",
-              "kodak_t_max_100", "kodak_double_x_5222", "agfa_apx_100", "agfa_apx_400", "fujifilm_neopan_100_acros_ii"]
+              "kodak_t_max_100", "kodak_double_x_5222", "agfa_apx_100", "agfa_apx_400", "fujifilm_neopan_100_acros_ii",
+              "kodak_t_max_p3200", "ilford_delta_3200"]
     let paper = "ilford_multigrade_rc_deluxe"
     // Double-X prints on its own release print film, 2302, a silver film too.
     let ownPrint = ["kodak_double_x_5222": "kodak_2302"]
     let ownSheet = ["agfa_apx_25", "kodak_t_max_100", "kodak_double_x_5222", "agfa_apx_100", "agfa_apx_400",
-                    "fujifilm_neopan_100_acros_ii"]
+                    "fujifilm_neopan_100_acros_ii", "kodak_t_max_p3200", "ilford_delta_3200"]
 
     // A colourful chart, hue around and exposure across, grain on: on a
     // silver paper every pixel must come out neutral, grain included —
@@ -831,6 +832,19 @@ do {
                   String(format: "kodak_t_max_100: response %.0f%% at 5, %.0f%% at 20, %.0f%% at 30 cycles/mm (Kodak's 109, 114, 112)",
                          got[0], got[1], got[2]))
         }
+        // Kodak F-4001 gives T-Max P3200 its own curve (D-76, tungsten): 111%
+        // at 5 cycles/mm, 99% at 20, 88% at 30. Delta 3200, for which Ilford
+        // publishes none, takes it too (its class's Kodak film), so on its own
+        // curve's slope it should come out the same.
+        for film in ["kodak_t_max_p3200", "ilford_delta_3200"] {
+            var r = try baseRecipe(film: film)
+            r.halationEnabled = true
+            let kodak: [(f: Double, response: Double)] = [(5, 111.0), (20, 99.0), (30, 88.0)]
+            let got = try kodak.map { try response(r, at: $0.f) }
+            check(zip(got, kodak).allSatisfy { abs($0 - $1.response) < 5 },
+                  String(format: "%@: response %.0f%% at 5, %.0f%% at 20, %.0f%% at 30 cycles/mm (Kodak's P3200 111, 99, 88)",
+                         film, got[0], got[1], got[2]))
+        }
         // Kodak H-1-5222 gives Double-X its own curve (D-96, tungsten): a broad
         // edge-effect hump, 126% at 5 cycles/mm, falling to 92% at 20 and 68%
         // at 30, which takes the scatter's tail as well as its core.
@@ -878,7 +892,7 @@ do {
     }
     // A colour negative on the silver paper is neutral too, and on the silver
     // print film.
-    for print in [paper, "kodak_2302"] {
+    for print in [paper, "ilford_multigrade_fb_classic", "kodak_2302"] {
         var r = try baseRecipe(film: "kodak_portra_400")
         r.printStock = print
         let worst = try render(renderer, r).map { simd_length(SIMD2(lab($0).y, lab($0).z)) }.max() ?? .infinity
@@ -899,14 +913,19 @@ do {
     // Panchromatic, and bluer than the eye: an unfiltered silver film renders
     // a blue sky lighter and a red darker than their luminance, which is
     // what yellow and red filters are for. Two patches of equal luminance.
+    // HARMAN plots Delta 3200 as sensitive at 670 nm as at 550 (the same
+    // spectrogram in its 2002, 2010 and 2018 sheets, and Delta 400's in
+    // 2018), so it sees red further than the eye does: there the red patch
+    // prints the lighter.
     let y = RenderSetupBuilder.midgrayValue
     let redPatch = SIMD3<Float>(0.8, 0.1, 0.1), bluePatch = SIMD3<Float>(0.1, 0.2, 0.8)
     func scaled(_ c: SIMD3<Float>) -> SIMD3<Float> { c * (y / simd_dot(c, SIMD3(0.2627, 0.6780, 0.0593))) }
     let rr = scaled(redPatch), bb = scaled(bluePatch)
     renderer.setImage([rr.x, rr.y, rr.z, 1, bb.x, bb.y, bb.z, 1], width: 2, height: 1)
+    let redder: Set<String> = ["ilford_delta_3200"]
     for film in bw {
         let out = try render(renderer, try baseRecipe(film: film)).map { lab($0).x }
-        check(out[1] > out[0] + 2,
+        check(redder.contains(film) ? out[0] > out[1] + 2 : out[1] > out[0] + 2,
               String(format: "%@: equal-luminance blue prints L* %.1f, red L* %.1f", film, out[1], out[0]))
     }
 
@@ -1332,6 +1351,34 @@ do {
     renderer.setImage(greyWedge(stops), width: stops.count, height: 1)
 }
 
+print("the Fujifilm papers built here print any negative's greys, their blacks as Fujifilm aims them")
+// Crystal Archive Type CA, DP II and Maxima (tools/bake/build_paper_profiles.py)
+// print a full grey range with mid-grey neutral by the bake's solved
+// filtration. One curve shape, DP II's, scaled to each paper's D-max aim:
+// Type CA's black is the lightest, Maxima's the deepest.
+do {
+    let papers = ["fujifilm_crystal_archive_type_ca", "fujifilm_crystal_archive_dpii", "fujifilm_crystal_archive_maxima"]
+    let wedge: [Float] = [-3, -2, -1, 0, 1, 2, -12]
+    renderer.setImage(greyWedge(wedge), width: wedge.count, height: 1)
+    var blacks = [Float]()
+    for paper in papers {
+        for film in ["kodak_portra_400", "kodak_ektar_100", "fujifilm_pro_400h", "kodak_gold_200"] {
+            var r = try baseRecipe(film: film)
+            r.printStock = paper
+            let out = try render(renderer, r).map(lab)
+            let rising = zip(out.prefix(6), out.prefix(6).dropFirst()).allSatisfy { $0.x < $1.x }
+            check(rising && out[0].x < 20 && out[5].x > 70 && abs(out[3].y) < 1 && abs(out[3].z) < 1,
+                  String(format: "%@ on %@: L* %.0f to %.0f from -3 to +2 stops, mid-grey a* %+.1f b* %+.1f",
+                         film, paper, out[0].x, out[5].x, out[3].y, out[3].z))
+            if film == "kodak_portra_400" { blacks.append(out[6].x) }
+        }
+    }
+    check(blacks[0] > blacks[1] + 0.5 && blacks[1] > blacks[2] + 0.3,
+          String(format: "Portra 400's black prints L* %.1f on Type CA, %.1f on DP II, %.1f on Maxima",
+                 blacks[0], blacks[1], blacks[2]))
+    renderer.setImage(greyWedge(stops), width: stops.count, height: 1)
+}
+
 print("bloom and glow land on the print where the light is")
 do {
     // A bright square on a dark ground. Glow's effects run in Core Image on
@@ -1474,9 +1521,10 @@ print("the film decode stays on Core Image's RAW decoder 8 until a newer one is 
 // the repository, so skipped without them) passes 8, so a move to 9 is made on
 // purpose, with the Windows app's colour measured again. The second runs the
 // film decode's setup on each camera's default, and as if the newest version a
-// file offers were the default: it has to keep the first, and step back to 8
-// from the second with the decode still linear (choosing a version puts its
-// shadow bias back).
+// file offers were the default: it has to keep the first, and step back from
+// the second to 8, or the newest version before it that the file offers (the
+// D700's are 6, 7 and 9), with the decode still linear (choosing a version puts
+// its shadow bias back).
 do {
     let folder = URL(fileURLWithPath: "Test Files/Test RAW files")
     var cameras: [String: URL] = [:]
@@ -1510,7 +1558,10 @@ do {
                   (RawLoader.number(of: newest) ?? 0) > kept, let fresh = CIRAWFilter(imageURL: url) else { continue }
             fresh.decoderVersion = newest
             RawLoader.configure(fresh, options: options)
-            if RawLoader.number(of: fresh.decoderVersion) == kept, fresh.shadowBias == 0, fresh.boostShadowAmount == 0 {
+            let offered = filter.supportedDecoderVersions.compactMap { RawLoader.number(of: $0) }
+            let below = offered.filter { $0 <= kept }.max()
+            if let below, RawLoader.number(of: fresh.decoderVersion) == below, fresh.shadowBias == 0,
+               fresh.boostShadowAmount == 0 {
                 steppedBack.append("\(model) \(newest.rawValue) to \(fresh.decoderVersion.rawValue)")
             } else {
                 wrong.append(String(format: "%@ from %@: version %@, shadow bias %.1f, shadow boost %.2f", model,
@@ -1522,7 +1573,7 @@ do {
               : "Core Image's default RAW decoder is past \(kept) for \(newer.joined(separator: "; ")): check the film decode "
                 + "on it, measure the Windows app's colour again, then raise RawLoader.filmDecoderVersion")
         check(wrong.isEmpty, "the film decode keeps Core Image's default where it is \(kept) or older"
-              + (steppedBack.isEmpty ? "" : ", and steps back to \(kept), still linear, where it is newer: "
+              + (steppedBack.isEmpty ? "" : ", and steps back to \(kept) or the newest before it, still linear, where it is newer: "
                  + steppedBack.joined(separator: ", "))
               + (wrong.isEmpty ? "" : ": " + wrong.joined(separator: "; ")))
     }

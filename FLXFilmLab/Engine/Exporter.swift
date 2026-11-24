@@ -45,7 +45,8 @@ enum Exporter {
 
     /// What made a file, for its metadata: FLX Film Lab and its version as
     /// the software, and in words the film, its camera filter and the paper
-    /// it was printed on, or the light table it was viewed on.
+    /// it was printed on (a slide or an instant print, seen as it is, has
+    /// none).
     struct Provenance: Equatable {
         var software: String
         var description: String
@@ -57,26 +58,66 @@ enum Exporter {
             return version.map { "FLX Film Lab \($0)" } ?? "FLX Film Lab"
         }
 
-        /// "Film: Kodak Tri-X 400; camera filter: Red, Wratten 25; paper:
-        /// Ilford Multigrade IV RC Deluxe", in the names the pickers show.
-        /// Plain ASCII, which every reader of the tags takes.
-        init(recipe: Recipe, software: String = Provenance.software) {
+        /// "Edited with FLX Film Lab. Film profile: Kodak Tri-X 400; camera
+        /// filter: Red, Wratten 25; paper: Ilford Multigrade RC Deluxe", in the
+        /// names the pickers show, saying what `comment` asks for: a print on
+        /// a motion picture print film names its print film; a film seen as
+        /// it is, a slide on the light table or an instant print, names no
+        /// paper. Without the credit it starts at the first part asked for,
+        /// "Film profile: Kodak Tri-X 400; …". Empty when `comment` asks for
+        /// nothing, and then nothing is written. Plain ASCII, which every
+        /// reader of the tags takes.
+        init(recipe: Recipe, comment: ExportComment = .current, software: String = Provenance.software) {
             let film = try? PackLibrary.shared.pack(recipe.filmStock)
-            var parts = ["Film: \(film?.name ?? recipe.filmStock)"]
-            if let filter = film?.lensFilter(recipe.lensFilter) {
+            var parts: [String] = []
+            if comment.film {
+                parts.append("Film profile: \(film?.name ?? recipe.filmStock)")
+            }
+            if comment.filter, let filter = film?.lensFilter(recipe.lensFilter) {
                 parts.append("camera filter: \(filter.designation)")
             }
-            if let film, film.isInstantPrint {
-                // The film is the print: what made it is how warm it developed.
-                parts.append(film.processingFahrenheit(recipe.processingTemperature)
-                    .map { "instant print, processed at \($0) F" } ?? "instant print")
-            } else if film?.isViewedDirectly(scanFilm: recipe.scanFilm) ?? (recipe.scanFilm ?? false) {
-                parts.append("viewed on a light table")
-            } else {
-                parts.append("paper: \((try? PackLibrary.shared.pack(recipe.printStock))?.name ?? recipe.printStock)")
+            // A slide on the light table and an instant print, the print
+            // itself, are seen as they are: no paper to name.
+            if comment.paper, !(film?.isViewedDirectly(scanFilm: recipe.scanFilm) ?? (recipe.scanFilm ?? false)) {
+                let print = try? PackLibrary.shared.pack(recipe.printStock)
+                let kind = print?.isMotionPicture == true ? "print film" : "paper"
+                parts.append("\(kind): \(print?.name ?? recipe.printStock)")
             }
             self.software = software
-            description = parts.joined(separator: "; ")
+            if let first = parts.first {
+                parts[0] = first.prefix(1).uppercased() + first.dropFirst()
+            }
+            let named = parts.isEmpty ? nil : parts.joined(separator: "; ")
+            description = [comment.editedWith ? "Edited with FLX Film Lab." : nil, named]
+                .compactMap { $0 }.joined(separator: " ")
+        }
+    }
+
+    /// What the comment in an exported picture or clip says (Settings,
+    /// General): "Edited with FLX Film Lab.", then the film profile, the
+    /// paper or print film (a slide or an instant print has none), the camera
+    /// filter. All four unless set otherwise; with none, nothing is written
+    /// there, and a camera's own comment and description stay as they were.
+    struct ExportComment: Equatable, Sendable {
+        var editedWith = true
+        var film = true
+        var paper = true
+        var filter = true
+
+        static let editedWithKey = "exportCommentEditedWith"
+        static let filmKey = "exportCommentFilm"
+        static let paperKey = "exportCommentPaper"
+        static let filterKey = "exportCommentFilter"
+        static let keys = [editedWithKey, filmKey, paperKey, filterKey]
+
+        static let none = ExportComment(editedWith: false, film: false, paper: false, filter: false)
+
+        /// As Settings has it.
+        static var current: ExportComment {
+            let defaults = UserDefaults.standard
+            func on(_ key: String) -> Bool { defaults.object(forKey: key) as? Bool ?? true }
+            return ExportComment(editedWith: on(editedWithKey), film: on(filmKey), paper: on(paperKey),
+                                 filter: on(filterKey))
         }
     }
 
@@ -178,7 +219,7 @@ enum Exporter {
                     kCGImagePropertyTIFFImageDescription] {
             if let value = sourceTIFF[key] { tiff[key] = value }
         }
-        if let provenance {
+        if let provenance, !provenance.description.isEmpty {
             // Cameras fill both with spaces, or NULs (a Nikon's comment is 36),
             // when there is nothing to say.
             func said(_ value: Any?) -> String? {

@@ -4,7 +4,8 @@
 //  format's code values (or, for Apple Log, its 0...1 signal), those through
 //  the baked print look, out as linear light
 //  with Rec.709 primaries. Everything spatial (the Glow effects) runs after
-//  this in Core Image.
+//  this in Core Image, and grain after that: `grain_light` here, with the
+//  engine's own grain kernels from flx.metal.
 //
 //  Compiled at runtime from source, like flx.metal.
 
@@ -105,6 +106,94 @@ inline float3 lookup(texture3d<float, access::read> lut, float3 p, int n) {
             return c000 + f.y * (c010 - c000) + f.x * (c110 - c010) + f.z * (c111 - c110);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Grain, laid on the finished frame (FramePipeline.grained)
+// ---------------------------------------------------------------------------
+
+// Must match FramePipeline.GrainLightUniforms.
+struct GrainLightUniforms {
+    float3 tableTop;         // print density at the table's last sample, per record
+    float  pixelArea;        // um^2 of film per pixel
+    float  sizeSquared;      // Size, squared
+    float  amount;           // Amount
+    uint   samples;          // table samples per record
+    float3 kept0;            // per layer, per record: the share of the noise's
+    float3 kept1;            // variance its clouds keep, (sum of the taps' squares)^2
+    float3 kept2;
+    uint   monochrome;       // one record: the layers' grain is shared by the three
+};
+
+// The finished frame's light as the print's density, for its grain.
+kernel void grain_density(texture2d<float, access::read>  src [[texture(0)]],
+                          texture2d<float, access::write> dst [[texture(1)]],
+                          uint2 gid [[thread_position_in_grid]])
+{
+    if (gid.x >= dst.get_width() || gid.y >= dst.get_height()) return;
+    dst.write(float4(-log10(max(src.read(gid).rgb, 1e-6f)), 1.0f), gid);
+}
+
+// Entry `k` of row `row` of a [row][sample][3] table, at density `d` of a
+// scale up to `top`.
+inline float tableAt(constant float *table, uint row, uint k, float d, float top, uint samples) {
+    float x = clamp(max(d, 0.0f) / max(top, 1e-4f), 0.0f, 1.0f) * float(samples - 1);
+    uint i = min(uint(x), samples - 2);
+    float t = x - float(i);
+    return mix(table[(row * samples + i) * 3 + k], table[(row * samples + i + 1) * 3 + k], t);
+}
+
+// Each record's grain, mixed as the print mixes the negative's layers, and
+// back to light. `grainy` holds the print density with each record's own
+// grain added, in the negative's density (film_grain_layer drew it from the
+// record's coefficient at the negative density that prints the pixel's tone);
+// each channel takes every record's, by how much its print density answers
+// that record's (`response`). The grain is Gaussian in density and light is
+// 10^-density, so it would brighten every pixel by exp(variance ln(10)^2 / 2):
+// taken out here, exactly, from the mixed grain's variance at the pixel's
+// clean density. The mean stays the grain-free frame's, as in Stills
+// (grain_restore_mean).
+kernel void grain_light(texture2d<float, access::read>  grainy   [[texture(0)]],
+                        texture2d<float, access::read>  clean    [[texture(1)]],
+                        texture2d<float, access::write> dst      [[texture(2)]],
+                        constant GrainLightUniforms &u            [[buffer(0)]],
+                        constant float *selwyn                    [[buffer(1)]],   // [record][sample][layer]
+                        constant float *response                  [[buffer(2)]],   // [channel][sample][record]
+                        uint2 gid                                 [[thread_position_in_grid]])
+{
+    if (gid.x >= dst.get_width() || gid.y >= dst.get_height()) return;
+    float3 density = clean.read(gid).rgb;
+    float3 g = grainy.read(gid).rgb - density;
+    // each layer's grain, its standard deviation in each record
+    float3 sd[3];
+    for (uint layer = 0; layer < 3; ++layer) {
+        for (uint r = 0; r < 3; ++r) {
+            float s = tableAt(selwyn, r, layer, density[r], u.tableTop[r], u.samples);
+            sd[layer][r] = sqrt(max(s, 0.0f) * u.sizeSquared / u.pixelArea) * u.amount;
+        }
+    }
+    float3 kept[3] = { u.kept0, u.kept1, u.kept2 };
+    float3 shifted, variance;
+    for (uint c = 0; c < 3; ++c) {
+        float3 answer = float3(tableAt(response, c, 0, density[c], u.tableTop[c], u.samples),
+                               tableAt(response, c, 1, density[c], u.tableTop[c], u.samples),
+                               tableAt(response, c, 2, density[c], u.tableTop[c], u.samples));
+        shifted[c] = density[c] + dot(answer, g);
+        float v = 0.0f;
+        for (uint layer = 0; layer < 3; ++layer) {
+            if (u.monochrome != 0) {
+                // one random field, shared: the records' parts add before squaring
+                float a = dot(answer, sd[layer]);
+                v += a * a * kept[layer][0];
+            } else {
+                float3 a = answer * sd[layer];
+                v += dot(a * a, kept[layer]);
+            }
+        }
+        variance[c] = v;
+    }
+    const float ln10 = 2.302585093f;
+    dst.write(float4(exp(-ln10 * shifted - 0.5f * ln10 * ln10 * variance), 1.0f), gid);
 }
 
 kernel void grade_frame(texture2d<float, access::read>  luma   [[texture(0)]],

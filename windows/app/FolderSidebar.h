@@ -37,6 +37,10 @@ public:
     // or reject button in it (shown while the pointer is over the row)
     QWidget *listViewport() const;
     QPoint flagButtonCentre(int row, ImageLibrary::Flag kind) const;
+    // A submenu of `menu`, `title`, with the browser's orders, File Name and
+    // Date Shot, the one it sorts by ticked: the header's ••• menu's, and the
+    // View menu's (FolderBrowser.Order).
+    static QMenu *addSortMenu(QMenu *menu, const QString &title, FolderBrowser &browser);
 
 signals:
     void openRequested(const QString &path);

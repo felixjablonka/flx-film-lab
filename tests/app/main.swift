@@ -551,7 +551,7 @@ func run() async throws {
           "FLX Film Lab as the software (its version in the app), and the export's own size")
     let filmName = (try? PackLibrary.shared.pack(m.recipe.filmStock))?.name ?? "?"
     let paperName = (try? PackLibrary.shared.pack(m.recipe.printStock))?.name ?? "?"
-    let said = "Film: \(filmName); paper: \(paperName)"
+    let said = "Edited with FLX Film Lab. Film profile: \(filmName); paper: \(paperName)"
     check(exif[kCGImagePropertyExifUserComment] as? String == said
           && tiff[kCGImagePropertyTIFFImageDescription] as? String == said,
           "the film and the paper, in the user comment and the description: \(exif[kCGImagePropertyExifUserComment] ?? "-")")
@@ -579,23 +579,79 @@ func run() async throws {
         let iptc = meta[kCGImagePropertyIPTCDictionary] as? [CFString: Any] ?? [:]
         let description = tiff[kCGImagePropertyTIFFImageDescription] ?? iptc[kCGImagePropertyIPTCCaptionAbstract]
         let filter = (try? PackLibrary.shared.pack("kodak_tri_x_400"))?.lensFilter("red")?.designation ?? "?"
-        check(comment.hasPrefix("Roll 12\nFilm: Kodak Tri-X 400; camera filter: \(filter); paper: ")
+        check(comment.hasPrefix("Roll 12\nEdited with FLX Film Lab. Film profile: Kodak Tri-X 400; camera filter: \(filter); paper: ")
               && description as? String == "Harbour, early"
               && tiff[kCGImagePropertyTIFFSoftware] as? String == "FLX Film Lab",
               "\(format.utType.preferredFilenameExtension ?? "?"): the camera's comment and description stay, the film, its filter and the paper follow: \(comment.replacingOccurrences(of: "\n", with: " / "))")
     }
     var slide = m.recipe.loadingFilm("fujifilm_provia_100f")
     slide.scanFilm = nil
-    check(Exporter.Provenance(recipe: slide).description == "Film: Fujifilm Provia 100F; viewed on a light table",
-          "a slide viewed as one names the light table, not a paper: \(Exporter.Provenance(recipe: slide).description)")
+    check(Exporter.Provenance(recipe: slide).description == "Edited with FLX Film Lab. Film profile: Fujifilm Provia 100F",
+          "a slide viewed as one names no paper: \(Exporter.Provenance(recipe: slide).description)")
+    slide.lensFilter = "81c"
+    let warming = (try? PackLibrary.shared.pack("fujifilm_provia_100f"))?.lensFilter("81c")?.designation ?? "?"
+    check(Exporter.Provenance(recipe: slide).description
+              == "Edited with FLX Film Lab. Film profile: Fujifilm Provia 100F; camera filter: \(warming)",
+          "and goes from the film straight to its camera filter: \(Exporter.Provenance(recipe: slide).description)")
     var instant = m.recipe.loadingFilm("polaroid_polacolor_559")
     instant.scanFilm = false
     instant.processingTemperature = 35
-    check(Exporter.Provenance(recipe: instant).description == "Film: Polaroid Polacolor 559; instant print, processed at 95 F",
-          "an instant print names how warm it developed, not a paper or a light table: \(Exporter.Provenance(recipe: instant).description)")
-    instant.processingTemperature = nil
-    check(Exporter.Provenance(recipe: instant).description == "Film: Polaroid Polacolor 559; instant print, processed at 70 F",
-          "and its sheet's normal temperature when none is chosen: \(Exporter.Provenance(recipe: instant).description)")
+    check(Exporter.Provenance(recipe: instant).description == "Edited with FLX Film Lab. Film profile: Polaroid Polacolor 559",
+          "an instant print, the print itself, names no paper: \(Exporter.Provenance(recipe: instant).description)")
+    // A motion picture film on its print film names the print film; the
+    // comment says what Settings ticks, and with nothing ticked, nothing.
+    let cineRecipe = m.recipe.loadingFilm("kodak_vision3_250d")
+    let cineName = (try? PackLibrary.shared.pack(cineRecipe.filmStock))?.name ?? "?"
+    let printName = (try? PackLibrary.shared.pack(cineRecipe.printStock))?.name ?? "?"
+    check(cineRecipe.printStock == "kodak_2383"
+          && Exporter.Provenance(recipe: cineRecipe).description
+              == "Edited with FLX Film Lab. Film profile: \(cineName); print film: \(printName)",
+          "a motion picture film names its print film: \(Exporter.Provenance(recipe: cineRecipe).description)")
+    var redTriX = m.recipe.loadingFilm("kodak_tri_x_400")
+    redTriX.lensFilter = "red"
+    let paperOf = (try? PackLibrary.shared.pack(redTriX.printStock))?.name ?? "?"
+    check(Exporter.Provenance(recipe: redTriX, comment: .init(film: true, paper: false, filter: false)).description
+              == "Edited with FLX Film Lab. Film profile: Kodak Tri-X 400"
+          && Exporter.Provenance(recipe: redTriX, comment: .init(film: false, paper: true, filter: false)).description
+              == "Edited with FLX Film Lab. Paper: \(paperOf)"
+          && Exporter.Provenance(recipe: redTriX, comment: .init(film: false, paper: false, filter: true)).description
+              .hasPrefix("Edited with FLX Film Lab. Camera filter: ")
+          && Exporter.Provenance(recipe: redTriX, comment: .none).description.isEmpty,
+          "the comment names what is ticked, each alone, and nothing when nothing is")
+    let redFilter = (try? PackLibrary.shared.pack("kodak_tri_x_400"))?.lensFilter("red")?.designation ?? "?"
+    check(Exporter.Provenance(recipe: redTriX, comment: .init(editedWith: false)).description
+              == "Film profile: Kodak Tri-X 400; camera filter: \(redFilter); paper: \(paperOf)"
+          && Exporter.Provenance(recipe: redTriX, comment: .init(editedWith: false, film: false, paper: true, filter: false))
+              .description == "Paper: \(paperOf)"
+          && Exporter.Provenance(recipe: redTriX, comment: .init(editedWith: true, film: false, paper: false, filter: false))
+              .description == "Edited with FLX Film Lab.",
+          "without the credit it starts at the film, and the credit alone stands alone: \(Exporter.Provenance(recipe: redTriX, comment: .init(editedWith: false)).description)")
+    UserDefaults.standard.set(false, forKey: Exporter.ExportComment.editedWithKey)
+    let uncredited = dir.appendingPathComponent("uncredited print.jpg")
+    await m.export(to: uncredited, format: .jpeg)
+    UserDefaults.standard.removeObject(forKey: Exporter.ExportComment.editedWithKey)
+    let uncreditedExif = (RawLoader.metadata(of: uncredited) ?? [:])[kCGImagePropertyExifDictionary] as? [CFString: Any] ?? [:]
+    let uncreditedComment = uncreditedExif[kCGImagePropertyExifUserComment] as? String ?? "-"
+    check(uncreditedComment.hasPrefix("Roll 12\nFilm profile: Kodak Tri-X 400; camera filter: ")
+          && !uncreditedComment.contains("Edited with"),
+          "Settings' credit switched off, the comment names the film alone: \(uncreditedComment.replacingOccurrences(of: "\n", with: " / "))")
+    for key in Exporter.ExportComment.keys {
+        UserDefaults.standard.set(false, forKey: key)
+    }
+    let silent = dir.appendingPathComponent("silent print.jpg")
+    await m.export(to: silent, format: .jpeg)
+    for key in Exporter.ExportComment.keys {
+        UserDefaults.standard.removeObject(forKey: key)
+    }
+    let silentMeta = RawLoader.metadata(of: silent) ?? [:]
+    let silentExif = silentMeta[kCGImagePropertyExifDictionary] as? [CFString: Any] ?? [:]
+    let silentTiff = silentMeta[kCGImagePropertyTIFFDictionary] as? [CFString: Any] ?? [:]
+    let silentIptc = silentMeta[kCGImagePropertyIPTCDictionary] as? [CFString: Any] ?? [:]
+    check((silentExif[kCGImagePropertyExifUserComment] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) == "Roll 12"
+          && (silentTiff[kCGImagePropertyTIFFImageDescription] ?? silentIptc[kCGImagePropertyIPTCCaptionAbstract]) as? String
+              == "Harbour, early"
+          && silentTiff[kCGImagePropertyTIFFSoftware] as? String == "FLX Film Lab",
+          "with nothing ticked, the camera's comment and description alone, FLX Film Lab still the software: \(silentExif[kCGImagePropertyExifUserComment] ?? "-")")
 
     // A manual lens Nikon names only in its maker notes, and the GPS block a
     // Leica M writes without a fix.
@@ -903,6 +959,54 @@ func rawOnlyListing() throws {
     let listed = FolderBrowser.listing(dir).map(\.name)
     check(listed == ["DSC00012.ARW", "DSCF1234.RAF", "IMG_0001.CR3", "R0000320.DNG", "Z9Z_0486.NEF"],
           "the NEF, DNG, ARW, CR3 and RAF, not the TIFF, JPEG or PNG: \(listed)")
+}
+
+/// A folder in the order its pictures were shot: the camera's date and time,
+/// to the hundredth and in its time zone where it records them; a picture
+/// with none by when its file was made. One setting for both sidebars, the
+/// View menu's and theirs.
+@MainActor
+func folderOrder() async throws {
+    print("a folder by the date its pictures were shot")
+    let dir = scratch.appendingPathComponent("by date")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    func shot(_ name: String, _ original: String?, subseconds: String? = nil, offset: String? = nil) throws {
+        var exif: [CFString: Any] = [:]
+        if let original { exif[kCGImagePropertyExifDateTimeOriginal] = original }
+        if let subseconds { exif[kCGImagePropertyExifSubsecTimeOriginal] = subseconds }
+        if let offset { exif[kCGImagePropertyExifOffsetTimeOriginal] = offset }
+        try writePhoto(dir.appendingPathComponent(name), width: 60, height: 40,
+                       properties: [kCGImagePropertyExifDictionary: exif])
+    }
+    try shot("A.jpg", "2026:10:14 13:15:13", subseconds: "50")
+    try shot("B.jpg", "2026:10:14 13:15:13", subseconds: "20")      // the same second, earlier in it
+    try shot("C.jpg", "2026:10:14 12:00:00", offset: "+02:00")      // 10:00 UTC
+    try shot("D.jpg", nil)                                           // none: when its file was made, today
+    try shot("E.jpg", "2025:01:01 08:00:00")
+    UserDefaults.standard.removeObject(forKey: FolderBrowser.Order.key)
+    defer { UserDefaults.standard.removeObject(forKey: FolderBrowser.Order.key) }
+    let browser = FolderBrowser(), clips = FolderBrowser(kind: .clips)
+    browser.show(dir, items: FolderBrowser.listing(dir), records: [:])
+    let byName = ["A.jpg", "B.jpg", "C.jpg", "D.jpg", "E.jpg"]
+    check(browser.order == .name && browser.items.map(\.name) == byName,
+          "by file name unless set otherwise: \(browser.items.map(\.name))")
+    browser.setOrder(.dateShot)
+    check(browser.items.map(\.name) == ["E.jpg", "C.jpg", "B.jpg", "A.jpg", "D.jpg"],
+          "by date shot: to the hundredth, in its time zone, the one without a date by its file, last: \(browser.items.map(\.name))")
+    check(await waitUntil { clips.order == .dateShot }, "the other mode's sidebar follows the setting")
+    let again = FolderBrowser()
+    again.show(dir, items: FolderBrowser.listing(dir), records: [:])
+    check(again.items.map(\.name) == ["E.jpg", "C.jpg", "B.jpg", "A.jpg", "D.jpg"], "and a folder opened later opens in it")
+    browser.setOrder(.name)
+    check(browser.items.map(\.name) == byName, "back to file names")
+
+    var utc = Calendar(identifier: .gregorian)
+    utc.timeZone = .gmt
+    let expected = utc.date(from: DateComponents(year: 2026, month: 10, day: 14, hour: 11, minute: 15, second: 13))!
+    let read = FolderBrowser.exifDate("2026:10:14 13:15:13", subseconds: "28", offset: "+02:00")
+    check(read.map { abs($0.timeIntervalSince(expected) - 0.28) < 1e-6 } == true
+          && FolderBrowser.exifDate("0000:00:00 00:00:00", subseconds: nil, offset: nil) == nil,
+          "EXIF's date, hundredths and offset read as one time; a blank date as none")
 }
 
 @MainActor
@@ -1522,6 +1626,7 @@ filmMenu()
 try rawOnlyListing()
 // the folder tests' pictures are TIFFs they write: listed as every image is
 FolderBrowser.listsEveryImage = true
+try await folderOrder()
 try await folders()
 try await undoRedo()
 try await loupe()

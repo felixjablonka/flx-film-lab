@@ -7,6 +7,7 @@
 
 #include <QAbstractListModel>
 #include <QAction>
+#include <QActionGroup>
 #include <QDesktopServices>
 #include <QDir>
 #include <QFileInfo>
@@ -496,6 +497,28 @@ FolderSidebar::FolderSidebar(FolderBrowser &browser, QWidget *parent)
     listChanged();
 }
 
+QMenu *FolderSidebar::addSortMenu(QMenu *menu, const QString &title, FolderBrowser &browser)
+{
+    QMenu *sort = menu->addMenu(title);
+    auto *orders = new QActionGroup(sort);
+    const std::pair<FolderBrowser::Order, QString> choices[] = {
+        {FolderBrowser::Order::Name, QStringLiteral("&File Name")},
+        {FolderBrowser::Order::DateShot, QStringLiteral("&Date Shot")}};
+    for (const auto &[order, name] : choices) {
+        QAction *action = sort->addAction(name, &browser, [&browser, order] { browser.setOrder(order); });
+        action->setCheckable(true);
+        action->setActionGroup(orders);
+        action->setData(int(order));
+    }
+    const auto show = [orders, &browser] {
+        for (QAction *action : orders->actions())
+            action->setChecked(action->data().toInt() == int(browser.order()));
+    };
+    show();
+    QObject::connect(&browser, &FolderBrowser::orderChanged, sort, show);
+    return sort;
+}
+
 QWidget *FolderSidebar::buildHeader()
 {
     auto *header = new QWidget;
@@ -518,6 +541,8 @@ QWidget *FolderSidebar::buildHeader()
     m_menu = new QMenu(this);
     m_menu->addAction(QStringLiteral("Open Folder…"), this, &FolderSidebar::openFolderRequested);
     m_menu->addAction(QStringLiteral("Show in Explorer"), this, [this] { showInExplorer(m_browser.folder()); });
+    m_menu->addSeparator();
+    addSortMenu(m_menu, QStringLiteral("Sort By"), m_browser);
     m_menuButton = new QToolButton;
     m_menuButton->setIcon(icons::icon(icons::Icon::More));
     m_menuButton->setIconSize(QSize(theme::px(17), theme::px(17)));
@@ -530,7 +555,9 @@ QWidget *FolderSidebar::buildHeader()
                                                "QToolButton::menu-indicator { image: none; }")
                                     .arg(theme::px(2))
                                     .arg(theme::px(5)));
-    m_menuButton->setToolTip(QStringLiteral("Open another folder, or show this one in Explorer."));
+    m_menuButton->setToolTip(QStringLiteral("Open another folder, show this one in Explorer, or sort its %1s by file "
+                                            "name or by the date they were shot.")
+                                 .arg(m_browser.noun()));
     row->addWidget(m_menuButton);
     column->addLayout(row);
     m_filter = new Segmented({QStringLiteral("All"), QStringLiteral("Picks"), QStringLiteral("No Rejects")});

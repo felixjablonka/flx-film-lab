@@ -36,6 +36,13 @@ struct MotionContentView: View {
         .background(Color(nsColor: .windowBackgroundColor))
         .background { HalfTitle(model.clip?.url.lastPathComponent ?? "FLX Film Lab") }
         .background { shortcuts }
+        .sheet(isPresented: $model.showsDataRateSheet) {
+            DataRateSheet(megabits: model.look.export.customMegabits,
+                          recorded: model.clip.map { Double($0.dataRate) / 1_000_000 }) { chosen in
+                if let chosen { model.setCustomRate(chosen) }
+                model.showsDataRateSheet = false
+            }
+        }
     }
 
     // MARK: Canvas
@@ -183,11 +190,10 @@ enum MotionPanels {
         panel.canChooseFiles = false
         panel.canCreateDirectories = true
         panel.prompt = "Export Here"
-        panel.message = "Choose where the \(count) clip\(count == 1 ? "" : "s") go, as \(exportCodecName(model.look.export.codec))"
+        panel.message = "Choose where the \(count) clip\(count == 1 ? "" : "s") go, as \(model.look.export.title)"
         if panel.runModal() == .OK, let url = panel.url { model.exportSelected(to: url) }
     }
 
-    private static func exportCodecName(_ codec: ExportCodec) -> String { codec.rawValue }
 }
 
 // MARK: - The toolbar's Motion items
@@ -216,11 +222,19 @@ enum MotionBar {
         }
     }
 
+    /// The clip's codec, and how hard it is compressed: each choice with the
+    /// data rate it comes to for the clip on screen.
     struct CodecItem: View {
         @ObservedObject var model: ClipModel
         var body: some View {
-            ToolbarChoice(selection: $model.look.export.codec)
-                .help("The clip's format: ProRes 422 HQ for editing and grading further, HEVC 10-bit for sharing.")
+            HStack(spacing: 6) {
+                CodecChoice(export: $model.look.export)
+                    .help("The clip's format: ProRes 422 for editing and grading further, HEVC 10-bit for sharing.")
+                CompressionChoice(export: $model.look.export,
+                                  clip: model.clip.map { (Int($0.size.width), Int($0.size.height), $0.frameRate) },
+                                  setRate: { model.showsDataRateSheet = true })
+                    .help("How hard the clip is compressed, and the data rate that comes to for the clip on screen. ProRes: Proxy, LT, 422 or HQ, each near Apple's target rate; HQ keeps all of the film's grain. HEVC: four levels from HEVC's own limits for the clip's size and frame rate. Standard is the most its HEVC level allows (100 Mbit/s for 4K up to 30 fps, 160 up to 60, 30 for HD at 30), High and Maximum the next two levels', Smaller half of Standard; at 4K 30 fps they keep about 50%, 60%, 70% and 75% of the grain. Or a rate of your own. Each file is labelled with the lowest HEVC level that holds it, as cameras label theirs. HEVC aims for the rate shown; a clip without grain often comes out smaller, and the status line says what it came to.")
+            }
         }
     }
 
@@ -231,5 +245,53 @@ enum MotionBar {
                 .disabled(model.clip == nil || model.isExporting)
                 .help("Write the graded clip (⌘E)")
         }
+    }
+}
+
+/// HEVC's data rate of its own, typed in Mbit/s.
+struct DataRateSheet: View {
+    let recorded: Double?
+    let done: (Double?) -> Void
+    @State private var text: String
+
+    init(megabits: Double, recorded: Double?, done: @escaping (Double?) -> Void) {
+        self.recorded = recorded
+        self.done = done
+        _text = State(initialValue: megabits.rounded() == megabits ? String(Int(megabits)) : String(megabits))
+    }
+
+    /// The number typed, if it is a rate HEVC can be set to.
+    private var chosen: Double? {
+        Double(text.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ",", with: "."))
+            .flatMap { ExportSettings.hevcMegabits.contains($0) ? $0 : nil }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Data Rate").font(.headline)
+            HStack(spacing: 6) {
+                TextField("", text: $text)
+                    .frame(width: 90)
+                    .multilineTextAlignment(.trailing)
+                    .onSubmit { if let chosen { done(chosen) } }
+                Text("Mbit/s")
+            }
+            Text(verbatim: "HEVC 10-bit at this average data rate, whatever the clip's size and frame rate. "
+                 + (recorded.map { "The clip on screen was recorded at \(ExportSettings.rate($0)). " } ?? "")
+                 + "Grain, new in every frame, needs a high rate to come through. From \(Int(ExportSettings.hevcMegabits.lowerBound)) to \(Int(ExportSettings.hevcMegabits.upperBound)) Mbit/s.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Spacer()
+                Button("Cancel") { done(nil) }
+                    .keyboardShortcut(.cancelAction)
+                Button("Set") { done(chosen) }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(chosen == nil)
+            }
+        }
+        .padding(20)
+        .frame(width: 360)
     }
 }

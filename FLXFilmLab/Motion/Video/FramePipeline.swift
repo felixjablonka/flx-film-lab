@@ -49,6 +49,19 @@ final class FramePipeline {
         var onSignal: Int32
     }
 
+    /// Must match `GrainLightUniforms` in motion.metal.
+    struct GrainLightUniforms {
+        var tableTop: SIMD3<Float>
+        var pixelArea: Float
+        var sizeSquared: Float
+        var amount: Float
+        var samples: UInt32
+        var kept0: SIMD3<Float>
+        var kept1: SIMD3<Float>
+        var kept2: SIMD3<Float>
+        var monochrome: UInt32
+    }
+
     /// How one frame's samples are read: its own layout and tags, with the
     /// settings' overrides applied.
     struct Reading: Equatable {
@@ -95,6 +108,17 @@ final class FramePipeline {
     private var lutTexture: MTLTexture?
     private(set) var lutSize = 0
     private var gradedTexture: MTLTexture?
+    /// The grain's kernels, made when a clip first has grain: the engine's
+    /// own three (flx.metal), `grain_density` and `grain_light`.
+    private struct GrainKernels {
+        var density, layer, convolve, convolveAdd, light: MTLComputePipelineState
+    }
+    private var grainKernels: GrainKernels?
+    private let densityFunction: MTLFunction
+    private let lightFunction: MTLFunction
+    /// The frame as print density, two scratch fields (the first also takes
+    /// the effects' light), the grainy density, at the last grained size.
+    private var grainTextures: [MTLTexture] = []
 
     init(device: MTLDevice? = nil) throws {
         guard let device = device ?? MTLCreateSystemDefaultDevice(),
@@ -114,6 +138,12 @@ final class FramePipeline {
             throw PipelineError.shader("grade_frame not found")
         }
         gradePipeline = try device.makeComputePipelineState(function: function)
+        guard let light = library.makeFunction(name: "grain_light"),
+              let density = library.makeFunction(name: "grain_density") else {
+            throw PipelineError.shader("grain_light or grain_density not found")
+        }
+        lightFunction = light
+        densityFunction = density
 
         var cache: CVMetalTextureCache?
         CVMetalTextureCacheCreate(nil, nil, device, nil, &cache)
@@ -393,11 +423,16 @@ final class FramePipeline {
     }
 
     /// The finished frame at `width` x `height`, in source orientation and
-    /// display light: graded, then Glow's effects. Encoded on `commandBuffer`.
-    func image(_ source: CVPixelBuffer, width: Int, height: Int, effects: GlowLook,
+    /// display light: graded, then Glow's effects, then the frame's grain.
+    /// Encoded on `commandBuffer`.
+    func image(_ source: CVPixelBuffer, width: Int, height: Int, effects: GlowLook, grain: FrameGrain? = nil,
                settings: InputSettings, mode: Mode, commandBuffer: MTLCommandBuffer) throws -> CIImage {
         let reading = try Self.reading(of: source, settings: settings)
         guard let target = gradedTarget(width: width, height: height) else { throw PipelineError.texture }
+        if mode == .graded, let grain, grain.settings.isVisible {
+            return try grainedImage(source, reading: reading, target: target, effects: effects, grain: grain,
+                                    commandBuffer: commandBuffer)
+        }
         try encodeGrade(source, reading: reading, into: target, mode: mode, commandBuffer: commandBuffer)
         guard var image = CIImage(mtlTexture: target, options: [.colorSpace: Self.linearSRGB]) else {
             throw PipelineError.texture
@@ -410,15 +445,190 @@ final class FramePipeline {
         return image
     }
 
+    /// The graded frame with Glow's effects and then its grain. The grain is
+    /// drawn in Metal on a texture of the finished light, and a Core Image
+    /// render must not come before Metal passes in one command buffer: at 4K
+    /// its work ran after them, and every exported frame came out black (the
+    /// smaller preview, and frames rendered again, hid it). So with no effect
+    /// on, Core Image is not used at all; with one, the grade is committed on
+    /// its own, Core Image renders the effects on a command buffer of its own,
+    /// and the grain is drawn once that is done.
+    private func grainedImage(_ source: CVPixelBuffer, reading: Reading, target: MTLTexture, effects: GlowLook,
+                              grain: FrameGrain, commandBuffer: MTLCommandBuffer) throws -> CIImage {
+        let width = target.width, height = target.height
+        let textures = try grainTargets(width: width, height: height)
+        var lit = target
+        if effects.bloom.isActive || effects.glow.isActive || effects.halation.isActive {
+            guard let first = queue.makeCommandBuffer() else { throw PipelineError.texture }
+            try encodeGrade(source, reading: reading, into: target, mode: .graded, commandBuffer: first)
+            first.commit()
+            guard let graded = CIImage(mtlTexture: target, options: [.colorSpace: Self.linearSRGB]) else {
+                throw PipelineError.texture
+            }
+            let glowed = GlowPipeline.apply(effects, to: graded, longEdge: CGFloat(max(width, height)))
+            let destination = CIRenderDestination(mtlTexture: textures[1], commandBuffer: nil)
+            destination.colorSpace = nil
+            destination.isFlipped = false
+            _ = try ciContext.startTask(toRender: glowed, to: destination).waitUntilCompleted()
+            lit = textures[1]
+        } else {
+            try encodeGrade(source, reading: reading, into: target, mode: .graded, commandBuffer: commandBuffer)
+        }
+        let out = try grained(lit, grain: grain, textures: textures, commandBuffer: commandBuffer)
+        guard let image = CIImage(mtlTexture: out, options: [.colorSpace: Self.linearSRGB]) else {
+            throw PipelineError.texture
+        }
+        return image
+    }
+
+    // MARK: - Grain
+
+    /// `image` with the frame's grain, laid on after the look and the effects,
+    /// as the last thing the film adds. The frame is read as the print's
+    /// density, and each record's grain drawn as Stills draws the negative's
+    /// (`Renderer.drawGrain`): Gaussian, its variance the negative's Selwyn
+    /// coefficient over the pixel's area on the gauge's frame, then its dye
+    /// clouds; `grain_light` mixes the records as the print does and returns
+    /// to light. A smaller frame has larger pixels on the film, so the
+    /// preview shows at its size the grain the export shows at full size.
+    private func grained(_ lit: MTLTexture, grain: FrameGrain, textures t: [MTLTexture],
+                         commandBuffer: MTLCommandBuffer) throws -> MTLTexture {
+        let k = try madeGrainKernels()
+        let width = lit.width, height = lit.height
+        let clean = t[0], scratch1 = t[1], scratch2 = t[2], grainy = t[3]
+        encode(commandBuffer, k.density, width: width, height: height) { e in
+            e.setTexture(lit, index: 0)
+            e.setTexture(clean, index: 1)
+        }
+
+        let table = grain.table
+        let pitch = Renderer.pixelSizeUm(width: width, height: height, frame: grain.settings.gauge.frameMM)
+        let size = Float(grain.settings.size), amount = Float(grain.settings.amount)
+        var selwyn = table.selwynUm2
+        var kept: [SIMD3<Float>] = []
+        for layer in 0..<3 {
+            var uniforms = Renderer.GrainLayerUniforms(tableTop: table.tableDensityMax, pixelArea: pitch * pitch,
+                                                       sizeSquared: size * size, amount: amount, seed: grain.seed,
+                                                       monochrome: table.monochrome ? 1 : 0, layer: UInt32(layer),
+                                                       samples: UInt32(table.samples))
+            encode(commandBuffer, k.layer, width: width, height: height) { e in
+                e.setTexture(clean, index: 0)
+                e.setTexture(scratch1, index: 1)
+                e.setBytes(&uniforms, length: MemoryLayout<Renderer.GrainLayerUniforms>.stride, index: 0)
+                e.setBytes(&selwyn, length: MemoryLayout<Float>.stride * selwyn.count, index: 1)
+            }
+            // each record's clouds for this layer, in pixels, padded to one radius
+            let kernels = (0..<3).map {
+                Renderer.cloudFilter(sigma: Double(table.cloudUm[$0 * 3 + layer] * size / pitch))
+            }
+            kept.append(SIMD3((0..<3).map { c -> Float in
+                let squares = kernels[c].reduce(0) { $0 + $1 * $1 }
+                return Float(squares * squares)
+            }))
+            let radius = kernels.map { $0.count / 2 }.max() ?? 0
+            var taps = (0...(2 * radius)).map { i in
+                SIMD4<Float>((0..<3).map { c -> Float in
+                    let kernel = kernels[c], j = i - radius + kernel.count / 2
+                    return j >= 0 && j < kernel.count ? Float(kernel[j]) : 0
+                } + [0])
+            }
+            var first = SIMD2<Int32>(Int32(radius), 0)
+            encode(commandBuffer, k.convolve, width: width, height: height) { e in
+                e.setTexture(scratch1, index: 0)
+                e.setTexture(scratch2, index: 1)
+                e.setBytes(&taps, length: MemoryLayout<SIMD4<Float>>.stride * taps.count, index: 0)
+                e.setBytes(&first, length: MemoryLayout<SIMD2<Int32>>.stride, index: 1)
+            }
+            var second = SIMD3<Int32>(Int32(radius), 1, layer == 0 ? 1 : 0)
+            encode(commandBuffer, k.convolveAdd, width: width, height: height) { e in
+                e.setTexture(scratch2, index: 0)
+                e.setTexture(clean, index: 1)
+                e.setTexture(grainy, index: 2)
+                e.setBytes(&taps, length: MemoryLayout<SIMD4<Float>>.stride * taps.count, index: 0)
+                e.setBytes(&second, length: MemoryLayout<SIMD3<Int32>>.stride, index: 1)
+            }
+        }
+        var light = GrainLightUniforms(tableTop: table.tableDensityMax, pixelArea: pitch * pitch,
+                                       sizeSquared: size * size, amount: amount, samples: UInt32(table.samples),
+                                       kept0: kept[0], kept1: kept[1], kept2: kept[2],
+                                       monochrome: table.monochrome ? 1 : 0)
+        var response = table.response
+        encode(commandBuffer, k.light, width: width, height: height) { e in
+            e.setTexture(grainy, index: 0)
+            e.setTexture(clean, index: 1)
+            e.setTexture(scratch1, index: 2)
+            e.setBytes(&light, length: MemoryLayout<GrainLightUniforms>.stride, index: 0)
+            e.setBytes(&selwyn, length: MemoryLayout<Float>.stride * selwyn.count, index: 1)
+            e.setBytes(&response, length: MemoryLayout<Float>.stride * response.count, index: 2)
+        }
+        return scratch1
+    }
+
+    private func madeGrainKernels() throws -> GrainKernels {
+        if let grainKernels { return grainKernels }
+        let library: MTLLibrary
+        do {
+            let options = MTLCompileOptions()
+            options.mathMode = .fast
+            library = try ShaderLibrary.make("flx", device: device, sourcePath: "FLXFilmLab/Resources/Shaders/flx.metal",
+                                             options: options) { try PackLibrary.shared.shaderSource() }
+        } catch {
+            throw PipelineError.shader("\(error)")
+        }
+        func pipeline(_ name: String) throws -> MTLComputePipelineState {
+            guard let function = library.makeFunction(name: name) else { throw PipelineError.shader("\(name) not found") }
+            return try device.makeComputePipelineState(function: function)
+        }
+        let made = GrainKernels(density: try device.makeComputePipelineState(function: densityFunction),
+                                layer: try pipeline("film_grain_layer"), convolve: try pipeline("grain_convolve"),
+                                convolveAdd: try pipeline("grain_convolve_add"),
+                                light: try device.makeComputePipelineState(function: lightFunction))
+        grainKernels = made
+        return made
+    }
+
+    /// The density, two scratch fields, and the grainy density, which the
+    /// three layers are added into in full precision: a half-float texture's
+    /// writes round towards zero on this GPU, half a step at each of the three
+    /// adds, which darkened the grainy negative by 0.0007 density, brightening
+    /// every pixel by 0.16% (half floats step 0.0005 at a density of 0.77).
+    private func grainTargets(width: Int, height: Int) throws -> [MTLTexture] {
+        if let first = grainTextures.first, first.width == width, first.height == height { return grainTextures }
+        var made: [MTLTexture] = []
+        for format in [MTLPixelFormat.rgba16Float, .rgba16Float, .rgba16Float, .rgba32Float] {
+            let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: format, width: width,
+                                                             height: height, mipmapped: false)
+            // a render target too: Core Image renders the effects' light into the second
+            d.usage = [.shaderRead, .shaderWrite, .renderTarget]
+            d.storageMode = .private
+            if let t = device.makeTexture(descriptor: d) { made.append(t) }
+        }
+        guard made.count == 4 else { throw PipelineError.texture }
+        grainTextures = made
+        return made
+    }
+
+    private func encode(_ cb: MTLCommandBuffer, _ pipeline: MTLComputePipelineState, width: Int, height: Int,
+                        _ body: (MTLComputeCommandEncoder) -> Void) {
+        guard let e = cb.makeComputeCommandEncoder() else { return }
+        e.setComputePipelineState(pipeline)
+        body(e)
+        let w = pipeline.threadExecutionWidth
+        let h = max(pipeline.maxTotalThreadsPerThreadgroup / w, 1)
+        e.dispatchThreadgroups(MTLSize(width: (width + w - 1) / w, height: (height + h - 1) / h, depth: 1),
+                               threadsPerThreadgroup: MTLSize(width: w, height: h, depth: 1))
+        e.endEncoding()
+    }
+
     // MARK: - Destinations
 
     /// Export: the full-size frame into `destination`, a 64RGBAHalf buffer,
     /// encoded for `display` and tagged Rec.709. Waits for the GPU.
     func renderExport(_ source: CVPixelBuffer, into destination: CVPixelBuffer, effects: GlowLook,
-                      settings: InputSettings, display: LookLUT.Output) throws {
+                      grain: FrameGrain? = nil, settings: InputSettings, display: LookLUT.Output) throws {
         guard let cb = queue.makeCommandBuffer() else { throw PipelineError.texture }
         let width = CVPixelBufferGetWidth(source), height = CVPixelBufferGetHeight(source)
-        let image = try self.image(source, width: width, height: height, effects: effects,
+        let image = try self.image(source, width: width, height: height, effects: effects, grain: grain,
                                    settings: settings, mode: .graded, commandBuffer: cb)
         guard let encoded = encodeKernel.apply(extent: image.extent,
                                                arguments: [image, Float(1 / display.gamma)]) else {
@@ -478,7 +688,7 @@ final class FramePipeline {
     /// sRGB) over `background`. Encodes onto `commandBuffer`; the caller
     /// presents and commits.
     func renderPreview(_ source: CVPixelBuffer, into texture: MTLTexture, quarterTurns: Int,
-                       padding: CGFloat, background: CIColor, effects: GlowLook,
+                       padding: CGFloat, background: CIColor, effects: GlowLook, grain: FrameGrain? = nil,
                        settings: InputSettings, mode: Mode, commandBuffer: MTLCommandBuffer) throws {
         let placement = Placement(source: CGSize(width: CVPixelBufferGetWidth(source),
                                                  height: CVPixelBufferGetHeight(source)),
@@ -486,7 +696,7 @@ final class FramePipeline {
                                   destination: CGSize(width: texture.width, height: texture.height),
                                   padding: padding)
         let image = try self.image(source, width: placement.gradedWidth, height: placement.gradedHeight,
-                                   effects: effects, settings: settings, mode: mode,
+                                   effects: effects, grain: grain, settings: settings, mode: mode,
                                    commandBuffer: commandBuffer)
         let canvas = CGRect(x: 0, y: 0, width: texture.width, height: texture.height)
         let composed = image.transformed(by: placement.transform)
@@ -528,9 +738,9 @@ final class FramePipeline {
     /// Display light at `width` x `height`, read back to the CPU: RGBA floats,
     /// row 0 at the top. For checks.
     func renderLinear(_ source: CVPixelBuffer, width: Int, height: Int, effects: GlowLook,
-                      settings: InputSettings, mode: Mode) throws -> [Float] {
+                      grain: FrameGrain? = nil, settings: InputSettings, mode: Mode) throws -> [Float] {
         guard let cb = queue.makeCommandBuffer() else { throw PipelineError.texture }
-        let image = try self.image(source, width: width, height: height, effects: effects,
+        let image = try self.image(source, width: width, height: height, effects: effects, grain: grain,
                                    settings: settings, mode: mode, commandBuffer: cb)
         let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba32Float, width: width,
                                                          height: height, mipmapped: false)

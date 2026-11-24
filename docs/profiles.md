@@ -372,6 +372,54 @@ one (5250's, 5382's) taken out as the short strokes it is.
 The print films' CTF is not modelled, Kodak's or Fujifilm's: no print stage
 here blurs.
 
+**Fujifilm Crystal Archive Type CA**, **DP II** and **Maxima**, Fujifilm's
+colour papers, are built by `build_paper_profiles.py` from the bulletins
+Fujifilm Tokyo printed with vector plots (`fuji_paper_sheets.py`): Crystal
+Archive Digital Paper Type DPII's AF3-212E (2005), which plots characteristic
+curves, spectral sensitivity and dyes, and Crystal Archive Paper's AF3-198E
+(2004), Type CA's line, which plots the last two (its note that "cyan forming
+dye has been modified" is word for word on today's Type CA sheet). No
+Crystal Archive bulletin plots a characteristic curve; DP II's is the only one
+Fujifilm prints for any of the three. Both bulletins came from Fujifilm
+Italy's site, through the Internet Archive.
+- **Dyes and sensitivities.** Each paper's own: Type CA AF3-198E's, DP II
+  AF3-212E's. Maxima, which Fujifilm's sheet of 2019 gives the same plots as
+  DP II's sheet of that year, takes DP II's. The two bulletins agree with each
+  other within 0.05 in the dyes and about 0.1 decade in the sensitivities,
+  and spektrafilm's own Crystal Archive Type II matches them: the red layer
+  1.5 to 1.8 decades under the blue. The sensitivities are relative log
+  sensitivity at D-min + 1.0, one scale for the three layers, each layer's
+  level read where its curve reaches D-min + 1.0, as 5385's is.
+- **What is not used.** Fujifilm Europe redrew the dye and sensitivity plots as
+  Excel charts in 2014 (DP II's edition TMS 2014-06 carries them beside the
+  2005 curve), and today's sheets for all three papers (Type CA 2018, DP II
+  and Maxima 2019) carry that one set. They differ from both bulletins: broader
+  in every tail (the green layer 0.9 decades under its peak at 450 nm, where
+  the bulletins have 1.7) and the red layer 0.6 decades under the blue, where
+  the bulletins have 1.8. Read as linear values they differ as much.
+- **Curves.** DP II's, Status A, laser exposure, CP-48S. Type CA and Maxima
+  take DP II's shape, each layer's density over D-min scaled so its top moves
+  by the paper's D-max aim less DP II's in its channel (Type CA 2.00/2.00/1.95,
+  DP II 2.35/2.35/2.25, Maxima 2.55/2.55/2.45, R/G/B, from their own sheets;
+  Fujifilm sets each aim 0.15-0.20 under the paper's flashed black, CLP013
+  rev-E). Koraks' measurements of Type CA beside DP II (tinker.koraks.nl,
+  "On a Color Mission", 2025) bear the shape out: alike in the exposure where
+  they build density and reach D-max, apart in how much. The blacks come out
+  2.32/2.18/2.18, 2.67/2.53/2.48 and 2.87/2.73/2.68: DP II's red 0.12 over
+  Fujifilm's rule, as its own plotted curve is; Koraks measured DP II's black
+  at 2.55, Type CA's at about 2.0. The curves end on their shoulders and are
+  held there: agx's curve model run on past them, as the print films' are,
+  climbed another 0.4 in blue.
+- **Placement and light.** As agx's papers: printed with agx's lamp, viewed in
+  D50, log H 0 in each layer its share of a neutral grey of 18.4% luminance
+  (agx's Type II puts 18.6% there, its Portra Endura 17.7%), and as much of the
+  lamp collected as agx's Type II does, each through its own filtration for
+  Portra 400. Every colour negative's filtration is solved for them at bake
+  time: Portra 400 prints neutral at M 54 Y 101 on Type CA and M 60 Y 83 on DP
+  II and Maxima, M 68 Y 77 on Type II.
+- **Character.** Type CA the softest, its black the lightest (Portra 400's
+  black prints L* 9.3), DP II deeper (4.8), Maxima deepest (3.4).
+
 **Polaroid 553**, **Polapan Pro 100** and **Polacolor 559** (Polaroid
 Corporation's data sheets for T-53/T-553/T-803, T-54/T-554/T-664/T-804 and the
 Polacolor ER films, 1999) are built by `tools/bake/build_instant_profiles.py`
@@ -459,6 +507,25 @@ carries the one layer three times, each with a third of its density.
   sheet's 6 and 7 1/2 minute ones: contrast index 0.585, where Kodak's own plot
   of it gives about 0.58. Its MTF, fitted up to 50 cycles/mm, and its RMS
   granularity, 8, are Kodak's.
+- **Kodak T-Max P3200** (F-4001, revised 04-19): spectral sensitivity (D = 1.0
+  over D-min, a vector plot) and the small-tank T-MAX Developer curve at Kodak's
+  time for EI 3200, 12 minutes, interpolated between the sheet's 11 and 13
+  minute ones. The curves are bitmaps, three of the four dashed, and are traced
+  from the right, where they lie apart, each along its own course into the toe.
+  The 12 minute curve's own ISO speed point is ISO 1447, and the sheet's 8 and 9
+  minute curves, near Kodak's times for EI 400 and 800 (8 1/2 and 9 1/2), give
+  ISO 957 and 1207, where Kodak rates the film EI 1000 in T-MAX Developer.
+  Metered at EI 3200 its mid-grey goes where a meter puts it on Kodak's axis, as
+  Tri-X Push 2's does. The edition of 03-18 has the same development tables but
+  plots other curves (D-76 at 6, 7 1/2 and 10 minutes; T-MAX Developer at 6, 7,
+  10 and 12; T-MAX RS at 8, 10 1/2, 13 and 15), and as plotted they put the ISO
+  speed point at ISO 140 to 185, three stops under the film's own rating, so the
+  2019 revision is the one read. Its MTF, fitted up to 50 cycles/mm, is Kodak's;
+  its RMS granularity, 18 in D-76, is pushed to EI 3200 as Tri-X Push 2's is:
+  20.1. Through Kodak's Wratten filters its sensitivity gives yellow (No. 8)
+  2.0x, orange (No. 22) 5.4x, red (No. 25) 10.8x, green (No. 58) 6.5x and blue
+  (No. 47) 5.6x, where the sheet's daylight table says 1.5, 8, 6 and 8 (no No.
+  22); the film is built from the plot.
 - **Ilford HP5 Plus**: spectral sensitivity and the characteristic curve,
   vector plots whose labels are drawn as outlines, so they are calibrated on
   their own tick marks and grid.
@@ -470,6 +537,28 @@ carries the one layer three times, each with a third of its density.
   for 8 and 4, and Ortho Plus in ID-11 for 8, the lower of its two pictorial
   curves. They come out near the normal contrast Ilford sets its times for
   (G-bar 0.62): 0.65, 0.64, 0.68, 0.71, and Ortho Plus's, labelled 0.62, 0.59.
+- **Ilford Delta 3200** (HARMAN's technical information, Nov 2018, with its
+  edition of May 2010): the wedge spectrogram and the curve for MICROPHEN stock
+  at 9 minutes, Ilford's time for EI 3200 in the developer it recommends there,
+  one of the four the sheet plots (7, 9, 12 and 16 minutes, about MICROPHEN's
+  times for EI 800, 3200, 6400 and 12500; ILFOTEC DD-X's EI 3200 time, 9 1/2, is
+  not plotted). The 2010 edition draws the curves as vectors, and the 2018 sheet
+  repeats them as a bitmap, within 0.004 density median; the vectors are read.
+  The sheet plots relative log exposure, so its axis is made lux-seconds by
+  Ilford's ISO speed, ISO 1000, measured in ID-11: that speed is placed at the
+  speed point of the MICROPHEN development that meets ISO 6's contrast (0.80
+  over 1.30 log H), 7.7 minutes between the sheet's 7 and 9 minute curves, as if
+  MICROPHEN at that contrast gave ID-11's speed. The 9 minute curve's own speed
+  point is then ISO 1093, and a meter at EI 3200 puts mid-grey 0.46 over fog.
+  HARMAN plots the film as sensitive at 670 nm as at 550, in the same
+  spectrogram in its editions of 2002, 2010 and 2018 (and in Delta 400's sheet
+  of 2018), so it sees red further than the eye does: unfiltered, a red prints
+  lighter than a blue of the same luminance. Through Kodak's Wratten filters it
+  gives yellow 1.6x, orange 2.6x (No. 22), red 3.6x, green 8.6x and blue 9.6x;
+  HARMAN gives no factors. HARMAN publishes no MTF or granularity, so it takes
+  T-Max P3200's, the Kodak film of its class, estimates: the MTF as Kodak
+  measures it, and the granularity, 18, pushed from its ISO development to EI
+  3200 as P3200's is: 20.2.
 - **Fujifilm Neopan 1600** (AF3-608E): spectral sensitivity and the D-76 curve
   at 7 1/2 minutes, Fujifilm's time for EI 1600, traced off scanned line art
   on its own grid.
@@ -525,6 +614,17 @@ carries the one layer three times, each with a third of its density.
 - **Ilford Multigrade RC Deluxe**: spectral sensitivity and the curves for each
   filter grade, traced off bitmaps. Traced, the grades read ISO R155, 130, 107
   and 94 for 00 to 2, against Ilford's 160, 130, 110 and 90.
+- **Ilford Multigrade FB Classic** (HARMAN's technical information, Oct 2013):
+  the wedge spectrogram and the curves for all seven filter grades, Excel
+  charts exported as vectors, each grade its own colour, read on their frames.
+  They trace at ISO R178, 145, 114, 94, 75, 58 and 52 for 00 to 5, against
+  Ilford's 170, 140, 110, 95, 80, 60 and 50; grade 1 is the paper's own curve,
+  as RC Deluxe's is. The spectrogram is a category axis of 10 nm steps, read
+  as RC Deluxe's is (relative log sensitivity, peak 1.0); where it runs along
+  the floor, below 350 nm and past 560, it is left unplotted. The sheet plots
+  density over the paper base (its curves start at 0.00) and gives the base no
+  figure, so it takes RC Deluxe's, 0.056, whose sheet plots gross density: an
+  estimate. Its black is 2.07 over the base, RC Deluxe's 2.04.
 - **Kodak Double-X 5222** (H-1-5222, editions of 10/2003 and 3-22, both read;
   `kodak_bw_cine_sheets.py`): the 2003 edition's vector plots give the
   spectral sensitivity (D = 1.0 over gross fog, drawn from 420 to 660 nm and
@@ -561,7 +661,9 @@ speed point (0.10 over base + fog). Kodak plots against absolute lux-seconds,
 and its axis puts the same mid-grey within 0.04 decades of where ISO 400 says it
 should be. Neopan 1600's rating is not its ISO speed, so its mid-grey goes
 where a meter set to EI 1600 puts it on Fujifilm's absolute axis instead,
-0.33 decades lower, and Tri-X Push 2's where one puts it on Kodak's. Double-X,
+0.33 decades lower, Tri-X Push 2's and T-Max P3200's where one puts it on
+Kodak's, and Delta 3200's where one set to EI 3200 puts it on HARMAN's relative
+axis, once Ilford's ISO speed has made that axis lux-seconds. Double-X,
 a motion picture film, goes at Kodak's normal exposure, 10/EI, as Kodak's
 colour motion picture films do: its sheet's exposure table, f/5.6 at 200
 footcandles at 24 frames a second, works out to 0.050 lux-seconds on an 18%

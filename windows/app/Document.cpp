@@ -929,11 +929,12 @@ void Document::exportTo(const QString &path, ExportFormat format, int longEdge)
                             : QStringLiteral("Exporting at full size…");
     const Recipe recipe = m_edits.recipe;
     const DecodeKey key = m_loaded->key;
-    onEngine([this, recipe, key, path, format, longEdge] {
+    const ExportComment comment = exportComment();
+    onEngine([this, recipe, key, path, format, longEdge, comment] {
         QString error;
         QSize written;
         try {
-            written = m_engine->exportTo(recipe, key, path, format, longEdge);
+            written = m_engine->exportTo(recipe, key, path, format, longEdge, comment);
         } catch (const std::exception &e) {
             error = QString::fromUtf8(e.what());
         }
@@ -1715,7 +1716,8 @@ void Document::exportSelected(const QString &folder, ExportFormat format, int lo
     m_browser.setBatch(FolderBrowser::Batch{0, int(jobs.size()), QFileInfo(jobs.front().path).fileName(), folder});
     QPointer<Document> self(this);
     const AppData data = m_data;
-    QThread *worker = QThread::create([self, jobs, cancel, format, longEdge, folder, data] {
+    const ExportComment comment = exportComment();
+    QThread *worker = QThread::create([self, jobs, cancel, format, longEdge, folder, data, comment] {
         // an engine of its own, so the picture on screen prints as before
         RenderEngine engine(data);
         QStringList failures;
@@ -1733,7 +1735,7 @@ void Document::exportSelected(const QString &folder, ExportFormat format, int lo
             });
             try {
                 engine.setPicture(engine.decode(job.proxy), job.path);
-                engine.exportTo(job.edits.recipe, job.proxy, job.target, format, longEdge);
+                engine.exportTo(job.edits.recipe, job.proxy, job.target, format, longEdge, comment);
             } catch (const std::exception &e) {
                 failures << QStringLiteral("%1: %2").arg(QFileInfo(job.path).fileName(), QString::fromUtf8(e.what()));
             }

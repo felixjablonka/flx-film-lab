@@ -279,9 +279,11 @@ enum RawLoader {
     /// cyan: red at a quarter of 8's or below zero, a median ΔE of 17-22 from
     /// 8. At Apple's own defaults the two look alike. The Windows app's colour
     /// is measured from 8's decode as well. So where Core Image's default is
-    /// newer, the decode asks for 8 if the file offers it; a camera that only
-    /// a newer version reads keeps that. Moving on is a step taken on purpose:
-    /// the checks fail the day Core Image's default for a sample raw passes 8.
+    /// newer, the decode asks for 8, or the newest version before it that the
+    /// file offers (Apple's RAW update of 2026-11-24 gave the Nikon D700 a 9
+    /// beside its 6 and 7, and no 8); a camera that only a newer version reads
+    /// keeps that. Moving on is a step taken on purpose: the checks fail the
+    /// day Core Image's default for a sample raw passes 8.
     /// The Original (`original`) stays on Core Image's default: it shows what
     /// macOS shows.
     static let filmDecoderVersion = 8
@@ -291,12 +293,16 @@ enum RawLoader {
         Int(version.rawValue.prefix(while: \.isNumber))
     }
 
-    /// Keeps `filter` on `filmDecoderVersion` where Core Image's default is newer.
+    /// Keeps `filter` on `filmDecoderVersion`, or the newest version before it
+    /// that the file offers, where Core Image's default is newer.
     static func keepDecoderVersion(_ filter: CIRAWFilter) {
-        guard let current = number(of: filter.decoderVersion), current > filmDecoderVersion,
-              let kept = filter.supportedDecoderVersions.first(where: { number(of: $0) == filmDecoderVersion })
-        else { return }
-        filter.decoderVersion = kept
+        guard let current = number(of: filter.decoderVersion), current > filmDecoderVersion else { return }
+        var kept: (version: CIRAWDecoderVersion, number: Int)?
+        for version in filter.supportedDecoderVersions {
+            guard let n = number(of: version), n <= filmDecoderVersion, n > (kept?.number ?? Int.min) else { continue }
+            kept = (version, n)
+        }
+        if let kept { filter.decoderVersion = kept.version }
     }
 
     static func configure(_ filter: CIRAWFilter, options: Options) {

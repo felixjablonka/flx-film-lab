@@ -184,8 +184,64 @@ func run() async throws {
         return try? await item.load(.stringValue)
     }
     let software = await text(.quickTimeMetadataSoftware), described = await text(.quickTimeMetadataDescription)
-    check(software == "FLX Film Lab" && described == "Film: Kodak Portra 800; paper: Kodak Professional Portra Endura",
+    check(software == "FLX Film Lab" && described == "Edited with FLX Film Lab. Film profile: Kodak Portra 800; paper: Kodak Professional Portra Endura",
           "and names FLX Film Lab, the film and the paper in its metadata: \(described ?? "-")")
+
+    print("export with grain")
+    // The grey card of a clip's first frame as QuickTime shows it: its level
+    // and its spread, in 8-bit values.
+    func greyCard(_ url: URL) async throws -> (mean: Double, spread: Double) {
+        let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
+        generator.requestedTimeToleranceBefore = .zero
+        generator.requestedTimeToleranceAfter = .zero
+        let image = try await generator.image(at: .zero).image
+        let w = image.width, h = image.height
+        var px = [UInt8](repeating: 0, count: w * h * 4)
+        let context = CGContext(data: &px, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        context.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+        let r = TestClip.Layout(width: w, height: h).core(TestClip.grey)
+        var values: [Double] = []
+        for y in r.y0..<r.y1 {
+            for x in r.x0..<r.x1 { values.append(Double(px[(y * w + x) * 4 + 1])) }
+        }
+        let mean = values.reduce(0, +) / Double(values.count)
+        let spread = (values.map { ($0 - mean) * ($0 - mean) }.reduce(0, +) / Double(values.count)).squareRoot()
+        return (mean, spread)
+    }
+    // The same clip both ways, one after the other.
+    m.open(c)
+    _ = await settled(m)
+    let plainOut = dir.appendingPathComponent("C plain.mov")
+    m.export(to: plainOut)
+    _ = await settled(m)
+    var coarse = MotionGrain()
+    coarse.enabled = true
+    coarse.gauge = .sixteen
+    coarse.amount = 3
+    m.look.grain = coarse
+    let grainyOut = dir.appendingPathComponent("C grain.mov")
+    m.export(to: grainyOut)
+    check(await settled(m) && FileManager.default.fileExists(atPath: grainyOut.path), "writes the clip with grain")
+    let plainCard = try await greyCard(plainOut), grainyCard = try await greyCard(grainyOut)
+    check(grainyCard.spread > 3 * plainCard.spread + 1 && abs(grainyCard.mean - plainCard.mean) < 2,
+          String(format: "with its grain in every frame: the grey card spreads %.1f levels, not %.1f, at the same level (%.1f, %.1f)",
+                 grainyCard.spread, plainCard.spread, grainyCard.mean, plainCard.mean))
+    m.look.grain = nil
+    _ = await settled(m)
+
+    print("compression")
+    m.look.export.codec = .proRes422HQ
+    m.look.export.proRes = .lt
+    let ltOut = dir.appendingPathComponent("C LT.mov")
+    m.export(to: ltOut)
+    check(await settled(m) && m.status.contains("ProRes 422 LT") && m.status.contains("Mbit/s"),
+          "ProRes 422 LT, the status saying the rate it came out at: \(m.status)")
+    let lt = try await ClipInfo.load(ltOut)
+    check(lt.codecName == "ProRes 422 LT", "written as \(lt.codecName)")
+    m.look.export.codec = .hevc10
+    m.look.export.proRes = nil
 
     print("export a LUT")
     let cube = dir.appendingPathComponent("look.cube")
@@ -244,14 +300,21 @@ func run() async throws {
     old.recipe.autoExposure = false
     old.version = nil
     UserDefaults.standard.set(try JSONEncoder().encode(old), forKey: ClipModel.lookDefaultsKey)
-    check(ClipModel(library: scratchLibrary()).look.recipe.autoExposure, "a look saved by the previous version gets Auto exposure back")
+    let previous = ClipModel(library: scratchLibrary())
+    check(previous.look.recipe.autoExposure, "a look saved by the previous version gets Auto exposure back")
+    check(previous.look.grain == nil, "and opens with no grain, as it was made")
 
     m.look.effects.halation.enabled = true
+    var wide = MotionGrain()
+    wide.enabled = true
+    wide.gauge = .seventy
+    m.look.grain = wide
     _ = await settled(m)
     let again = ClipModel(library: scratchLibrary())
     check(await settled(again) && again.look.recipe.filmStock == m.look.recipe.filmStock
-          && again.look.effects.halation.enabled && again.look.export.codec == .hevc10,
-          "the next launch keeps the look")
+          && again.look.effects.halation.enabled && again.look.export.codec == .hevc10
+          && again.look.grain == wide,
+          "the next launch keeps the look, its grain on 70 mm too")
     check(again.look.recipe.exposureEV == 0, "but not one clip's exposure")
     UserDefaults.standard.removeObject(forKey: ClipModel.lookDefaultsKey)
 }
@@ -313,6 +376,13 @@ func undoRedo() async throws {
     check(m.look.recipe.brightness == 0 && !m.look.effects.glow.enabled, "undone to how it opened")
     m.open(b)
     check(await settled(m) && names() == ["Shadows"], "the other clip kept its own")
+    var on = MotionGrain()
+    on.enabled = true
+    m.look.grain = on
+    await pause()
+    check(names() == ["Shadows", "Grain"], "grain is a step called Grain: \(names())")
+    m.history.undo()
+    check(m.look.grain == nil, "which ⌘Z takes off again")
 }
 
 /// A folder of clips in the sidebar: listed, stepped through, a look kept
@@ -356,6 +426,16 @@ func clipFolders() async throws {
           "its clips by name, not its picture or notes, the first on screen: \(m.browser.items.map(\.name))")
     m.showNeighbour(1)
     check(await settled(m) && m.clip?.url == b && m.browser.current == b, "⌘↓ steps to the next")
+    // Their dates shot, for Sort By Date Shot: each movie's creation time
+    // from its header, the time AVFoundation reads too, or its file's.
+    let dates = FolderBrowser.shotDates([a, b, c], kind: .clips)
+    var agree = true
+    for url in [a, b, c] {
+        guard let item = try? await AVURLAsset(url: url).load(.creationDate),
+              let theirs = try? await item.load(.dateValue) else { continue }
+        agree = agree && FolderBrowser.movieDate(url).map { abs($0.timeIntervalSince(theirs)) < 1 } == true
+    }
+    check(dates.count == 3 && agree, "each clip has a date shot, its header's creation time where it has one")
 
     print("a look of its own, kept")
     m.selectFilm("kodak_vision3_500t")

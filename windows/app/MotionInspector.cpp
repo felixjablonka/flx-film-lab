@@ -10,6 +10,7 @@
 #include <QPushButton>
 #include <QVBoxLayout>
 
+#include <algorithm>
 #include <cmath>
 
 namespace {
@@ -72,6 +73,7 @@ MotionInspector::MotionInspector(MotionDocument &document, QWidget *parent)
     buildTone();
     buildColour();
     buildEffects();
+    buildGrain();
     buildInput();
     buildExport();
     layout->addStretch(1);
@@ -470,6 +472,71 @@ void MotionInspector::buildEffects()
         halation->setChecked(g.halation.enabled);
         halationControls->setVisible(g.halation.enabled);
         haloOnly->setChecked(g.halation.haloOnly);
+    });
+}
+
+// MARK: - Grain
+
+void MotionInspector::buildGrain()
+{
+    auto *section = new Section(
+        QStringLiteral("Grain"),
+        QStringLiteral("The film's own grain, laid on each frame after the look and the effects, every frame with "
+                       "grains of its own. Its size follows the frame the clip is taken to be shot on."));
+    m_content->layout()->addWidget(section);
+    QVBoxLayout *body = section->body();
+    // the look's grain: none until it is first switched on
+    auto editGrain = [this](const std::function<void(MotionGrain &)> &change) {
+        edit([&](MotionLook &l) {
+            MotionGrain g = l.grain.value_or(MotionGrain{});
+            change(g);
+            l.grain = g;
+        });
+    };
+    auto *enabled = new ToggleRow(QStringLiteral("Grain"));
+    enabled->setHelp(QStringLiteral(
+        "The stock's grain as its datasheet measures it, in each emulsion layer, seen through the print: strongest in "
+        "the midtones, and gone where the print is clipped to white or to its deepest black. The exported LUT has "
+        "none: grain is different in every frame, which no LUT can be."));
+    connect(enabled, &ToggleRow::toggled, this,
+            [editGrain](bool on) { editGrain([&](MotionGrain &g) { g.enabled = on; }); });
+    body->addWidget(enabled);
+
+    auto *controls = new QWidget;
+    auto *layout = new QVBoxLayout(controls);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(theme::px(5));
+    QStringList gauges;
+    for (FilmGauge g : filmGauges())
+        gauges << QString::fromStdString(filmGaugeName(g));
+    auto *frame = new Segmented(gauges);
+    frame->setHelp(QStringLiteral(
+        "The frame the clip is taken to be shot on: Super 16, 12.52 x 7.41 mm; Super 35, 24.89 x 18.66 mm; or 65 mm "
+        "5-perf, 52.48 x 23.01 mm, the negative a 70 mm print is made from. The picture is laid on the frame as large "
+        "as it fits. A smaller frame is enlarged more, so the same film's grain is coarser on 16 mm and finer on 70 "
+        "mm."));
+    connect(frame, &Segmented::chosen, this, [editGrain](int i) {
+        editGrain([&](MotionGrain &g) { g.gauge = filmGauges()[size_t(std::clamp(i, 0, 2))]; });
+    });
+    layout->addWidget(labelled(QStringLiteral("Frame"), frame));
+    auto *amount = new ParamSlider(QStringLiteral("Amount"), 0, 3, 1, 2);
+    connect(amount, &ParamSlider::valueChanged, this,
+            [editGrain](double v) { editGrain([&](MotionGrain &g) { g.amount = v; }); });
+    layout->addWidget(amount);
+    auto *size = new ParamSlider(QStringLiteral("Size"), 0.25, 4, 1, 2);
+    size->setHelp(QStringLiteral("Larger clouds and coarser grain, as a faster emulsion has."));
+    connect(size, &ParamSlider::valueChanged, this,
+            [editGrain](double v) { editGrain([&](MotionGrain &g) { g.size = v; }); });
+    layout->addWidget(size);
+    body->addWidget(controls);
+
+    m_refreshers.push_back([=, this] {
+        const MotionGrain g = m_doc.look().grain.value_or(MotionGrain{});
+        enabled->setChecked(g.enabled);
+        controls->setVisible(g.enabled);
+        frame->setCurrent(int(g.gauge));
+        amount->setValue(g.amount);
+        size->setValue(g.size);
     });
 }
 

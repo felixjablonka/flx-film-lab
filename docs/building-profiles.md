@@ -76,7 +76,10 @@ checklist for the next one.
   curve walked along its own stroke (`trace_raster_plot.follow`). Curves drawn
   in one ink that never cross but run together (Double-X's development series)
   are told apart by their order: each column's runs shared out top to bottom,
-  the split that moves them least from the column before. Where a sheet draws
+  the split that moves them least from the column before. Dashed curves that
+  fan out of one toe (T-Max P3200's) are followed from the right, where they
+  lie apart, each by its own slope across its gaps, a stroke nearer another
+  curve's course left to that one (`kodak_bitmap_curves`). Where a sheet draws
   each curve in one stroke, read it one stroke at a time
   (`vector_plots.runs`): chaining strokes by their ends (`joined`) runs two
   curves into one where they end at the same point, as Elite Chrome's green
@@ -110,7 +113,33 @@ checklist for the next one.
   other.** Take each part from the edition that measures it best (a vector
   plot over a bitmap of the same data), and the curve from the edition and
   development the rating names. Double-X's 2003 and 2022 editions share their
-  spectral sensitivity and MTF, but not their curves.
+  spectral sensitivity and MTF, but not their curves. Where editions disagree,
+  check each against the film's own rating: T-Max P3200's 03-18 edition plots
+  other curves than its 04-19 revision under the same development tables, and
+  they put the ISO speed point three stops under the rating, where the 04-19
+  curves agree with it.
+- **Check a maker's redrawn plots against its originals.** Fujifilm Europe
+  redrew its colour papers' dye and sensitivity plots as Excel charts from 2014
+  and gave Type CA, DP II and Maxima one set; Fujifilm Tokyo's own vector
+  bulletins (DP II 2005, Crystal Archive 2004) disagree with it in every tail
+  and agree with each other and with spektrafilm's Type II. The originals are
+  read; find them through the Internet Archive when the maker's site has moved
+  on.
+- **Hold a curve where it has flattened; run on only one still rising.** The
+  print films' curves leave their plots climbing and go on as agx's curve
+  model; DP II's end on their shoulders, where that model would have climbed
+  another 0.4 in blue.
+- **A paper with no curve of its own takes its sibling's at its own D-max.**
+  Type CA and Maxima take DP II's shape, each layer scaled by its own sheet's
+  D-max aim against DP II's; an independent measurement of two of them side by
+  side (koraks, 2025) bears the shape out.
+- **Make a relative axis absolute by the maker's ISO speed, at ISO's
+  contrast.** Delta 3200's sheet plots relative log exposure, rates the film
+  ISO 1000 in ID-11, and plots its EI 3200 curves in MICROPHEN: ISO 1000 goes
+  at the speed point of the MICROPHEN development that meets ISO 6's contrast
+  (0.80 over 1.30 log H), interpolated between the plotted times
+  (`iso_axis_offset`). Say the assumption: that the plotted developer gives
+  the rated one's speed at that contrast.
 - **Measure a stated contrast on the sheet's own curves, by the sheet's own
   formula,** and set it beside any plot of it. 2302's curves measure 0.23 to
   0.47 above its gamma-against-time plot at every time. Show both readings and
@@ -134,7 +163,9 @@ checklist for the next one.
   Agfa's 1998 range sheet gives APX 400 APX 100's MTF to the third decimal,
   and APX 25 APX 100's density curve within 0.011. Where a film has a sheet
   of its own, read it, lay the two over each other, and take each plot from
-  the film's own.
+  the film's own. HARMAN's 2018 sheets give Delta 3200 and Delta 400 the same
+  spectrogram, pixel for pixel; Delta 3200's own editions of 2002 and 2010
+  draw the same curve, so it is taken as the film's.
 - **A filter-factor table can be the maker's boilerplate.** Fujifilm's Acros
   II table (2, 4 and 8 in daylight) is its Neopan 1600 sheet's, where Acros
   II's own spectrogram gives 1.6, 2.6 and 4.2. Check a table against the

@@ -1,5 +1,61 @@
 # Changelog
 
+## 2.2.0 (2026-11-24)
+
+Version 2.2 adds grain and compression options for clips, new films and
+papers, and sorting by date, on the Mac and on Windows.
+
+### New
+- **Grain on clips,** in the Motion mode: the film's own grain on every
+  frame, each frame with its own, after the look and the effects. As strong
+  as the Stills mode's at the same size on the film, from the shadows to the
+  highlights, and sized by the gauge the clip is taken to be shot on: 16 mm,
+  35 mm or 70 mm. With Amount and Size, as in Stills. In both apps.
+- **Compression for clips:** ProRes 422 Proxy, LT, 422 or HQ, and HEVC 10-bit
+  at four levels or a data rate of your own, chosen beside the codec in the
+  toolbar, each shown with the Mbit/s it comes to for the clip on screen. The
+  HEVC levels are HEVC's own limits for the clip's size and frame rate:
+  Standard is the most the clip's HEVC level allows (100 Mbit/s for 4K up to
+  30 fps, 160 up to 60, 30 for HD at 30), High and Maximum the next two
+  levels', Smaller half of Standard, the same steps cameras' own HEVC is on.
+  At 4K 30 fps they keep about 50%, 60%, 70% and 75% of the film's grain
+  (ProRes 422 HQ keeps it all). The status line says the rate the file came
+  out at. In both apps.
+- **Kodak T-Max P3200 and Ilford Delta 3200,** black-and-white films for EI
+  3200, each built from its maker's own sheet and metered at EI 3200, as
+  they are shot. T-Max P3200 is Kodak's T-MAX Developer curve for EI 3200,
+  with its own spectral sensitivity, sharpness and grain. Delta 3200 is
+  Ilford's MICROPHEN curve for EI 3200 and its spectrogram; Ilford publishes
+  no sharpness or grain, so it takes P3200's.
+- **Ilford Multigrade FB Classic,** the fibre-based Multigrade, from HARMAN's
+  own sheet: its seven filter grades, grade 1 its own curve as on RC Deluxe.
+- **Fujifilm Crystal Archive Type CA, DP II and Maxima,** three colour papers,
+  each with its own dyes and spectral sensitivity from Fujifilm's bulletins.
+  DP II's curves are Fujifilm's own; Type CA and Maxima take their shape at
+  their own D-max: Type CA the softest black, Maxima the deepest.
+- **Sort a folder by the date shot,** or by file name as before, from the
+  sidebar's ••• menu or View > Sort Folder By: the camera's own date and time
+  to the hundredth, a clip's creation time. Kept between launches, the same in
+  Stills and Motion.
+- **Choose what an export's comment says,** in Settings: *Edited with FLX
+  Film Lab.*, the film profile, the paper or print film and the camera filter,
+  or nothing at all.
+
+### Changed
+- **The comment in an exported picture or clip reads as a sentence:** *Edited
+  with FLX Film Lab. Film profile: Kodak Portra 400; paper: Kodak Professional
+  Portra Endura*. A print on a motion picture print film names its print film.
+- **HEVC files say the level they need,** the lowest HEVC level and tier
+  that hold the clip, as cameras label theirs. VideoToolbox labels Main tier
+  only and climbs levels with the data rate, so a 4K file at 100 Mbit/s said
+  level 6.1, an 8K level, and one above 240 Mbit/s level 7, which few
+  players know. On Windows the encoders are told the level and tier.
+
+### Fixed
+- **Windows: folders with letters such as ü or é in their name.** Their
+  pictures lost what the camera recorded (ISO, orientation, lens and date),
+  and Apple Log clips in them were not recognised as log footage.
+
 ## 2.1.0 (2026-11-18)
 
 Version 2.1 adds a default film and paper, a choice of export size and a

@@ -33,13 +33,22 @@ let context = CIContext(options: [.workingColorSpace: workingSpace, .workingForm
                                   .cacheIntermediates: false])
 
 guard let filter = CIRAWFilter(imageURL: input) else { fail("CIRAWFilter cannot read \(input.path)") }
-// RawLoader.keepDecoderVersion: Core Image's RAW decoder 8 where its default is
-// newer and the file offers 8 (RawLoader.filmDecoderVersion; macOS 27's version
-// 9 decodes the film decode's setup cyan). First, as there: choosing a version
-// puts its shadow boost and shadow bias back to their defaults.
+// RawLoader.keepDecoderVersion: Core Image's RAW decoder 8, or the newest
+// version before it the file offers, where its default is newer
+// (RawLoader.filmDecoderVersion; macOS 27's version 9 decodes the film decode's
+// setup cyan). First, as there: choosing a version puts its shadow boost and
+// shadow bias back to their defaults.
 func decoderNumber(_ version: CIRAWDecoderVersion) -> Int? { Int(version.rawValue.prefix(while: \.isNumber)) }
-if let current = decoderNumber(filter.decoderVersion), current > 8,
-   let kept = filter.supportedDecoderVersions.first(where: { decoderNumber($0) == 8 }) {
+// 8, or the newest version before it the file offers (a D700's are 6, 7 and 9)
+func keptVersion(_ filter: CIRAWFilter) -> CIRAWDecoderVersion? {
+    var kept: (version: CIRAWDecoderVersion, number: Int)?
+    for version in filter.supportedDecoderVersions {
+        guard let n = decoderNumber(version), n <= 8, n > (kept?.number ?? Int.min) else { continue }
+        kept = (version, n)
+    }
+    return kept?.version
+}
+if let current = decoderNumber(filter.decoderVersion), current > 8, let kept = keptVersion(filter) {
     filter.decoderVersion = kept
 }
 try? FileManager.default.createDirectory(at: outdir, withIntermediateDirectories: true)

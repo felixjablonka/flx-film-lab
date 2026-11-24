@@ -4,6 +4,7 @@
 #include "FrameGeometry.h"
 #include "MaskRasterizer.h"
 #include "Packs.h"
+#include "Provenance.h"
 #include "RawDecoder.h"
 #include "Recipe.h"
 #include "SetupBuilder.h"
@@ -115,10 +116,11 @@ public:
 
     // The picture at full size with `recipe`, metered on the preview as the
     // screen shows it, written to `path`, shrunk to `longEdge` when that is
-    // smaller (0: the full size). Returns the size written. Throws
-    // std::runtime_error.
+    // smaller (0: the full size), its comment saying what `comment` asks
+    // for (Settings, read on the main thread). Returns the size written.
+    // Throws std::runtime_error.
     QSize exportTo(const Recipe &recipe, const DecodeKey &key, const QString &path, ExportFormat format,
-                   int longEdge = 0);
+                   int longEdge = 0, const ExportComment &comment = {});
 
     // The loupe (DocumentModel's on the Mac): the picture at full size,
     // decoded as the export decodes it, held in memory while it is open; on

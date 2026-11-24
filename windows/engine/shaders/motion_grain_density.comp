@@ -1,0 +1,18 @@
+#version 440
+// The finished frame's light as the print's density, for its grain
+// (motion.metal grain_density).
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2D src;
+layout(binding = 1, rgba32f) uniform writeonly image2D dst;
+
+void main()
+{
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(dst);
+    if (gid.x >= size.x || gid.y >= size.y) return;
+    vec3 light = max(texelFetch(src, gid, 0).rgb, vec3(1e-6));
+    // -log10, as log2 times log10(2)
+    imageStore(dst, gid, vec4(-log2(light) * 0.30102999566398120, 1.0));
+}

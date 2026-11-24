@@ -13,6 +13,8 @@ struct FLXFilmLabApp: App {
     private var stills: DocumentModel { Documents.stills }
     private var motion: ClipModel { Documents.motion }
     @AppStorage("mode") private var modeRaw = AppMode.stills.rawValue
+    /// How the sidebars order a folder (`FolderBrowser.Order`), one setting for both modes.
+    @AppStorage(FolderBrowser.Order.key) private var folderOrderRaw = FolderBrowser.Order.name.rawValue
 
     init() { Self.takeOverSettings() }
 
@@ -97,6 +99,9 @@ struct FLXFilmLabApp: App {
                     if mode.wrappedValue == .motion { motion.showNeighbour(1) } else { stills.showNeighbour(1) }
                 }
                 .keyboardShortcut(.downArrow, modifiers: .command)
+                Picker("Sort Folder By", selection: $folderOrderRaw) {
+                    ForEach(FolderBrowser.Order.allCases) { Text($0.title).tag($0.rawValue) }
+                }
                 Divider()
             }
             CommandGroup(after: .appInfo) {

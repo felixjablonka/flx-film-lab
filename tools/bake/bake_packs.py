@@ -177,6 +177,19 @@ BW_RMS_GRANULARITY = {
     # steps with speed (`apx_step`).
     "ilford_delta_100": 8.0,
     "ilford_delta_400": 10.0,
+    # Kodak F-4001: 18, in D-76 at 20 C, where the film's nominal speed is EI
+    # 800 (the sheet names no time). At EI 3200, Kodak's 12 minutes in T-MAX
+    # Developer, "a slight increase in contrast and graininess": the push rule
+    # (Tri-X Push 2's), on the slope at mid-grey, a straight line fitted over
+    # the stop around it: 0.729 metered at EI 3200 against 0.586 at EI 800 on
+    # the curve for Kodak's EI 800 time, 9 1/2 minutes (both interpolated
+    # between the sheet's small-tank curves), 18 x sqrt(0.729 / 0.586).
+    "kodak_t_max_p3200": 20.1,
+    # Delta 3200 takes T-Max P3200's 18, the Kodak film of its class, at its
+    # ISO 1000 development (MICROPHEN 7.7 min, where its curves meet ISO 6's
+    # contrast), pushed the same way to EI 3200 on its 9 minute curve:
+    # 18 x sqrt(0.766 / 0.610).
+    "ilford_delta_3200": 20.2,
 }
 
 
@@ -676,7 +689,9 @@ def bake_lens_filters(stock: str, sensitivity: np.ndarray, adaptation, out_dir: 
 # higher speed variant"). A stock's line is the first word after its maker;
 # Polaroid's two black-and-white prints are one line.
 FILM_LINE = {"polaroid_553": ("polaroid black and white", 800),
-             "polaroid_polapan_pro_100": ("polaroid black and white", 100)}
+             "polaroid_polapan_pro_100": ("polaroid black and white", 100),
+             # "p3200": its speed is not the first number in its name
+             "kodak_t_max_p3200": ("t", 3200)}
 
 
 def film_order(stock: str) -> tuple:

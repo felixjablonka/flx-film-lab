@@ -1,5 +1,7 @@
 #include "RawUnpack.h"
 
+#include "Paths.h"
+
 #include <libraw/libraw.h>
 
 #include <cmath>
@@ -81,8 +83,16 @@ void readMetadata(const LibRaw &raw, RawMosaic &m)
 void readMetadataWithLibRaw(const std::string &path, RawMosaic &m)
 {
     auto raw = std::make_unique<LibRaw>();
-    if (raw->open_file(path.c_str()) == LIBRAW_SUCCESS)
+    if (raw->open_file(fsPath(path).c_str()) == LIBRAW_SUCCESS)
         readMetadata(*raw, m);
+}
+
+long long captureTimeWithLibRaw(const std::string &path)
+{
+    auto raw = std::make_unique<LibRaw>();
+    if (raw->open_file(fsPath(path).c_str()) != LIBRAW_SUCCESS)
+        return 0;
+    return static_cast<long long>(raw->imgdata.other.timestamp);
 }
 
 // Formats LibRaw identifies that none of the decoders here read, refused
@@ -111,7 +121,7 @@ void refuseUnreadable(LibRaw &raw)
 RawMosaic unpackWithLibRaw(const std::string &path)
 {
     auto raw = std::make_unique<LibRaw>();
-    if (const int e = raw->open_file(path.c_str()); e != LIBRAW_SUCCESS)
+    if (const int e = raw->open_file(fsPath(path).c_str()); e != LIBRAW_SUCCESS)
         fail(path, libraw_strerror(e));
     refuseUnreadable(*raw);
     if (const int e = raw->unpack(); e != LIBRAW_SUCCESS)

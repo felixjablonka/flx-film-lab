@@ -40,6 +40,9 @@ struct GrainLayerBlock {
 struct ConvolveBlock {
     IVec4 params;                   // radius, axis, first layer
 };
+struct OffsetBlock {
+    Vec4 offset;                    // the density added to each record
+};
 
 } // namespace
 
@@ -528,6 +531,16 @@ void FilmRenderer::load(const RenderSetup &s)
     // the film stage ends here: the print's passes never write its results
     m_filmPasses = m_passes.size();
     m_filmKey = filmKey(s);
+    // 2e — for the look's bakes alone (setNegativeOffset): each record of the
+    //      developed negative a little denser or thinner, printed in its place
+    const bool offsets = m_negativeOffset[0] != 0 || m_negativeOffset[1] != 0 || m_negativeOffset[2] != 0;
+    if (offsets) {
+        QRhiTexture *shifted = texture(m_intermediate, m_size, true);
+        const OffsetBlock u{{m_negativeOffset[0], m_negativeOffset[1], m_negativeOffset[2], 0}};
+        pass("negative_offset", {input(0, negative), B::imageStore(1, kCompute, shifted, 0),
+                                 B::uniformBuffer(2, kCompute, uniform(u))});
+        negative = shifted;
+    }
 
     // 2d — the print's shape: the developed negative turned, mirrored,
     //      levelled and cropped, and the rest made at the print's own size.
@@ -546,7 +559,7 @@ void FilmRenderer::load(const RenderSetup &s)
     const int prints = s.stages.grain ? 3 : 1;
     const QSize printSize = shaped ? out : m_size;
     const qint64 keptBytes = qint64(printSize.width()) * printSize.height() * 12;
-    m_layoutKeeps = m_skipsUnchangedFilm && s.print.flags.w == 0 && keptBytes * prints <= m_keptBudget;
+    m_layoutKeeps = m_skipsUnchangedFilm && !offsets && s.print.flags.w == 0 && keptBytes * prints <= m_keptBudget;
     Hash kept;
     kept.value(m_filmKey);
     kept.value(printSize.width());

@@ -237,9 +237,11 @@ FLX Film Lab is *not* a faithful reproduction:
    From agx it takes the base and mask of Vision3 200T, and its grain is EXR
    200T's per-layer curves; it prints on Kodak 5385 (item 15).
 11. **Black-and-white stocks are built here, from datasheets alone** — Kodak
-   Tri-X 400 (Kodak F-4017), Kodak T-Max 100 (Kodak Alaris F-4016), Ilford HP5
-   Plus, Delta 100, Delta 400, FP4 Plus, Pan F Plus, Ortho Plus and Ilford
-   Multigrade RC Deluxe (HARMAN technology technical information), Fujifilm Neopan 1600
+   Tri-X 400 (Kodak F-4017), Kodak T-Max 100 (Kodak Alaris F-4016), Kodak
+   T-Max P3200 (Kodak Alaris F-4001, revised 04-19), Ilford HP5 Plus, Delta
+   100, Delta 400, Delta 3200 (with its 2010 edition), FP4 Plus, Pan F Plus,
+   Ortho Plus and Ilford Multigrade RC Deluxe and FB Classic (HARMAN technology
+   technical information), Fujifilm Neopan 1600
    (Fujifilm AF3-608E), Fujifilm Neopan 100 Acros II (Fujifilm AF3-0258E), Agfa APX 25
    (Agfa's Professional range sheet), Agfa APX 100 and APX 400 (Agfa-Gevaert's
    technical data for each, 1995, read beside the range sheet), and
@@ -260,16 +262,20 @@ FLX Film Lab is *not* a faithful reproduction:
    and tungsten ratings, ISO 80 and 40, bear the reading out); Ilford publishes
    no RMS granularity, so each of its films takes the Kodak film of its class:
    HP5 Plus Tri-X's 17, Delta 100 and 400 T-Max 100's and T-Max 400's 8 and 10
-   (Kodak F-4016, F-4043), and FP4 Plus, Pan F Plus and Ortho Plus HP5 Plus's
+   (Kodak F-4016, F-4043), Delta 3200 T-Max P3200's (below), and FP4 Plus,
+   Pan F Plus and Ortho Plus HP5 Plus's
    17 stepped to their speeds as Agfa's APX 25, 100 and 400 step (7, 9, 14);
-   Ortho Plus takes only the filters its sheet lists, blue, green and yellow; Multigrade is modelled as one
+   Ortho Plus takes only the filters its sheet lists, blue, green and yellow;
+   Multigrade FB Classic's sheet plots density over the paper base and gives
+   the base no figure, so it takes RC Deluxe's, 0.056; Multigrade is modelled as one
    emulsion at grade 1, so its contrast comes from the Contrast control rather
    than from enlarger filtration; halation, which agx tunes per dye layer,
    takes the bottom layer's strength on all three; and the scatter, with
    development's adjacency effect run as the layer's own DIR-style inhibition,
    is fitted to Kodak's published MTF for Tri-X in D-76 (F-4017) rather than
-   taken from agx's colour defaults — Ilford's films and Neopan 1600, with no
-   published MTF, take the same, and APX 25 is fitted to Agfa's own curve (to
+   taken from agx's colour defaults — Ilford's films but Delta 3200, and
+   Neopan 1600, with no published MTF, take the same, and APX 25 is fitted to
+   Agfa's own curve (to
    50 cycles/mm) with Agfa's RMS 7. APX 100 and 400 are fitted to their own
    sheets' curves, with RMS 9 and 14; the range sheet repeats APX 100's MTF
    for APX 400, and APX 100's density curve for APX 25, whose profile so most
@@ -292,7 +298,27 @@ FLX Film Lab is *not* a faithful reproduction:
    T-Max 100 takes Kodak's small-tank D-76 time, 6 1/2 minutes, interpolated
    between the sheet's 6 and 7 1/2 minute curves the same way; its scatter and
    edge effect are fitted to Kodak's own T-Max MTF (to 50 cycles/mm), and its
-   grain to Kodak's RMS 8. Double-X takes the 2022 edition's D-96 curve for 6
+   grain to Kodak's RMS 8. T-Max P3200 takes Kodak's small-tank T-MAX
+   Developer time for EI 3200, 12 minutes, interpolated between the sheet's
+   11 and 13 minute curves, with mid-grey where a meter set to EI 3200 puts it
+   on Kodak's axis; Kodak's edition of 03-18 plots other curves, which put the
+   film three stops under its own rating, and is not used. Its spectral plot
+   gives filter factors of 2.0 (No. 8), 10.8 (No. 25), 5.6 (No. 47) and 6.5
+   (No. 58) against its daylight table's 1.5, 8, 8 and 6, and the film is
+   built from the plot; its scatter and edge effect are fitted to its own MTF
+   (to 50 cycles/mm), and its grain is Kodak's RMS 18 (D-76) pushed to EI 3200
+   as Tri-X's is, 20.1. Delta 3200 takes Ilford's MICROPHEN curve for EI
+   3200, 9 minutes, read off the 2010 edition's vector plot, which the 2018
+   sheet repeats; the sheet's axis is relative, so Ilford's ISO 1000 (in
+   ID-11) is put at the speed point of the MICROPHEN development that meets
+   ISO 6's contrast, as if MICROPHEN gave ID-11's speed there, and mid-grey
+   goes where a meter set to EI 3200 puts it. With no published MTF or
+   granularity it takes T-Max P3200's, the Kodak film of its class: the MTF
+   as measured and RMS 18 pushed to EI 3200 from its ISO development, 20.2.
+   Its spectrogram, the same in its editions of 2002, 2010 and 2018 and in
+   Delta 400's of 2018, stays as high at 670 nm as at 550, so it prints red
+   lighter than the eye sees it. Double-X takes the 2022 edition's D-96 curve
+   for 6
    1/2 minutes, the development its exposure index is for; its mid-grey sits
    at Kodak's normal exposure, 10/EI, which its own exposure table gives an 18%
    grey card; its spectral sensitivity is the 2003 edition's D = 1.0 curve,
@@ -442,6 +468,29 @@ FLX Film Lab is *not* a faithful reproduction:
    no sheet giving one; their sharpness is fitted to the black-and-white
    sheets' MTF, Polacolor's to Type 553's moved along frequency as far as the
    two black-and-white sheets show a print's MTF moves with resolving power.
+18. **Three Fujifilm colour papers are built here**, Crystal Archive Type CA,
+   Crystal Archive Digital Paper Type DPII and Crystal Archive Professional
+   Paper Maxima, in `profiles/` by `tools/bake/build_paper_profiles.py`, from
+   the bulletins Fujifilm Tokyo printed with vector plots: DP II's AF3-212E
+   (2005) and Crystal Archive Paper's AF3-198E (2004), Type CA's line
+   (`fuji_paper_sheets.py`), both through the Internet Archive. Each takes its
+   own dyes and spectral sensitivity, Maxima DP II's, as its 2019 sheet plots
+   the same as DP II's; DP II its own characteristic curves, the only ones
+   Fujifilm plots for these papers; Type CA and Maxima DP II's shape, each
+   layer's density over D-min scaled so its top moves by the paper's D-max aim
+   less DP II's (aims from each paper's own sheet, set 0.15-0.20 under its
+   flashed black, Fujifilm's CLP013 rev-E), an estimate that koraks'
+   measurements of Type CA beside DP II ("On a Color Mission",
+   tinker.koraks.nl, 2025) bear out in shape. The curves are held at their
+   plotted shoulders. Fujifilm Europe's redrawn dye and sensitivity plots
+   (2014 on, one set on all three current sheets) disagree with both
+   bulletins and are not used. From agx they take its format and its
+   conventions for a paper: the dye-amount scale of its Crystal Archive Type
+   II, its printer lamp (TH-KG3) and D50 viewing, mid-grey at each layer's
+   share of a neutral grey of 18.4% luminance, and as much of the lamp
+   collected as its Type II, through each one's filtration for Portra 400.
+   Every colour negative's filtration onto them is solved at bake time, as for
+   item 15's print films.
 
 Everything else matches: `tests/parity` checks the film exposure and negative
 density taps as bit-exact and the final RGB to within 6e-4 across four

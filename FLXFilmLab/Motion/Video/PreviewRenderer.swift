@@ -45,6 +45,8 @@ final class PreviewRenderer: @unchecked Sendable {
 
     struct State {
         var effects = GlowLook()
+        /// The clip's grain; each frame's number comes with it (`show`).
+        var grain: ClipGrain?
         var input = InputSettings()
         var mode: FramePipeline.Mode = .graded
         var quarterTurns = 0
@@ -56,6 +58,8 @@ final class PreviewRenderer: @unchecked Sendable {
     // Everything below is touched only on `queue`.
     private var layer: CAMetalLayer?
     private var frame: CVPixelBuffer?
+    /// The frame's number in its clip, which seeds its grain.
+    private var frameNumber = 0
     private var state = State()
     private var inFlight = false
     private var pending = false
@@ -81,9 +85,10 @@ final class PreviewRenderer: @unchecked Sendable {
         }
     }
 
-    func show(_ frame: CVPixelBuffer, quarterTurns: Int) {
+    func show(_ frame: CVPixelBuffer, quarterTurns: Int, number: Int = 0) {
         queue.async {
             self.frame = frame
+            self.frameNumber = number
             self.state.quarterTurns = quarterTurns
             self.draw()
         }
@@ -164,8 +169,8 @@ final class PreviewRenderer: @unchecked Sendable {
             if let frame, pipeline.hasLUT {
                 try pipeline.renderPreview(frame, into: drawable.texture, quarterTurns: state.quarterTurns,
                                            padding: 20 * layer.contentsScale, background: surround,
-                                           effects: state.effects, settings: state.input, mode: state.mode,
-                                           commandBuffer: cb)
+                                           effects: state.effects, grain: state.grain?.frame(frameNumber),
+                                           settings: state.input, mode: state.mode, commandBuffer: cb)
             } else {
                 try pipeline.fill(drawable.texture, with: surround, commandBuffer: cb)
             }

@@ -26,7 +26,8 @@ final class PlaybackController: ObservableObject {
     private var isSeeking = false
 
     /// Each newly decoded frame, with the clip it belongs to.
-    var onFrame: ((CVPixelBuffer, ClipInfo) -> Void)?
+    /// A new frame, with its time in the clip.
+    var onFrame: ((CVPixelBuffer, ClipInfo, CMTime) -> Void)?
 
     init() {
         player.actionAtItemEnd = .pause
@@ -70,7 +71,7 @@ final class PlaybackController: ObservableObject {
         let itemTime = output.itemTime(forHostTime: hostTime)
         guard output.hasNewPixelBuffer(forItemTime: itemTime),
               let buffer = output.copyPixelBuffer(forItemTime: itemTime, itemTimeForDisplay: nil) else { return }
-        onFrame?(buffer, info)
+        onFrame?(buffer, info, itemTime)
     }
 
     func togglePlay() { isPlaying ? pause() : play() }

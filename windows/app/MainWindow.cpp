@@ -27,6 +27,7 @@
 #include <QDir>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QDoubleSpinBox>
 #include <QDragEnterEvent>
 #include <QFileDialog>
 #include <QFrame>
@@ -391,6 +392,8 @@ MainWindow::MainWindow(Document &document, MotionDocument &motion, QWidget *pare
         else
             m_doc.showNeighbour(1);
     });
+    // one order for both halves' folders: either browser sorts both
+    FolderSidebar::addSortMenu(view, QStringLiteral("So&rt Folder By"), m_doc.browser());
     view->addSeparator();
     menuAction(view, QStringLiteral("Next &Surround"), QKeySequence(Qt::CTRL | Qt::Key_B), this,
                [this] { cycleSurround(); });
@@ -602,19 +605,30 @@ MainWindow::MainWindow(Document &document, MotionDocument &motion, QWidget *pare
 
     m_codec = new ToolMenu;
     for (ExportCodec c : {ExportCodec::ProRes422HQ, ExportCodec::HEVC10})
-        m_codec->addItem(QString::fromStdString(exportCodecName(c)), int(c));
-    m_codec->setToolTip(QStringLiteral("The clip's format: ProRes 422 HQ for editing and grading further, HEVC 10-bit "
-                                       "for sharing."));
+        m_codec->addItem(QString::fromStdString(exportCodecTitle(c)), int(c));
+    m_codec->setToolTip(QStringLiteral("The clip's format: ProRes 422 for editing and grading further, HEVC 10-bit for "
+                                       "sharing."));
     connect(m_codec, &QComboBox::activated, this, [this](int i) {
         MotionLook look = m_motion.look();
         look.exportSettings.codec = ExportCodec(m_codec->itemData(i).toInt());
         m_motion.setLook(look);
     });
+    m_compression = new ToolMenu;
+    m_compression->setToolTip(QStringLiteral(
+        "How hard the clip is compressed, and the data rate that comes to for the clip on screen. ProRes: Proxy, LT, "
+        "422 or HQ, each near Apple's target rate; HQ keeps all of the film's grain. HEVC: four levels from HEVC's own "
+        "limits for the clip's size and frame rate. Standard is the most its HEVC level allows (100 Mbit/s for 4K up "
+        "to 30 fps, 160 up to 60, 30 for HD at 30), High and Maximum the next two levels', Smaller half of Standard; "
+        "at 4K 30 fps they keep about 50%, 60%, 70% and 75% of the grain. Or a rate of your own. Each file is labelled "
+        "with the lowest HEVC level that holds it, as cameras label theirs. HEVC aims for the rate shown; a clip "
+        "without grain often comes out smaller, and the status line says what it came to."));
+    connect(m_compression, &QComboBox::activated, this,
+            [this](int i) { chooseCompression(m_compression->itemData(i).toInt()); });
 
     m_stillsItems = {m_copy, m_paste, m_crop, m_original, m_loupe};
     m_motionItems = {m_copyLook, m_pasteLook, m_logFootage};
     m_stillsBar = {settingsGroup, viewGroup, place(m_format), place(m_size)};
-    m_motionBar = {lookGroup, logGroup, place(m_codec)};
+    m_motionBar = {lookGroup, logGroup, place(m_codec), place(m_compression)};
 
     m_export = new QAction(QStringLiteral("Export"), this);
     connect(m_export, &QAction::triggered, this, [this] { exportDialog(); });
@@ -781,6 +795,7 @@ void MainWindow::refresh()
                                                  "own footage is read.").arg(m_motion.copiedLookSource())
                                 : QStringLiteral("Copy a clip's look first (Ctrl+Shift+C), then paste it onto another."));
     m_codec->setCurrentIndex(m_motion.look().exportSettings.codec == ExportCodec::HEVC10 ? 1 : 0);
+    rebuildCompressionMenu();
 }
 
 void MainWindow::setSurround(int id)
@@ -983,6 +998,117 @@ void MainWindow::chooseSize(int choice)
     }
     setExportSize(size);
     rebuildSizeMenu();
+}
+
+// How hard a clip is compressed, each choice with the data rate it comes to
+// for the clip on screen (CompressionChoice): ProRes's flavours at Apple's
+// target rates, HEVC's levels, and a rate of its own, which Set Data Rate…
+// asks for. Made again only when what it lists has changed.
+void MainWindow::rebuildCompressionMenu()
+{
+    const ExportSettings &ex = m_motion.look().exportSettings;
+    const std::optional<ClipInfo> &clip = m_motion.clip();
+    const auto rate = [](double megabits) { return QString::fromStdString(ExportSettings::rate(megabits)); };
+    struct Item {
+        QString text, shown;
+        int data;
+    };
+    std::vector<Item> items;
+    int current = 0;
+    if (ex.codec == ExportCodec::ProRes422HQ) {
+        for (ProResFlavour f : proResFlavours()) {
+            QString text = QString::fromStdString(proResFlavourTitle(f));
+            QString shown = QString::fromStdString(proResFlavourName(f));
+            if (clip) {
+                const QString r = rate(proResMegabits(f, clip->width, clip->height, clip->frameRate));
+                text += QStringLiteral(" · ") + r;
+                shown += QStringLiteral(" · ") + r;
+            }
+            if (f == ex.flavour())
+                current = int(items.size());
+            items.push_back({text, shown, int(f)});
+        }
+    } else {
+        for (HEVCLevel l : hevcLevels()) {
+            QString text = QString::fromStdString(hevcLevelName(l));
+            QString shown = l == HEVCLevel::Custom ? rate(ex.customMegabits()) : text;
+            if (clip) {
+                const QString r = rate(ex.megabits(l, clip->width, clip->height, clip->frameRate));
+                text += QStringLiteral(" · ") + r;
+                shown = l == HEVCLevel::Custom ? r : shown + QStringLiteral(" · ") + r;
+            }
+            if (l == ex.level())
+                current = int(items.size());
+            items.push_back({text, shown, 100 + int(l)});
+        }
+    }
+    QString key = QString::number(current) + QString::number(int(ex.codec));
+    for (const Item &item : items)
+        key += item.text + QLatin1Char('|') + item.shown;
+    if (key == m_compressionKey)
+        return;
+    m_compressionKey = key;
+    const QSignalBlocker quiet(m_compression);
+    m_compression->clear();
+    for (const Item &item : items) {
+        m_compression->addItem(item.text, item.data);
+        m_compression->setItemData(m_compression->count() - 1, item.shown, kShownRole);
+    }
+    if (ex.codec == ExportCodec::HEVC10) {
+        m_compression->insertSeparator(m_compression->count());
+        m_compression->addItem(QStringLiteral("Set Data Rate…"), 200);
+        m_compression->setItemData(m_compression->count() - 1, true, kActionRole);
+    }
+    m_compression->setCurrentIndex(current);
+    m_compression->updateGeometry();
+}
+
+void MainWindow::chooseCompression(int choice)
+{
+    MotionLook look = m_motion.look();
+    if (choice < 100) {
+        look.exportSettings.proRes = ProResFlavour(choice);
+        m_motion.setLook(look);
+    } else if (choice < 200) {
+        look.exportSettings.hevcLevel = HEVCLevel(choice - 100);
+        m_motion.setLook(look);
+    } else {
+        // Set Data Rate…: HEVC's rate of its own, as the Mac's sheet asks
+        QDialog dialog(this);
+        dialog.setWindowTitle(QStringLiteral("Data Rate"));
+        auto *layout = new QVBoxLayout(&dialog);
+        auto *row = new QHBoxLayout;
+        auto *megabits = new QDoubleSpinBox;
+        megabits->setRange(ExportSettings::minMegabits, ExportSettings::maxMegabits);
+        megabits->setDecimals(1);
+        megabits->setValue(look.exportSettings.customMegabits());
+        megabits->setSuffix(QStringLiteral(" Mbit/s"));
+        megabits->setMinimumWidth(130);
+        row->addWidget(megabits);
+        row->addStretch(1);
+        layout->addLayout(row);
+        const std::optional<ClipInfo> &clip = m_motion.clip();
+        QString words = QStringLiteral("HEVC 10-bit at this average data rate, whatever the clip's size and frame rate. ");
+        if (clip && clip->dataRate > 0)
+            words += QStringLiteral("The clip on screen was recorded at %1. ")
+                         .arg(QString::fromStdString(ExportSettings::rate(clip->dataRate / 1e6)));
+        words += QStringLiteral("Grain, new in every frame, needs a high rate to come through. From %1 to %2 Mbit/s.")
+                     .arg(int(ExportSettings::minMegabits)).arg(int(ExportSettings::maxMegabits));
+        auto *note = new QLabel(words);
+        note->setWordWrap(true);
+        note->setMinimumWidth(320);
+        layout->addWidget(note);
+        auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+        buttons->button(QDialogButtonBox::Ok)->setText(QStringLiteral("Set"));
+        connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+        connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        layout->addWidget(buttons);
+        megabits->selectAll();
+        if (dialog.exec() == QDialog::Accepted)
+            m_motion.setCustomRate(megabits->value());
+    }
+    m_compressionKey.clear();
+    rebuildCompressionMenu();
 }
 
 QString MainWindow::exportFilename() const

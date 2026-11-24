@@ -44,6 +44,8 @@ scripts look for these names.
 | Eastman Kodak | KODACHROME 25, 64 and 200 Professional Film | E-55 | `Kodachrome Spec Sheet.pdf` | `build_profiles.py`, `slide_mtf.py` |
 | Kodak Alaris | KODAK PROFESSIONAL T-MAX 100 Film | F-4016 | `f4016_tmax_100-2018.pdf` | `build_bw_profiles.py`, `bw_mtf.py` |
 | Kodak Alaris | KODAK PROFESSIONAL T-MAX 400 Film | F-4043 | `f4043_tmax_400.pdf` | none: its RMS granularity, 10, is Delta 400's (`bake_packs.py`) |
+| Kodak Alaris | KODAK PROFESSIONAL T-MAX P3200 Black & White Negative Film | F-4001 (revised 04-19) | `f4001_tmax_p3200-2019.pdf` | `build_bw_profiles.py`, `bw_mtf.py` |
+| Kodak Alaris | KODAK PROFESSIONAL T-MAX P3200 Black & White Negative Film | F-4001 (revised 03-18) | `f4001_tmax_p3200-2018.pdf` | reference only: its curves put the film three stops slower than its own rating (`docs/profiles.md`) |
 | Eastman Kodak | EASTMAN DOUBLE-X Negative Film 5222/7222 | H-1-5222 (10/2003) | `5222-Double-X_v1.pdf` | `kodak_bw_cine_sheets.py`, `build_bw_profiles.py`, `bw_mtf.py` |
 | Eastman Kodak | EASTMAN DOUBLE-X Negative Film 5222/7222, Technical Data | H-1-5222 (3-22) | `DOUBLEX-Technical-Data-EN_v2.pdf` | `kodak_bw_cine_sheets.py`, `build_bw_profiles.py` |
 | Eastman Kodak | KODAK Black-and-White Print Film 2302/3302, Technical Data | H-1-2302 (2022) | `Kodak 2302.pdf` | `kodak_bw_cine_sheets.py`, `build_bw_profiles.py` |
@@ -67,10 +69,20 @@ scripts look for these names.
 | HARMAN technology (Ilford) | ILFORD HP5 Plus | technical information | `Ilford HP5 Plus.pdf` | `build_bw_profiles.py` |
 | HARMAN technology (Ilford) | ILFORD DELTA 100 PROFESSIONAL | technical information, Nov 2018 | `Delta-100_201811.pdf` | `build_bw_profiles.py` |
 | HARMAN technology (Ilford) | ILFORD DELTA 400 PROFESSIONAL | technical information, Nov 2018 | `Delta-400_201811.pdf` | `build_bw_profiles.py` |
+| HARMAN technology (Ilford) | ILFORD DELTA 3200 PROFESSIONAL | technical information, Nov 2018 | `Delta-3200_201811.pdf` | `build_bw_profiles.py` |
+| HARMAN technology (Ilford) | ILFORD DELTA 3200 PROFESSIONAL | technical information, May 2010 | `Delta-3200_2010.pdf` | `build_bw_profiles.py`: the same curves as the 2018 sheet's, as vectors |
 | HARMAN technology (Ilford) | ILFORD FP4 PLUS | technical information, Nov 2018 | `FP4-Plus_201811.pdf` | `build_bw_profiles.py` |
 | HARMAN technology (Ilford) | ILFORD PAN F PLUS | technical information, Dec 2018 | `Pan-F-Plus_201812.pdf` | `build_bw_profiles.py` |
 | HARMAN technology (Ilford) | ILFORD ORTHO PLUS | technical information, Oct 2019 | `Ortho-Plus_201910.pdf` | `build_bw_profiles.py` |
 | HARMAN technology (Ilford) | ILFORD MULTIGRADE RC Deluxe | technical information, 2020 | `Ilford Multigrade RC Deluxe.pdf` | `build_bw_profiles.py` |
+| HARMAN technology (Ilford) | ILFORD MULTIGRADE FB CLASSIC | technical information, Oct 2013 | `MULTIGRADE FB CLASSIC technical data sheet.pdf` | `build_bw_profiles.py` |
+| Fujifilm (Tokyo) | FUJICOLOR CRYSTAL ARCHIVE DIGITAL PAPER TYPE DPII | AF3-212E (2005) | `Fujicolor_Crystal_Archive_Digital_Paper_Type_DPII_AF3-212E_2005.pdf` | `fuji_paper_sheets.py`, `build_paper_profiles.py` |
+| Fujifilm (Tokyo) | FUJICOLOR CRYSTAL ARCHIVE PAPER | AF3-198E (2004) | `Fujicolor_Crystal_Archive_Paper_AF3-198E_2004.pdf` | `fuji_paper_sheets.py`, `build_paper_profiles.py` |
+| Fujifilm Europe | FUJICOLOR CRYSTAL ARCHIVE DIGITAL PAPER TYPE DPII | AF3-212E, TMS 2014-06 | `Fujicolor_Crystal_Archive_Digital_Paper_Type_DPII_TMS_2014-06.pdf` | reference only: the redrawn dye and sensitivity plots beside the 2005 curve (`build_paper_profiles.py`) |
+| Fujifilm North America | FUJICOLOR CRYSTAL ARCHIVE PAPER Type CA | AF3-0250U2 (Nov 2018) | `Fujicolor_Crystal_Archive_Type-CA-Data-Specs.pdf` | `build_paper_profiles.py`: its D-max aims |
+| Fujifilm Europe | FUJICOLOR CRYSTAL ARCHIVE DIGITAL PAPER TYPE DPII | AF3-0212E3 (Apr 2019) | `Fujicolor_Crystal_Archive_Paper_Type_DPII.pdf` | `build_paper_profiles.py`: its D-max aims |
+| Fujifilm Europe | FUJICOLOR CRYSTAL ARCHIVE PROFESSIONAL PAPER MAXIMA | AF3-0252E2 (Apr 2019) | `Fujicolor_Crystal_Archive_Professional_Paper_Maxima_0419.pdf` | `build_paper_profiles.py`: its D-max aims |
+| Fujifilm North America | Durst Lambda Recommended Starting Values for FUJIFILM Papers, technical update | CLP013 rev-E (Dec 2018) | `CLP013-rev-E-Lambda-Aim-Values.pdf` | reference: D-max aims 0.15-0.20 under the flashed black |
 | HARMAN technology | HARMAN Phoenix 200 | technical information, Sep 2024 | `HARMAN Phoenix Technical Data sheet 0924.pdf` | `build_profiles.py`, `sheet_readers.py` |
 | Kodak | KODAK VISION3 50D Color Negative Film 5203/7203 | K-1165, 2025 | `KODAK-VISION3-50D-5203-7203-brochure.pdf` | `vision3_granularity.py` |
 | Kodak | KODAK VISION3 250D Color Negative Film 5207/7207 | K-1166, 2025 | `KODAK-VISION3-250D-5207-7207-brochure.pdf` | `vision3_granularity.py` |

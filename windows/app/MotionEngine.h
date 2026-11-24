@@ -2,6 +2,7 @@
 
 #include "ClipExport.h"
 #include "Motion.h"
+#include "Provenance.h"
 
 #include <QImage>
 #include <QSize>
@@ -38,6 +39,7 @@ public:
         LogFormat format = LogFormat::NLog;
         InputSettings input;        // with the format resolved
         GlowLook effects;           // as this film and paper print them
+        std::optional<MotionGrain> grain;   // the look's, drawn on graded frames when it shows
         FramePipeline::Mode mode = FramePipeline::Mode::Graded;
         QSize size;                 // the graded frame's, the clip's way up
         int screen = 0;             // the monitor's colour, by DisplayColour's generation
@@ -70,14 +72,22 @@ private:
     std::unique_ptr<FramePipeline> m_pipeline;
     std::unique_ptr<ClipReader> m_reader;
     int m_clip = 0;
+    uint32_t m_clipSeed = 0;            // the clip's part of its frames' grain seeds
+    double m_frameRate = 0;
+    // The look's grain as its print shows it, and the recipe it was made for:
+    // made with the LUT while the look has grain.
+    std::optional<PrintGrainTable> m_grainTable;
+    std::optional<Recipe> m_grainBasis;
     std::shared_ptr<const VideoFrame> m_frame;
     std::optional<std::pair<Recipe, LogFormat>> m_baked;
     std::optional<Request> m_shown;     // what the last image was made from
 };
 
 // An export: the look baked once more from exactly the settings it was
-// started with, then every frame written (ClipModel.export). Runs on the
-// calling thread with a device of its own, so the preview carries on.
+// started with, then every frame written (ClipModel.export), its description
+// saying what `comment` asks for (Settings, read on the main thread). Runs on
+// the calling thread with a device of its own, so the preview carries on.
 // Returns the encoder used. Throws std::runtime_error, ExportCancelled.
 std::string runClipExport(const QString &packsDir, const QString &source, const QString &destination,
-                          const MotionLook &look, LogFormat format, const std::function<bool(double)> &progress);
+                          const MotionLook &look, LogFormat format, const std::function<bool(double)> &progress,
+                          const ExportComment &comment = {});

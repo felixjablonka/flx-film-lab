@@ -20,6 +20,7 @@ struct MotionInspector: View {
                 toneSection
                 colourSection
                 effectsSection
+                grainSection
                 inputSection
                 exportSection
             }
@@ -218,6 +219,30 @@ struct MotionInspector: View {
             }
             Button("Reset effects") { model.resetEffects() }
                 .buttonStyle(.link).font(.panel(10)).padding(.top, 2)
+        }
+    }
+
+    // MARK: Grain
+
+    /// The look's grain: none until it is first switched on.
+    private var grain: Binding<MotionGrain> {
+        Binding(get: { model.look.grain ?? MotionGrain() }, set: { model.look.grain = $0 })
+    }
+
+    private var grainSection: some View {
+        Section("Grain", subtitle: "The film's own grain, laid on each frame after the look and the effects, every frame with grains of its own. Its size follows the frame the clip is taken to be shot on.") {
+            ToggleRow(title: "Grain", isOn: grain.enabled,
+                      help: "The stock's grain as its datasheet measures it, in each emulsion layer, seen through the print: strongest in the midtones, and gone where the print is clipped to white or to its deepest black. The exported LUT has none: grain is different in every frame, which no LUT can be.")
+            if grain.wrappedValue.enabled {
+                Picker("Frame", selection: grain.gauge) {
+                    ForEach(FilmGauge.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented).controlSize(.panel(.small)).font(.panel(11))
+                .help("The frame the clip is taken to be shot on: Super 16, 12.52 x 7.41 mm; Super 35, 24.89 x 18.66 mm; or 65 mm 5-perf, 52.48 x 23.01 mm, the negative a 70 mm print is made from. The picture is laid on the frame as large as it fits. A smaller frame is enlarged more, so the same film's grain is coarser on 16 mm and finer on 70 mm.")
+                ParamSlider(title: "Amount", value: grain.amount, range: 0...3, defaultValue: 1, decimals: 2)
+                ParamSlider(title: "Size", value: grain.size, range: 0.25...4, defaultValue: 1, decimals: 2,
+                            help: "Larger clouds and coarser grain, as a faster emulsion has.")
+            }
         }
     }
 

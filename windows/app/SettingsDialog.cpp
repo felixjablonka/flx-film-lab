@@ -240,6 +240,30 @@ QWidget *SettingsDialog::buildGeneral()
         "DSC_0871.NEF.flx, which travels with the folder to another drive, another PC or the Mac app. They are "
         "always kept in the app's library too; of the two, the newer counts.")));
     layout->addWidget(library);
+
+    layout->addSpacing(8);
+    layout->addWidget(heading(QStringLiteral("Comment in Exported Files")));
+    auto *comment = new Group;
+    m_commentEditedWith = new Switch;
+    m_commentFilm = new Switch;
+    m_commentPaper = new Switch;
+    m_commentFilter = new Switch;
+    for (Switch *s : {m_commentEditedWith, m_commentFilm, m_commentPaper, m_commentFilter})
+        connect(s, &QAbstractButton::clicked, this, [this] {
+            chooseExportComment({m_commentEditedWith->isChecked(), m_commentFilm->isChecked(),
+                                 m_commentPaper->isChecked(), m_commentFilter->isChecked()});
+        });
+    comment->addRow(QStringLiteral("Edited with FLX Film Lab"), m_commentEditedWith);
+    comment->addRow(QStringLiteral("Film profile"), m_commentFilm);
+    comment->addRow(QStringLiteral("Paper or print film"), m_commentPaper);
+    comment->addRow(QStringLiteral("Camera filter"), m_commentFilter);
+    comment->addUnder(explanation(QStringLiteral(
+        "What an exported picture's EXIF comment says, and its description where the camera left none, and an "
+        "exported clip's description. A slide and an instant print, seen as they are, name no paper. With none on, "
+        "nothing is written there; a camera's own description stays either way.")));
+    m_commentExample = explanation(QString());
+    comment->addUnder(m_commentExample);
+    layout->addWidget(comment);
     return page;
 }
 
@@ -433,6 +457,23 @@ void SettingsDialog::chooseSidecars(bool on)
     refresh();
 }
 
+void SettingsDialog::chooseExportComment(const ExportComment &comment)
+{
+    setExportComment(comment);
+    refresh();
+}
+
+QString SettingsDialog::commentExampleText()
+{
+    Recipe recipe;
+    recipe.filmStock = "kodak_tri_x_400";
+    recipe.printStock = "ilford_multigrade_rc_deluxe";
+    recipe.lensFilter = "red";
+    const std::string said = provenance(recipe, m_doc.packs(), "", exportComment()).description;
+    return said.empty() ? QStringLiteral("Nothing is written there.")
+                        : QStringLiteral("For example: %1").arg(QString::fromStdString(said));
+}
+
 void SettingsDialog::chooseFilmShown(const std::string &stock, bool shown)
 {
     std::set<std::string> hidden = filmmenu::hidden(hiddenFilms());
@@ -536,6 +577,12 @@ void SettingsDialog::refresh()
     m_names->setCurrentIndex(m_names->findData(int(darkroom ? Vocabulary::Darkroom : Vocabulary::Photographic)));
     m_preview->setCurrentIndex(m_preview->findData(m_doc.previewSize()));
     m_sidecars->setChecked(m_doc.library().savesSidecars());
+    const ExportComment comment = exportComment();
+    m_commentEditedWith->setChecked(comment.editedWith);
+    m_commentFilm->setChecked(comment.film);
+    m_commentPaper->setChecked(comment.paper);
+    m_commentFilter->setChecked(comment.filter);
+    m_commentExample->setText(commentExampleText());
     m_monitor->setText(monitorText());
 
     // the defaults as a picture would start with them

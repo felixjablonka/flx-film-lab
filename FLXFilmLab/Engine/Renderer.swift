@@ -229,6 +229,7 @@ final class Renderer {
     private let grainRestoreMean: MTLComputePipelineState
     private let grainMirror: MTLComputePipelineState
     private let grainEvenMean: MTLComputePipelineState
+    private let negativeOffsetPipeline: MTLComputePipelineState
     private let grainConvolve: MTLComputePipelineState
     private let grainConvolveAdd: MTLComputePipelineState
     private let encodeDisplay: MTLComputePipelineState
@@ -272,7 +273,8 @@ final class Renderer {
     /// session draw the same grain for it.
     static func grainSeed(for url: URL) -> UInt32 { fnv1a(url.lastPathComponent) }
 
-    private static func fnv1a(_ text: String) -> UInt32 {
+    /// FNV-1a: a stock's part of the grain seed, here and on clips (`FrameGrain`).
+    static func fnv1a(_ text: String) -> UInt32 {
         var h: UInt32 = 0x811C_9DC5
         for byte in text.utf8 { h = (h ^ UInt32(byte)) &* 0x0100_0193 }
         return h
@@ -286,6 +288,12 @@ final class Renderer {
     private var shapedGrainy: MTLTexture?
     private var shapedScratchA: MTLTexture?
     private var shapedScratchB: MTLTexture?
+    /// For the look's bakes alone: a density added to each record of the
+    /// developed negative before it is printed, so that a bake can read how
+    /// the print answers each layer's density (`LookBaker.printGrain`). Zero
+    /// for every picture; the developed negative itself is left as it is.
+    var negativeOffset = SIMD3<Float>.zero
+    private var offsetNegative: MTLTexture?
     private var geometryLinear: MTLTexture?
     private var geometryDisplay: MTLTexture?
     /// What the last render finished with: the print as cut, linear and for
@@ -395,6 +403,7 @@ final class Renderer {
         grainRestoreMean = try pipeline("grain_restore_mean")
         grainMirror = try pipeline("grain_mirror")
         grainEvenMean = try pipeline("grain_even_mean")
+        negativeOffsetPipeline = try pipeline("negative_offset")
         grainConvolve = try pipeline("grain_convolve")
         grainConvolveAdd = try pipeline("grain_convolve_add")
         encodeDisplay = try pipeline("encode_display")
@@ -699,6 +708,21 @@ final class Renderer {
         //      fall between the frame's, and showed a faint grid, every 23
         //      pixels at 2.5°.
         var negative = cmy
+        if negativeOffset != .zero {
+            if offsetNegative?.width != width || offsetNegative?.height != height
+                || offsetNegative?.pixelFormat != cmy.pixelFormat {
+                offsetNegative = makeTexture(width: width, height: height, format: cmy.pixelFormat)
+            }
+            if let shifted = offsetNegative {
+                var offset = negativeOffset
+                encode(cb, negativeOffsetPipeline, width: width, height: height) { e in
+                    e.setTexture(cmy, index: 0)
+                    e.setTexture(shifted, index: 1)
+                    e.setBytes(&offset, length: MemoryLayout<SIMD3<Float>>.stride, index: 0)
+                }
+                negative = shifted
+            }
+        }
         let printed: MTLTexture, screen: MTLTexture
         var printScratch = scratch1, printScratchB = scratch2, grainyBlur = rawB
 
@@ -715,7 +739,7 @@ final class Renderer {
                                           made: made, width: printWidth, height: printHeight,
                                           prints: prints, bands: exposureBands)
         let keptLength = printWidth * printHeight * 12
-        var keeps = keepsPrintExposure && setup.printUniforms.scanFilm == 0
+        var keeps = keepsPrintExposure && negativeOffset == .zero && setup.printUniforms.scanFilm == 0
             && UInt64(keptLength * prints) <= device.recommendedMaxWorkingSetSize / 32
             && printAndScanKeeping != nil && printAndScanKept != nil
         if keeps, keptExposure.count != prints || keptExposure.contains(where: { $0.length != keptLength }) {

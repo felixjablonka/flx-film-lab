@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Packs.h"
+#include "Provenance.h"
 
 #include <QSettings>
 #include <QString>
@@ -63,3 +64,14 @@ struct ExportSize {
 };
 ExportSize exportSize();
 void setExportSize(const ExportSize &size);
+
+// What an exported picture's or clip's comment names (Settings, General; the
+// Mac's ExportComment), under the Mac's names: all three unless set.
+ExportComment exportComment();
+void setExportComment(const ExportComment &comment);
+
+// How the sidebars order a folder: by name, or by the date shot
+// (FolderBrowser::Order), one setting for Stills and Motion, under the Mac's
+// name and values.
+bool foldersByDateShot();
+void setFoldersByDateShot(bool byDate);

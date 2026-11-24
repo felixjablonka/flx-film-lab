@@ -806,6 +806,19 @@ kernel void grain_mirror(texture2d<float, access::read>  clean  [[texture(0)]],
     dst.write(float4(2.0f * clean.read(gid).rgb - grainy.read(gid).rgb, 1.0f), gid);
 }
 
+// The developed negative with a density added to each record: for the look's
+// bakes alone (Renderer.negativeOffset), which read how the print answers a
+// change in each layer's density, for the grain laid on clips.
+kernel void negative_offset(texture2d<float, access::read>  src    [[texture(0)]],
+                            texture2d<float, access::write> dst    [[texture(1)]],
+                            constant float3 &offset                [[buffer(0)]],
+                            uint2 gid                              [[thread_position_in_grid]])
+{
+    if (gid.x >= dst.get_width() || gid.y >= dst.get_height()) return;
+    float4 v = src.read(gid);
+    dst.write(float4(v.rgb + offset, v.a), gid);
+}
+
 // The mean of the prints of the grain and of its mirror: the grain-free print
 // and the even part of the print's response to the grain, its mean shift.
 kernel void grain_even_mean(texture2d<float, access::read>  a   [[texture(0)]],

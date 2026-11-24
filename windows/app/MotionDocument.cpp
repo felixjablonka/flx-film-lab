@@ -37,15 +37,15 @@ const char *kLookKey = "motionLook";
 QString encoderNote(const std::string &encoder)
 {
     if (encoder == "hevc_nvenc")
-        return QStringLiteral(" (HEVC on NVIDIA's encoder)");
+        return QStringLiteral(", on NVIDIA's encoder");
     if (encoder == "hevc_amf")
-        return QStringLiteral(" (HEVC on AMD's encoder)");
+        return QStringLiteral(", on AMD's encoder");
     if (encoder == "hevc_qsv")
-        return QStringLiteral(" (HEVC on Intel's encoder)");
+        return QStringLiteral(", on Intel's encoder");
     if (encoder == "hevc_videotoolbox")
-        return QStringLiteral(" (HEVC on Apple's encoder)");
+        return QStringLiteral(", on Apple's encoder");
     if (encoder == "libx265")
-        return QStringLiteral(" (HEVC with x265, on the processor)");
+        return QStringLiteral(", with x265 on the processor");
     return {};
 }
 
@@ -428,6 +428,7 @@ void MotionDocument::scheduleRender()
     request.format = format();
     request.input = readingSettings();
     request.effects = effectsAsPrinted(m_look, *m_packs);
+    request.grain = m_look.grain;
     request.mode = m_showLog ? FramePipeline::Mode::Log : FramePipeline::Mode::Graded;
     request.size = m_viewSize;
     request.screen = displaycolour::generation();
@@ -699,8 +700,9 @@ void MotionDocument::exportTo(const QString &path)
     const QString source = m_clipPath, packs = m_data.packs, name = QFileInfo(path).fileName();
     m_status = QStringLiteral("Exporting %1…").arg(name);
     QPointer<MotionDocument> self(this);
-    QThread *worker = QThread::create([this, self, look, f, source, packs, path, name] {
-        QString error;
+    const ExportComment comment = exportComment();
+    QThread *worker = QThread::create([this, self, look, f, source, packs, path, name, comment] {
+        QString error, rate;
         std::string encoder;
         bool cancelled = false;
         int shown = -1;
@@ -717,13 +719,17 @@ void MotionDocument::exportTo(const QString &path)
                     });
                 }
                 return !m_cancelExport.load();
-            });
+            }, comment);
+            // the rate it came out at: near Apple's target for ProRes, HEVC's average
+            if (const auto megabits = MotionDocument::dataRate(path))
+                rate = QStringLiteral(", ") + QString::fromStdString(ExportSettings::rate(*megabits));
         } catch (const ExportCancelled &) {
             cancelled = true;
         } catch (const std::exception &e) {
             error = QString::fromStdString(e.what());
         }
-        QMetaObject::invokeMethod(qApp, [self, error, encoder, cancelled, name] {
+        const QString title = QString::fromStdString(look.exportSettings.title());
+        QMetaObject::invokeMethod(qApp, [self, error, encoder, cancelled, name, title, rate] {
             if (!self)
                 return;
             self->m_exportProgress.reset();
@@ -733,7 +739,7 @@ void MotionDocument::exportTo(const QString &path)
                 self->m_error = error;
                 self->m_status = self->m_clip ? QString::fromStdString(self->m_clip->summary()) : QString();
             } else {
-                self->m_status = QStringLiteral("Exported %1").arg(name) + encoderNote(encoder);
+                self->m_status = QStringLiteral("Exported %1: %2%3").arg(name, title, rate) + encoderNote(encoder);
             }
             emit self->changed();
             emit self->statusChanged();
@@ -749,6 +755,28 @@ void MotionDocument::exportTo(const QString &path)
 void MotionDocument::cancelExport()
 {
     m_cancelExport = true;
+}
+
+void MotionDocument::setCustomRate(double megabits)
+{
+    MotionLook look = m_look;
+    look.exportSettings.codec = ExportCodec::HEVC10;
+    look.exportSettings.hevcLevel = HEVCLevel::Custom;
+    look.exportSettings.hevcCustomMegabits =
+        std::clamp(megabits, ExportSettings::minMegabits, ExportSettings::maxMegabits);
+    setLook(look);
+}
+
+std::optional<double> MotionDocument::dataRate(const QString &path)
+{
+    try {
+        const double seconds = readClipInfo(path.toStdString()).duration;
+        const double bytes = double(QFileInfo(path).size());
+        if (seconds > 0 && bytes > 0)
+            return bytes * 8 / seconds / 1e6;
+    } catch (const std::exception &) {
+    }
+    return std::nullopt;
 }
 
 // What the print is, for an exported LUT (ClipModel.printDescription): its
@@ -1049,7 +1077,8 @@ void MotionDocument::exportSelected(const QString &folder)
     const auto highlights = m_highlights;
     const QString packsDir = m_data.packs;
     QPointer<MotionDocument> self(this);
-    QThread *worker = QThread::create([this, self, jobs, highlights, packsDir, folder] {
+    const ExportComment comment = exportComment();
+    QThread *worker = QThread::create([this, self, jobs, highlights, packsDir, folder, comment] {
         PackLibrary packs(packsDir);
         SetupBuilder builder(packs);
         QStringList failures;
@@ -1104,7 +1133,7 @@ void MotionDocument::exportSelected(const QString &folder)
                         });
                     }
                     return !m_cancelExport.load();
-                });
+                }, comment);
             } catch (const ExportCancelled &) {
                 cancelled = true;
                 break;

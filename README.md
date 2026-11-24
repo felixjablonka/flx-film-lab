@@ -5,7 +5,7 @@
 FLX Film Lab is a Mac and Windows app for shooting digital photos as if they
 were film.
 
-**Its films are physical models, not presets.** Each of its 58 film stocks,
+**Its films are physical models, not presets.** Each of its 60 film stocks,
 whether colour negative, slide, cinema, black and white or instant, is modelled
 from its manufacturer's datasheet. That means the spectral sensitivity of each
 layer, its characteristic curves and the dyes it forms, with the development
@@ -36,8 +36,8 @@ it is the same engine in C++ and Qt, with a RAW decoder of its own (*Windows*).
 - **The physics** is a port of [agx-emulsion / spektrafilm][agx] — real spectral
   sensitivities, characteristic curves and dye absorption spectra read off
   manufacturer datasheets, plus DIR couplers, halation and a stochastic grain
-  model. FLX Film Lab ships with 58 film stocks and 14 print stocks, among them
-  fourteen black-and-white films, a black-and-white paper, a black-and-white
+  model. FLX Film Lab ships with 60 film stocks and 18 print stocks, among them
+  sixteen black-and-white films, two black-and-white papers, a black-and-white
   print film and three Polaroid instant prints. Slides are read off a virtual
   light table rather than printed, white-balanced on the film base, as a
   projector or a scanner treats clear film.
@@ -102,7 +102,7 @@ a video mode. That is where most of the work in this repository went.
   colour to within 6e-4 (`tests/parity`). Its grain model, a count of the
   particles that develop in each emulsion layer, is where the app's grain starts
   (*Grain*).
-- **spektrafilm's data.** 14 of the 58 film stocks are spektrafilm's: Kodak
+- **spektrafilm's data.** 14 of the 60 film stocks are spektrafilm's: Kodak
   Portra 160, 400 and 800 (and Portra 800's two pushes), Ektar 100, Gold 200,
   Ultramax 400, the four Vision3 stocks, Verita 200D, and Fujifilm C200, Pro
   400H and X-TRA 400. They are used as they are, but for one change: Vision3
@@ -168,18 +168,22 @@ a video mode. That is where most of the work in this repository went.
 - **Undo and redo**, one step per gesture, with a history for each image.
 - **Folders of pictures and clips**, with culling, batch paste and export, and
   settings kept between launches (*A folder of pictures*).
-- **47 more stocks, each from its own datasheet.**
-  - 40 film stocks spektrafilm does not have: Fujifilm Astia 100F, Provia
+- **53 more stocks, each from its own datasheet.**
+  - 42 film stocks spektrafilm does not have: Fujifilm Astia 100F, Provia
     400X, Velvia 50, Superia 1600, Superia Reala 100, Eterna Vivid 160T,
     Eterna 500T, Reala 500D, Neopan 100 Acros II and Neopan 1600; Kodak
     Kodachrome 25 and 200, Elite Chrome Extra Color 100, Elite Chrome 200,
     Royal Gold 100, Vericolor III 160, EXR 50D, EXR 200T, 5251 50T, Tri-X 400,
-    T-Max 100 and Double-X 5222; Agfa Optima II 100, Portrait XPS 160, APX 25,
-    APX 100 and APX 400; Ilford HP5 Plus, Delta 100, Delta 400, FP4 Plus, Pan F
-    Plus and Ortho Plus; Konica Centuria Super 100, Centuria Super 1600 and
-    Impresa 50; HARMAN Phoenix 200; and Polaroid's peel-apart prints, 553,
-    Polapan Pro 100 and Polacolor 559.
-  - Tri-X pushed two stops, and Ilford Multigrade paper.
+    T-Max 100, T-Max P3200 and Double-X 5222; Agfa Optima II 100, Portrait XPS
+    160, APX 25, APX 100 and APX 400; Ilford HP5 Plus, Delta 100, Delta 400,
+    Delta 3200, FP4 Plus, Pan F Plus and Ortho Plus; Konica Centuria Super
+    100, Centuria Super 1600 and Impresa 50; HARMAN Phoenix 200; and
+    Polaroid's peel-apart prints, 553, Polapan Pro 100 and Polacolor 559.
+  - Tri-X pushed two stops, and Ilford's Multigrade papers, RC Deluxe and FB
+    Classic.
+  - Three Fujifilm colour papers: Crystal Archive Type CA, DP II and Maxima,
+    from Fujifilm's own bulletins. Only DP II's plots its curves; Type CA and
+    Maxima take its shape at their own D-max (`docs/profiles.md`).
   - Five motion picture print films to print on, beside Kodak's 2383 and
     2393: Fujifilm's F-CP 3519, F-CP 3510 and Eterna-CP 3513DI, Kodak's
     5385 of 1962, and Kodak's black-and-white 2302. Each motion picture film
@@ -198,7 +202,7 @@ a video mode. That is where most of the work in this repository went.
     engine changes, a share of the inhibitor that diffuses and a cap on its edge
     gain, and a grid sixteen times finer for inverting the couplers.
 - **Black and white.** spektrafilm's main line is colour only; its
-  black-and-white work sits on an unmerged branch. Here fourteen black-and-white
+  black-and-white work sits on an unmerged branch. Here sixteen black-and-white
   films, Tri-X's two-stop push, a silver paper and a silver print film are built
   from datasheets alone, as noted above. They run neutral through the
   three-layer engine, with grain and sharpness from Kodak's and Agfa's published
@@ -215,9 +219,11 @@ a video mode. That is where most of the work in this repository went.
   real size on the film, so the preview shows the grain a full-size export has
   (*Grain*).
 - **Video.** The Motion mode grades log footage through the same engine as
-  photographs, live while it plays, and exports the graded clip. Output is
-  ProRes 422 HQ or 10-bit HEVC, with audio and metadata kept, encoded so that
-  QuickTime, Photos and Safari show what the preview shows.
+  photographs, live while it plays, with the film's grain if you want it, and
+  exports the graded clip. Output is ProRes 422 (Proxy, LT, 422 or HQ) or
+  10-bit HEVC at a level or a data rate of your own, with audio and metadata
+  kept, encoded so that QuickTime, Photos and Safari show what the preview
+  shows.
   - It reads N-Log, V-Log, Apple Log and Apple Log 2, F-Log and F-Log2, Canon
     Log 2 and 3, S-Log3 and I-Log, and tells the format from the file or the
     camera.
@@ -277,12 +283,14 @@ Export writes a 16-bit TIFF, a JPEG or a PNG with the output profile embedded,
 and carries the photograph's metadata over from the source — when it was taken,
 the camera, the lens, the exposure, where — for NEF, DNG and any other file
 macOS can read. It adds what made the print: FLX Film Lab and its version as
-the software, and the film, its camera filter and the paper in the EXIF user
-comment, after any comment the camera wrote: *Film: Kodak Tri-X 400; camera
-filter: Red, Wratten 25; paper: Ilford Multigrade RC Deluxe*, or for a slide
-*viewed on a light table*, for a Polaroid *instant print, processed at 70 F*.
-The same line is the image description, where Photos and Lightroom find a
-caption, unless the camera or an editor left one.
+the software, and in the EXIF user comment, after any comment the camera wrote,
+*Edited with FLX Film Lab. Film profile: Kodak Tri-X 400; camera filter: Red,
+Wratten 25; paper: Ilford Multigrade RC Deluxe*. A motion picture film's print
+names its *print film*; a slide or a Polaroid, seen as it is, no paper. The same
+line is the image description, where Photos and Lightroom find a caption,
+unless the camera or an editor left one, and an exported clip's description.
+Settings chooses what it says: *Edited with FLX Film Lab.*, the film profile,
+the paper or print film and the camera filter, or nothing at all (*Settings*).
 
 The format and the size are chosen beside Export in the toolbar, and kept
 between launches. The size is **Full Size**, or a long edge in pixels, 2048 to
@@ -306,6 +314,14 @@ out: the film is made from the camera's raw data, and they are often a RAW's
 own exports or edits. One still opens on its own. Click a picture to work
 on it. ↑ and ↓ in the sidebar, or ⌘↑ and ⌘↓ anywhere, step through them, and
 the pictures either side are decoded ahead, so the next is on screen at once.
+
+- **Sorting.** By file name, as Finder sorts them, or by the date they were
+  shot: the camera's own date and time, to the hundredth of a second and in
+  its time zone where it records them, a clip's creation time from its movie
+  header, and for a file with neither, when the file was made. Chosen in the
+  sidebar's ••• menu or View > Sort Folder By, kept between launches, and the
+  same in Stills and Motion. The dates are read as the folder opens, about
+  half a millisecond a NEF.
 
 - **Culling.** P picks, X rejects and U unflags the pictures selected, as the
   sidebar's right-click menu does, which shows the keys. With the pointer
@@ -512,17 +528,18 @@ like the masks, and stay out of LUTs.
 
 ## Black and white
 
-**Kodak Tri-X 400**, also pushed two stops, **Kodak T-Max 100**, **Ilford HP5
-Plus**, **Ilford Delta 100** and **Delta 400**, **Ilford FP4 Plus**, **Ilford Pan F
-Plus**, **Ilford Ortho Plus**, **Fujifilm Neopan 100 Acros II** and **Neopan
-1600**, and **Agfa APX 25**, **APX 100** and **APX 400** print
-on **Ilford Multigrade RC Deluxe**, and **Kodak Double-X 5222**, Kodak's
+**Kodak Tri-X 400**, also pushed two stops, **Kodak T-Max 100** and **T-Max
+P3200**, **Ilford HP5 Plus**, **Ilford Delta 100**, **Delta 400** and **Delta
+3200**, **Ilford FP4 Plus**, **Ilford Pan F Plus**, **Ilford Ortho Plus**,
+**Fujifilm Neopan 100 Acros II** and **Neopan 1600**, and **Agfa APX 25**, **APX
+100** and **APX 400** print on **Ilford Multigrade RC Deluxe** (or the
+fibre-based **Multigrade FB Classic**), and **Kodak Double-X 5222**, Kodak's
 motion picture negative, on its release print film, **Kodak 2302**, each built
-from its maker's datasheet (`docs/profiles.md`). Picking
-one moves the print onto Multigrade, or Double-X onto 2302, and picking a
-colour film again moves it back. A paper chosen on purpose for a kind of film
-stays with it, and comes back when you return to that kind; Settings can have
-each film bring its own paper instead (*Settings*).
+from its maker's datasheet (`docs/profiles.md`). Picking one moves the print
+onto Multigrade, or Double-X onto 2302, and picking a colour film again moves it
+back. A paper chosen on purpose for a kind of film stays with it, and comes back
+when you return to that kind; Settings can have each film bring its own paper
+instead (*Settings*).
 
 - **The film is panchromatic, and bluer than the eye.** Each film sees the
   scene through its own measured spectral sensitivity, so an unfiltered blue
@@ -533,7 +550,10 @@ each film bring its own paper instead (*Settings*).
   nm, so reds print dark and skin darker than on a panchromatic film, and it
   takes only the filters Ilford gives it factors for, blue, green and yellow.
   Neopan 100 Acros II sees red up to 650 nm about as strongly as green, and
-  nothing past 660, so its red filter does less than on other films.
+  nothing past 660, so its red filter does less than on other films. Delta
+  3200, as HARMAN plots it, is as sensitive at 670 nm as at 550: it sees red
+  further than the eye, and unfiltered it prints that red at L* 72 and the
+  blue at 67.
 - **Camera filters**, under Negative Exposure: blue, green, yellow, orange and
   red — Kodak Wratten 47, 58, 8, 22 and 25, read off Kodak's own transmission
   curves. Each film has its own exposure LUT per filter, its sensitivity times
@@ -544,27 +564,35 @@ each film bring its own paper instead (*Settings*).
   against Kodak's published 2, 8 and 6 (green 9.9 against 6). T-Max 100's own
   spectral plot gives yellow 2.5x, red 10.9x, blue 5.2x and green 8.3x, where
   Kodak's table for it says 1.5, 8, 8 and 6: the sheet's plot and table
-  disagree, and the film is built from the plot.
+  disagree, and the film is built from the plot. T-Max P3200's plot and table
+  disagree the same way: yellow 2.0x, red 10.8x, blue 5.6x and green 6.5x,
+  against the same 1.5, 8, 8 and 6.
 - **Contrast is Multigrade's grade.** The paper's own curve is filter grade 1,
   ISO R110 on Ilford's table, and Contrast is relative to a paper's own curve
   with 115 as neutral, so the slider reads close to Multigrade's ISO-R grades:
   around 160 for grade 00, 90 for grade 2, 50 for grade 5.
+- **Multigrade FB Classic** is the fibre-based paper, from HARMAN's own sheet
+  (2013), whose grades trace at R178, 145, 114, 94, 75, 58 and 52 against
+  Ilford's 170, 140, 110, 95, 80, 60 and 50; grade 1 is its own curve too. Its
+  sheet plots density over the paper base and gives the base no figure, so it
+  takes RC Deluxe's, 0.056, an estimate. Its black is a shade deeper, 2.07 over
+  the base against 2.04.
 - **Silver has no colour.** On Multigrade every layer is the same silver, so
   the picture is neutral however it is filtered, and the colour controls are
   hidden. Pre-flash still holds the highlights.
 - **Grain is the datasheet's, where the sheet gives it.** Kodak gives Tri-X a
-  diffuse RMS granularity of 17, T-Max 100 one of 8 and Double-X one of 14,
-  Agfa gives APX 25, 100 and 400 7, 9 and 14, and Fujifilm gives Neopan 100
-  Acros II 7, read the way the datasheets read it: net density 1.0 through a
-  48 um aperture. Ilford publishes none for any of its films, so each takes
-  the Kodak film of its own class: HP5 Plus Tri-X's 17; Delta 100 and Delta
-  400, Ilford's tabular-grain emulsions, T-Max 100's and T-Max 400's 8 and 10;
-  FP4 Plus, Pan F Plus and Ortho Plus, classical emulsions as HP5's is, its 17
-  stepped to their speeds as Agfa's own classical range steps (APX 25, 100 and
-  400 measure 7, 9 and 14), 11.7, 9.6 and 10.5. Neopan 1600 and the push are
-  below. It is one
-  silver layer, so the grain is neutral, and its clumps are smaller and
-  crisper than a colour film's dye clouds (*Grain*).
+  diffuse RMS granularity of 17, T-Max 100 one of 8, T-Max P3200 one of 18 and
+  Double-X one of 14, Agfa gives APX 25, 100 and 400 7, 9 and 14, and Fujifilm
+  gives Neopan 100 Acros II 7, read the way the datasheets read it: net density
+  1.0 through a 48 um aperture. Ilford publishes none for any of its films, so
+  each takes the Kodak film of its own class: HP5 Plus Tri-X's 17; Delta 100 and
+  Delta 400, Ilford's tabular-grain emulsions, T-Max 100's and T-Max 400's 8 and
+  10, and Delta 3200 T-Max P3200's 18; FP4 Plus, Pan F Plus and Ortho Plus,
+  classical emulsions as HP5's is, its 17 stepped to their speeds as Agfa's own
+  classical range steps (APX 25, 100 and 400 measure 7, 9 and 14), 11.7, 9.6 and
+  10.5. Neopan 1600, the push and the two EI 3200 films are below. It is one
+  silver layer, so the grain is neutral, and its clumps are smaller and crisper
+  than a colour film's dye clouds (*Grain*).
 - **So is the sharpness.** Kodak publishes Tri-X's modulation transfer in D-76:
   above 100% at coarse detail, 112% at 8 cycles/mm, back to 101% at 24 and 55%
   at 50. The hump is development's edge effect — its by-products spread out of
@@ -573,13 +601,14 @@ each film bring its own paper instead (*Settings*).
   film's DIR couplers. It and the scatter under it are fitted to Kodak's curve
   (`tools/bake/bw_mtf.py`), within 4% from 2.4 to 71 cycles/mm; Ilford's films,
   for which Ilford publishes none, take the same response, each with the edge
-  effect its own curve's slope gives it; APX 25, 100 and 400, T-Max 100 and
-  Double-X are fitted to their makers' own curves, up to 50 cycles/mm (T-Max
-  109% at 5, 114% at 20, 112% at 30; Double-X 126% at 5, 92% at 20, 68% at 30,
-  a broad hump and a steep fall that takes the scatter's tail as well as its
-  core). Acros II, for which Fujifilm publishes none, takes T-Max 100's, which
-  resolves the same. A colour film's scatter without the couplers' sharpening
-  had left Tri-X at 36% at 24 cycles/mm, visibly softer than any colour stock
+  effect its own curve's slope gives it; APX 25, 100 and 400, T-Max 100, T-Max
+  P3200 and Double-X are fitted to their makers' own curves, up to 50
+  cycles/mm (T-Max 109% at 5, 114% at 20, 112% at 30; Double-X 126% at 5, 92%
+  at 20, 68% at 30, a broad hump and a steep fall that takes the scatter's
+  tail as well as its core). Acros II, for which Fujifilm publishes none,
+  takes T-Max 100's, which resolves the same, and Delta 3200 T-Max P3200's. A
+  colour film's scatter without the couplers' sharpening had left Tri-X at
+  36% at 24 cycles/mm, visibly softer than any colour stock
   on the same file. Edge effects, under Film Character, sets how strong it is.
 - **Neopan 1600 is shot at its rating.** Fujifilm's D-76 time for EI 1600,
   7 1/2 minutes, gives a curve whose own ISO speed point is 721: the rating is
@@ -606,6 +635,16 @@ each film bring its own paper instead (*Settings*).
   19: the same grains, each developed to more silver, and granularity goes as
   the square root of the density per grain (Selwyn), so Tri-X's 17 times the
   root of the two slopes, 0.718 against 0.581. The sharpness is Tri-X's.
+- **T-Max P3200 and Delta 3200 are shot at EI 3200.** Kodak and Ilford rate
+  both about ISO 1000 and give times for EI 3200: Kodak's 12 minutes in T-MAX
+  Developer, between its 11 and 13 minute curves, and Ilford's 9 minutes in
+  MICROPHEN, one of its own. Mid-grey sits where a meter set to EI 3200 puts
+  it; Delta 3200's sheet plots relative exposure, so Ilford's ISO 1000 places
+  its axis first (`docs/profiles.md`). Kodak's March 2018 edition of P3200's
+  sheet plots curves three stops slower than the film's own rating; the April
+  2019 revision agrees with it and is the one read. Grain is P3200's 18 (in
+  D-76, at its nominal EI 800), which Delta 3200, with no figure from Ilford,
+  takes too, each pushed as Tri-X's is: 20.1 and 20.2.
 - **Double-X 5222 prints on 2302, and is projected.** Kodak's black-and-white
   camera negative for motion pictures, rated EI 250 in daylight and 200 under
   tungsten, prints on Kodak's black-and-white release print film, 2302, which
@@ -815,7 +854,7 @@ granularity — the density fluctuation through a 48 um aperture, times 1000:
 |---|---|
 | visual density 1.0 over the minimum | Fujifilm's, Agfa's and Konica's colour negatives and Fujifilm's slides, from their sheets |
 | gross visual density 1.0 | Kodak's slides |
-| net silver density 1.0 | Tri-X, T-Max 100, Double-X, APX 25, 100 and 400, Neopan 100 Acros II |
+| net silver density 1.0 | Tri-X, T-Max 100, T-Max P3200, Double-X, APX 25, 100 and 400, Neopan 100 Acros II |
 | Print Grain Index | Kodak's colour negatives for stills: four units are a just-noticeable step, and doubling the enlargement adds 22, so a difference of d is a factor of 2 to the power d/22. The scale is set at Portra 400 = 4, where Kodak's own curves put Vision3 250D and 500T and Fujifilm puts Pro 400H |
 | per layer, against density | Kodak Vision3 50D, 250D and 500T, and EXR 50D and 200T. Vision3 200T's sheet repeats 500T's plot, so 200T sits between 50D and 250D at the 100-speed grain Kodak claims for it, and Verita 200D between them at its own speed |
 
@@ -946,6 +985,13 @@ keeps it between launches. Its General tab:
   (*Performance*).
 - **Save settings beside images.** A `.flx` file beside each picture or clip
   (*A folder of pictures*).
+- **Comment in exported files.** What the comment in an exported picture or
+  clip says: *Edited with FLX Film Lab.*, the film profile, the paper or print
+  film (a slide or an instant print names none), the camera filter, each
+  ticked or not, all four to begin with. Without the first it starts at the
+  film profile. With none ticked, nothing is written there, and a camera's own
+  comment and description stay as they were either way (*Opening and
+  exporting*).
 
 Its Film & Paper tab:
 
@@ -991,6 +1037,22 @@ decoded Y′CbCr planes — no colour management, no conversion — into the log
 format's own values, looked up, and then given bloom, glow and halation in
 Core Image. Preview and export run the same code; the effects' sizes follow
 the frame, so the smaller preview blooms the way the full-size export does.
+
+**Grain.** Under Grain, each finished frame gets the film's own grain, after
+the look and the effects, and every frame new grains, as every frame of film
+is a new piece of emulsion. It is the grain the Stills mode draws: each
+layer's Selwyn coefficient from the stock's data at the negative density that
+prints the pixel's tone, with its dye clouds, mixed as the print mixes the
+negative's layers. How the print answers each layer is read off the look's
+grey scale, rendered through the engine with each layer of the negative a
+little denser and thinner. On a flat grey it measures within 1% of the Stills
+mode's grain at the same size on the film, from 5 stops under to 3 over, its
+colour included, and it leaves the frame's light where it was. Its size
+follows the gauge the clip is taken to be shot on: Super 16 (12.52 × 7.41 mm),
+Super 35 (24.89 × 18.66 mm), or 65 mm 5-perf (52.48 × 23.01 mm), the negative
+a 70 mm print is made from, with the frame laid on it as large as it fits. A
+4K frame's grain takes about 10 ms on an M4 Pro. The exported LUT has none: no
+table can.
 
 **N-Log in.** The curve is Nikon's (N-Log Specification 1.0.0), defined on
 10-bit code values: an 18% grey records at code 372, scene black at 127. A Zf
@@ -1076,14 +1138,14 @@ it would on Portra. For a tungsten stock 3200 K is the film's own light, and
 daylight goes blue unless it is shot through an 85. Temperature and Tint
 correct it the way a lab would, with the enlarger's filters.
 
-**Black and white.** Tri-X, Tri-X Push 2, T-Max 100, HP5 Plus, Ilford's
-Delta 100 and 400, FP4 Plus, Pan F Plus and Ortho Plus, Neopan 100 Acros II
-and Neopan 1600, and APX 25, 100 and 400 print on Multigrade, as in Stills: picking one moves the print onto
-silver paper, which has no colour to balance, and the same camera filters
-(Wratten 47, 58, 8, 22 and 25) sit under Film & Paper. Double-X 5222, Kodak's
-black-and-white motion picture negative, prints on its release print film,
-2302, as a cinema would show it. The halation effect, red on colour film,
-glows grey in a black-and-white picture.
+**Black and white.** Tri-X, Tri-X Push 2, T-Max 100, T-Max P3200, HP5 Plus,
+Ilford's Delta 100, 400 and 3200, FP4 Plus, Pan F Plus and Ortho Plus, Neopan
+100 Acros II and Neopan 1600, and APX 25, 100 and 400 print on Multigrade, as in
+Stills: picking one moves the print onto silver paper, which has no colour to
+balance, and the same camera filters (Wratten 47, 58, 8, 22 and 25) sit under
+Film & Paper. Double-X 5222, Kodak's black-and-white motion picture negative,
+prints on its release print film, 2302, as a cinema would show it. The halation
+effect, red on colour film, glows grey in a black-and-white picture.
 
 **Motion picture film, filters and instant prints, as in Stills.** A motion
 picture film prints on its own print film, or the one last chosen for motion
@@ -1094,11 +1156,38 @@ prints they are, processed at 70 F.
 
 **What a frame cannot carry.** Grain, the film's own halation, coupler
 diffusion, dodge and burn and the meters depend on neighbouring pixels or on
-the whole frame, so they are not in the look. Grain is left out for now; the
-halation effect stands in for the film's own.
+the whole frame, so they are not in the look. Grain goes on the finished
+frames instead (*Grain*, above); the halation effect stands in for the film's
+own.
 
-**Out.** ProRes 422 HQ or 10-bit HEVC, chosen beside Export in the toolbar as
-a still's format is, the audio copied as it is, rotation and metadata kept,
+**Out.** ProRes 422 or 10-bit HEVC, chosen beside Export in the toolbar as a
+still's format is, with how hard it compresses beside that, each choice
+showing the data rate it comes to for the clip on screen. ProRes takes no
+rate: Proxy, LT, 422 and HQ each come out near Apple's target, 45, 102, 147
+and 220 Mbit/s at 1080p 29.97 and four times that at 4K. HEVC's four levels
+are HEVC's own limits (ITU-T H.265, Annex A): each level of the standard says
+how large a picture, how many of them a second and how many Mbit/s a player
+that declares it decodes. Standard is the most the level the clip needs
+allows, at High tier: 100 Mbit/s for 4K up to 30 fps (level 5), 160 up to 60
+(5.1) and 240 up to 120 (5.2); 30, 50 and 100 for HD. High and Maximum are
+the next two levels' limits and Smaller half of Standard: 50, 100, 160 and
+240 Mbit/s for 4K at 30 fps, 80, 160, 240 and 480 at 60. Cameras' own HEVC
+sits on the same steps: a Sony FX5's 4K is 30, 50 or 100 Mbit/s at 24 fps
+and 45, 75 or 150 at 60, a Lumix S1II's 150, 200 and 300 at 30, 60 and 120.
+Nothing in HEVC favours a rate between them: 104 Mbit/s kept 1% more grain
+than 100, for 4% more data. Or a rate set in Mbit/s. Each file is labelled
+with the lowest level and tier that hold it, as cameras label theirs;
+VideoToolbox, which encodes it, labels Main tier only and climbs levels with
+the rate, so a 4K 30 fps file at 100 Mbit/s would say level 6.1, an 8K
+level, and above 240 Mbit/s level 7, which few players know. What the levels
+keep of the film's grain, the hardest thing in a clip to compress because it
+is new in every frame, was measured on 4K footage from a Nikon, a Lumix and
+an iPhone: at 4K 30 fps about 50%, 60%, 70% and 75% of the grain survives,
+against the uncompressed frames, and at 60 fps a little less, as a camera's
+would. ProRes 422 HQ keeps 98–99%, so it is the one to grade further from.
+Without grain the picture levels off at 57–58 dB PSNR from 1 or 2 bits a
+pixel, and HEVC writes less than it aims for. The status line says
+the rate the file came out at. The audio is copied as it is, rotation and metadata kept,
 with FLX Film Lab, the film and the paper as its software and description,
 tagged Rec.709. macOS and iOS decode Rec.709 video with a 1.961
 power (measured with VideoToolbox, not assumed), so *Apple displays* writes the
@@ -1498,6 +1587,7 @@ pip install --no-deps -e /path/to/spektrafilm
 python tools/bake/build_profiles.py   # -> profiles/  (datasheet-derived stocks)
 python tools/bake/build_bw_profiles.py  # -> profiles/  (black-and-white stocks)
 python tools/bake/build_print_profiles.py  # -> profiles/  (the motion picture print films)
+python tools/bake/build_paper_profiles.py  # -> profiles/  (Fujifilm's Crystal Archive papers)
 python tools/bake/build_instant_profiles.py  # -> profiles/  (the Polaroid instant prints)
 python tools/bake/bake_packs.py       # -> FLXFilmLab/Resources/packs
 python tools/bake/bake_reference.py   # -> tests/parity

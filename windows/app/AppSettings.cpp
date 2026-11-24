@@ -149,3 +149,39 @@ void setExportSize(const ExportSize &size)
     appSettings().setValue(kExportSizeKey, size.fullSize ? QStringLiteral("full") : QStringLiteral("long"));
     appSettings().setValue(kExportLongEdgeKey, size.longEdge);
 }
+
+namespace {
+constexpr const char *kCommentEditedWithKey = "exportCommentEditedWith";
+constexpr const char *kCommentFilmKey = "exportCommentFilm";
+constexpr const char *kCommentPaperKey = "exportCommentPaper";
+constexpr const char *kCommentFilterKey = "exportCommentFilter";
+constexpr const char *kFolderOrderKey = "folderOrder";
+} // namespace
+
+ExportComment exportComment()
+{
+    ExportComment comment;
+    comment.editedWith = appSettings().value(kCommentEditedWithKey, true).toBool();
+    comment.film = appSettings().value(kCommentFilmKey, true).toBool();
+    comment.paper = appSettings().value(kCommentPaperKey, true).toBool();
+    comment.filter = appSettings().value(kCommentFilterKey, true).toBool();
+    return comment;
+}
+
+void setExportComment(const ExportComment &comment)
+{
+    appSettings().setValue(kCommentEditedWithKey, comment.editedWith);
+    appSettings().setValue(kCommentFilmKey, comment.film);
+    appSettings().setValue(kCommentPaperKey, comment.paper);
+    appSettings().setValue(kCommentFilterKey, comment.filter);
+}
+
+bool foldersByDateShot()
+{
+    return appSettings().value(kFolderOrderKey).toString() == QStringLiteral("dateShot");
+}
+
+void setFoldersByDateShot(bool byDate)
+{
+    appSettings().setValue(kFolderOrderKey, byDate ? QStringLiteral("dateShot") : QStringLiteral("name"));
+}

@@ -50,6 +50,9 @@ ClipInfo MotionEngine::open(const QString &path, int id)
         std::fprintf(stderr, "%s: decoded by %s\n", qPrintable(path), reader->decoder().c_str());
     m_reader = std::move(reader);
     m_clip = id;
+    // another clip draws grains of its own
+    m_clipSeed = FrameGrain::clipSeedFor(p);
+    m_frameRate = info.frameRate;
     m_frame.reset();
     m_shown.reset();
     return info;
@@ -72,6 +75,12 @@ std::optional<MotionEngine::Output> MotionEngine::render(const Request &request)
     }
     out.baked = m_baked->first;
     out.bakedFormat = m_baked->second;
+    // the grain's table with it, for the same recipe, while the look has grain
+    const bool grained = request.mode == FramePipeline::Mode::Graded && request.grain && request.grain->isVisible();
+    if (grained && (!m_grainBasis || *m_grainBasis != request.recipe)) {
+        m_grainTable = m_baker->printGrain(request.recipe);
+        m_grainBasis = request.recipe;
+    }
 
     // the frame showing at the time asked for, decoded only when it is another
     const double half = m_reader->frameDuration() / 2;
@@ -90,14 +99,21 @@ std::optional<MotionEngine::Output> MotionEngine::render(const Request &request)
     shown.time = m_frame->time;
     if (m_shown && m_shown->clip == shown.clip && m_shown->time == shown.time && m_shown->recipe == shown.recipe
         && m_shown->format == shown.format && m_shown->input == shown.input && m_shown->effects == shown.effects
-        && m_shown->mode == shown.mode && m_shown->size == shown.size && m_shown->screen == shown.screen)
+        && m_shown->mode == shown.mode && m_shown->size == shown.size && m_shown->screen == shown.screen
+        && m_shown->grain == shown.grain)
         return out;
     const double prepared = double(clock.nsecsElapsed()) / 1e6;
     clock.restart();
     // sizes are fractions of the long edge, so the preview's smaller frame
     // blooms exactly as the full-size export does
     const EffectsParams fx = effectsFor(request.effects, std::max(request.size.width(), request.size.height()));
-    std::vector<uint8_t> rgba = m_pipeline->renderScreen(*m_frame, out.reading, request.size, request.mode, fx);
+    // each frame its own grains, by its number: the same paused or playing, and in the export
+    std::optional<FrameGrain> grain;
+    if (grained && m_grainTable)
+        grain = FrameGrain{&*m_grainTable, *request.grain, m_clipSeed,
+                           FrameGrain::frameNumber(m_frame->time, m_frameRate)};
+    std::vector<uint8_t> rgba = m_pipeline->renderScreen(*m_frame, out.reading, request.size, request.mode, fx,
+                                                         nullptr, grain ? &*grain : nullptr);
     QImage image(request.size, QImage::Format_RGBA8888);
     for (int y = 0; y < request.size.height(); ++y)
         std::memcpy(image.scanLine(y), rgba.data() + size_t(y) * request.size.width() * 4,
@@ -124,7 +140,8 @@ std::string MotionEngine::cube(const Recipe &recipe, LutInput input, const std::
 }
 
 std::string runClipExport(const QString &packsDir, const QString &source, const QString &destination,
-                          const MotionLook &look, LogFormat format, const std::function<bool(double)> &progress)
+                          const MotionLook &look, LogFormat format, const std::function<bool(double)> &progress,
+                          const ExportComment &comment)
 {
     std::unique_ptr<QRhi> rhi = makeDevice();
     if (!rhi)
@@ -134,10 +151,14 @@ std::string runClipExport(const QString &packsDir, const QString &source, const 
     {
         LookBaker baker(rhi.get(), packs);
         const LookLUT lut = baker.bake(look.recipe, 65, lutInputOf(format), LutOutput::BT1886);
-        ClipExportOptions options;
-        options.codec = look.exportSettings.codec;
-        options.display = look.exportSettings.display;
-        const Provenance made = provenance(look.recipe, packs, FLX_VERSION_TEXT);
+        // the grain the clip is exported with: its look's, made for the recipe it prints with
+        std::optional<PrintGrainTable> grainTable;
+        if (look.grain && look.grain->isVisible())
+            grainTable = baker.printGrain(look.recipe);
+        ClipExportOptions options(look.exportSettings);
+        options.grainTable = grainTable ? &*grainTable : nullptr;
+        options.grain = look.grain;
+        const Provenance made = provenance(look.recipe, packs, FLX_VERSION_TEXT, comment);
         options.software = made.software;
         options.description = made.description;
         encoder = exportClip(rhi.get(), source.toStdString(), destination.toStdString(), lut, look.effects, look.input,

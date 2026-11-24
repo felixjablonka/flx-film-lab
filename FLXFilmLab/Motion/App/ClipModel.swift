@@ -2,6 +2,7 @@ import Foundation
 import AppKit
 import Combine
 import CoreVideo
+import CoreMedia
 
 /// The open clip, its grade, and everything that keeps the preview in step.
 ///
@@ -29,6 +30,8 @@ final class ClipModel: ObservableObject {
     @Published private(set) var isOpening = false
     @Published private(set) var status = "Open a log clip to begin"
     @Published var errorMessage: String?
+    /// The sheet that sets HEVC's own data rate, which the toolbar asks for.
+    @Published var showsDataRateSheet = false
     @Published private(set) var exportProgress: Double?
     /// How the frame on screen is being read, as the inspector reports it.
     @Published private(set) var reading: FramePipeline.Reading?
@@ -64,6 +67,10 @@ final class ClipModel: ObservableObject {
     private var histories: [URL: EditHistory<MotionLook>.Stacks] = [:]
     private var isBaking = false
     private var bakeAgain = false
+    /// The look's grain as its print shows it, and the recipe it was made
+    /// for: baked with the LUT while the look has grain.
+    private var grainTable: PrintGrainTable?
+    private var grainBasis: Recipe?
     private var exporter: ClipExporter?
     private var latestDrawMilliseconds = 0.0
     private var timingUpdateScheduled = false
@@ -103,7 +110,7 @@ final class ClipModel: ObservableObject {
         } catch {
             fatalError("FLX Film Lab needs Metal: \(error.localizedDescription)")
         }
-        playback.onFrame = { [weak self] buffer, info in self?.frameArrived(buffer, info) }
+        playback.onFrame = { [weak self] buffer, info, time in self?.frameArrived(buffer, info, time) }
         browser.ownGrade = { [weak self] url in self?.ownGrade(url) }
         preview.onDraw = { [weak self] ms, error in
             guard let self else { return }
@@ -186,6 +193,7 @@ final class ClipModel: ObservableObject {
         describe: { a, b in
             var names = EditNames.recipe(a.recipe, b.recipe, vocabulary: .photographic)
             if a.effects != b.effects { names.append("Effects") }
+            if a.grain != b.grain { names.append("Grain") }
             if a.input != b.input { names.append("Log Input") }
             return EditNames.title(names)
         })
@@ -205,8 +213,13 @@ final class ClipModel: ObservableObject {
         } else if look.recipe.filmStock != old.recipe.filmStock {
             updateMeteredExposure()
         }
-        if look.recipe != old.recipe || look.input.format != old.input.format { scheduleBake() }
+        if look.recipe != old.recipe || look.input.format != old.input.format {
+            scheduleBake()
+        } else if look.grain != old.grain, look.grain?.isVisible == true, !grainIsCurrent {
+            scheduleBake()
+        }
         if look.effectsAsPrinted != old.effectsAsPrinted || look.input != old.input { pushLookToPreview() }
+        if look.grain != old.grain { pushGrainToPreview() }
         // Re-read the frame on screen at once, so a paused clip's reading and
         // probe follow an override without waiting for the next frame.
         if look.input != old.input {
@@ -226,7 +239,31 @@ final class ClipModel: ObservableObject {
         }
     }
 
-    /// One bake at a time; moves made while one runs fold into a single next one.
+    /// Whether `grainTable` was made for the look as it prints now.
+    private var grainIsCurrent: Bool { grainBasis == effectiveRecipe }
+
+    /// The clip's grain to the preview: the look's table and settings with
+    /// the clip's own seed, or none.
+    private func pushGrainToPreview() {
+        let grain = previewGrain
+        preview.update { $0.grain = grain }
+    }
+
+    private var previewGrain: ClipGrain? {
+        guard let settings = look.grain, settings.isVisible, let table = grainTable, let clip else { return nil }
+        return ClipGrain(table: table, settings: settings, clip: clip.url)
+    }
+
+    /// The grain a clip is exported with: its look's, made for the recipe it
+    /// prints with, or none.
+    private func clipGrain(_ look: MotionLook, clip url: URL) async throws -> ClipGrain? {
+        guard let settings = look.grain, settings.isVisible,
+              let table = try await bakeEngine.printGrain(look.recipe) else { return nil }
+        return ClipGrain(table: table, settings: settings, clip: url)
+    }
+
+    /// One bake at a time; moves made while one runs fold into a single next
+    /// one. The grain's table is made with the LUT, for the same recipe.
     private func scheduleBake() {
         guard !isBaking else {
             bakeAgain = true
@@ -234,10 +271,16 @@ final class ClipModel: ObservableObject {
         }
         isBaking = true
         let recipe = effectiveRecipe, bakeFormat = self.format
+        let grainWanted = look.grain?.isVisible == true
         Task {
             do {
                 let lut = try await bakeEngine.bake(recipe, input: bakeFormat.lutInput)
+                if grainWanted {
+                    grainTable = try await bakeEngine.printGrain(recipe)
+                    grainBasis = recipe
+                }
                 preview.setLUT(lut)
+                pushGrainToPreview()
                 bakedRecipe = recipe
                 bakedFormat = bakeFormat
             } catch {
@@ -358,8 +401,10 @@ final class ClipModel: ObservableObject {
                 reading = nil
                 meteredExposure = nil
                 meter()
-                // Another clip can be in another format with the same look.
+                // Another clip can be in another format with the same look,
+                // and draws grains of its own.
                 pushLookToPreview()
+                pushGrainToPreview()
                 if bakedFormat != format { scheduleBake() }
                 playback.load(info)
                 errorMessage = nil
@@ -604,13 +649,14 @@ final class ClipModel: ObservableObject {
         look.effects = look.effectsAsPrinted
         look.input = settings
         let lut = try await bakeEngine.bake(look.recipe, input: (settings.format ?? .nlog).lutInput)
+        let grain = try await clipGrain(look, clip: url)
         if cancel.isCancelled { throw ClipExporter.ExportError.cancelled }
         let exporter = ClipExporter()
         batchExporter = exporter
         defer { batchExporter = nil }
         try await exporter.export(
-            source: url, to: target, look: look, lut: lut,
-            options: .init(codec: look.export.codec, display: look.export.display, timeRange: nil),
+            source: url, to: target, look: look, lut: lut, grain: grain,
+            options: .init(look.export),
             progress: { p in
                 DispatchQueue.main.async {
                     MainActor.assumeIsolated {
@@ -620,10 +666,11 @@ final class ClipModel: ObservableObject {
             })
     }
 
-    private func frameArrived(_ buffer: CVPixelBuffer, _ info: ClipInfo) {
+    private func frameArrived(_ buffer: CVPixelBuffer, _ info: ClipInfo, _ time: CMTime) {
         // A frame still on its way from the previous clip is not this one's.
         guard info.url == clip?.url else { return }
-        preview.show(buffer, quarterTurns: info.quarterTurns)
+        preview.show(buffer, quarterTurns: info.quarterTurns,
+                     number: FrameGrain.frameNumber(at: time.seconds, frameRate: info.frameRate))
         frame = buffer
         let now = try? FramePipeline.reading(of: buffer, settings: readingSettings)
         if now != reading { reading = now }
@@ -674,9 +721,10 @@ final class ClipModel: ObservableObject {
         Task {
             do {
                 let lut = try await bakeEngine.bake(look.recipe, input: (look.input.format ?? .nlog).lutInput)
+                let grain = try await clipGrain(look, clip: clip.url)
                 try await exporter.export(
-                    source: clip.url, to: url, look: look, lut: lut,
-                    options: .init(codec: look.export.codec, display: look.export.display, timeRange: nil),
+                    source: clip.url, to: url, look: look, lut: lut, grain: grain,
+                    options: .init(look.export),
                     progress: { p in
                         DispatchQueue.main.async {
                             MainActor.assumeIsolated {
@@ -684,7 +732,8 @@ final class ClipModel: ObservableObject {
                             }
                         }
                     })
-                status = "Exported \(url.lastPathComponent)"
+                let rate = await Self.dataRate(of: url).map { ", \(ExportSettings.rate($0))" } ?? ""
+                status = "Exported \(url.lastPathComponent): \(look.export.title)\(rate)"
             } catch ClipExporter.ExportError.cancelled {
                 status = "Export cancelled"
             } catch {
@@ -694,6 +743,22 @@ final class ClipModel: ObservableObject {
             exportProgress = nil
             self.exporter = nil
         }
+    }
+
+    /// HEVC at a data rate of its own, in Mbit/s (the toolbar's Set Data Rate).
+    func setCustomRate(_ megabits: Double) {
+        look.export.codec = .hevc10
+        look.export.hevcLevel = .custom
+        look.export.hevcCustomMegabits = min(max(megabits, ExportSettings.hevcMegabits.lowerBound),
+                                             ExportSettings.hevcMegabits.upperBound)
+    }
+
+    /// A written clip's own data rate, Mbit/s: its size over its length. For
+    /// ProRes, where it came out near Apple's target; for HEVC, its average.
+    nonisolated static func dataRate(of url: URL) async -> Double? {
+        guard let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.doubleValue,
+              let seconds = try? await ClipInfo.load(url).durationSeconds, seconds > 0 else { return nil }
+        return size * 8 / seconds / 1_000_000
     }
 
     /// Stop the export under way: a batch stops with the clip it is on.

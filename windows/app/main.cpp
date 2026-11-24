@@ -149,6 +149,12 @@ int main(int argc, char **argv)
                                    QStringLiteral("name"));
     const QCommandLineOption exportLUT(QStringLiteral("export-lut"), QStringLiteral("Motion: the look as a .cube."),
                                        QStringLiteral("path"));
+    const QCommandLineOption compression(
+        QStringLiteral("compression"),
+        QStringLiteral("Motion: ProRes's Proxy, LT, 422 or HQ; HEVC's Smaller, Standard, High or Maximum, or Mbit/s."),
+        QStringLiteral("name"));
+    const QCommandLineOption grainGauge(QStringLiteral("grain"), QStringLiteral("Motion: grain on a 16, 35 or 70 mm frame."),
+                                        QStringLiteral("mm"));
     const QCommandLineOption loupe(QStringLiteral("loupe"), QStringLiteral("Open the loupe at X,Y, W x H."),
                                    QStringLiteral("x,y,w,h"));
     const QCommandLineOption saveLoupe(QStringLiteral("save-loupe"), QStringLiteral("The loupe's picture to PNG."),
@@ -172,7 +178,7 @@ int main(int argc, char **argv)
                                       QStringLiteral("The panels' text size for this run: Standard, Larger or Largest."),
                                       QStringLiteral("size"));
     parser.addOptions({screenshot, exportTo, longEdge, size, recipe, preview, savePreview, bench, cropping, select,
-                       whiteBalance, at, play, codec, exportLUT, loupe, saveLoupe, saveOriginal, libraryDir, selfTest,
+                       whiteBalance, at, play, codec, compression, grainGauge, exportLUT, loupe, saveLoupe, saveOriginal, libraryDir, selfTest,
                        selfTestClips, displayColour, textSize, iconSheet});
     parser.addHelpOption();
     parser.process(app);
@@ -330,6 +336,30 @@ int main(int argc, char **argv)
                     MotionLook look = motion.look();
                     look.exportSettings.codec =
                         parser.value(codec) == QStringLiteral("hevc") ? ExportCodec::HEVC10 : ExportCodec::ProRes422HQ;
+                    if (parser.isSet(compression)) {
+                        const QString c = parser.value(compression);
+                        for (ProResFlavour f : proResFlavours())
+                            if (c.compare(QString::fromStdString(proResFlavourName(f)), Qt::CaseInsensitive) == 0)
+                                look.exportSettings.proRes = f;
+                        for (HEVCLevel l : hevcLevels())
+                            if (c.compare(QString::fromStdString(hevcLevelName(l)), Qt::CaseInsensitive) == 0)
+                                look.exportSettings.hevcLevel = l;
+                        bool number = false;
+                        const double megabits = c.toDouble(&number);
+                        if (number) {
+                            look.exportSettings.hevcLevel = HEVCLevel::Custom;
+                            look.exportSettings.hevcCustomMegabits = megabits;
+                        }
+                    }
+                    if (parser.isSet(grainGauge)) {
+                        MotionGrain grain;
+                        grain.enabled = true;
+                        const QString mm = parser.value(grainGauge);
+                        grain.gauge = mm == QStringLiteral("16") ? FilmGauge::Sixteen
+                                      : mm == QStringLiteral("70") ? FilmGauge::Seventy
+                                                                   : FilmGauge::ThirtyFive;
+                        look.grain = grain;
+                    }
                     motion.setLook(look);
                     clock->start();
                     motion.exportTo(QFileInfo(parser.value(exportTo)).absoluteFilePath());

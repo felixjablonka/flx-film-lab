@@ -421,6 +421,32 @@ func run() async throws {
     let hevcFormat = formatInfo(hevc)
     check(hevcFormat.codec == kCMVideoCodecType_HEVC && hevcFormat.bits == 10 && hevcFormat.tags == rec709Tags,
           "HEVC Main10, tagged Rec.709 (\(hevcFormat.bits ?? 0)-bit)")
+    let standardLabel = try HEVCLevels.label(of: hevc)
+    check(standardLabel?.description == "Main tier, level 3.1",
+          "labelled as its 720p at 24 fps and Standard's 10 Mbit/s need: \(standardLabel.map { "\($0)" } ?? "none")")
+    // VideoToolbox would say Main tier, level 5 for 25 Mbit/s; the export says
+    // High tier, level 4, and nothing else in the file differs.
+    let relabelled = dir.appendingPathComponent("hevc-25.mov")
+    var customOptions = ClipExporter.Options(codec: .hevc10, display: .bt1886,
+                                             timeRange: CMTimeRange(start: .zero, duration: CMTime(value: 4, timescale: fps)))
+    customOptions.hevcLevel = .custom
+    customOptions.hevcCustomMegabits = 25
+    try await ClipExporter().export(source: clipURL, to: relabelled, look: look, lut: lut, options: customOptions,
+                                    progress: { _ in })
+    let customLabel = try HEVCLevels.label(of: relabelled)
+    check(customLabel?.description == "High tier, level 4",
+          "25 Mbit/s is labelled \(customLabel.map { "\($0)" } ?? "none"), not the Main tier level 5 VideoToolbox writes")
+    let asWritten = dir.appendingPathComponent("hevc-25-main.mov")
+    try? FileManager.default.removeItem(at: asWritten)
+    try FileManager.default.copyItem(at: relabelled, to: asWritten)
+    let restored = try HEVCLevels.relabel(asWritten, as: HEVCLevels.Label(high: false, idc: 150))
+    let (one, two) = (try Data(contentsOf: relabelled), try Data(contentsOf: asWritten))
+    let changed = one.count == two.count ? zip(one, two).filter { $0 != $1 }.count : -1
+    let ours = try frames(relabelled, encodedRGB, limit: 2)
+    let theirs = try frames(asWritten, encodedRGB, limit: 2)
+    check(restored && changed == 6 && ours.count == 2 && theirs.count == 2
+          && floats(ours[0]) == floats(theirs[0]) && floats(ours[1]) == floats(theirs[1]),
+          "the label is 6 bytes, in the hvcC and its VPS and SPS (\(changed) differ), and the pictures decode the same")
     let hevcFrames = try frames(hevc, encodedRGB, limit: 1)
     let h0 = floats(hevcFrames[0])
     var hevcErrors: [Double] = []
@@ -432,6 +458,66 @@ func run() async throws {
     let hevcStats = Errors(values: hevcErrors)
     print("      written values decoded with a 2.4 power, against the preview: \(hevcStats.summary)")
     check(hevcStats.largest < 1.0, "a BT.1886 display shows what the preview shows")
+
+    print("export compression")
+    let fresh = ExportSettings()
+    check(fresh.flavour == .hq && fresh.level == .standard, "ProRes HQ and HEVC Standard until chosen")
+    let saved = try JSONDecoder().decode(ExportSettings.self, from: try JSONEncoder().encode(fresh))
+    check(saved == fresh && saved.proRes == nil, "settings saved before there was a choice open as ProRes HQ")
+    let proResRates = ProResFlavour.allCases.map { $0.megabits(width: 3840, height: 2160, frameRate: 29.97) }
+    check(abs(proResRates[3] - 880) < 5 && proResRates == proResRates.sorted(),
+          String(format: "ProRes at 4K 29.97 fps: Proxy %.0f, LT %.0f, 422 %.0f, HQ %.0f Mbit/s, Apple's targets",
+                 proResRates[0], proResRates[1], proResRates[2], proResRates[3]))
+    var hevcExport = ExportSettings()
+    hevcExport.codec = .hevc10
+    // Standard: the most the HEVC level the clip needs allows, High tier;
+    // High and Maximum the next two levels'; Smaller half of Standard.
+    let ladders: [(Int, Int, Double, [Double], String)] = [
+        (3840, 2160, 25, [50, 100, 160, 240], "4K 25 fps, level 5"),
+        (4096, 2160, 30, [50, 100, 160, 240], "DCI 4K 30 fps, level 5"),
+        (3840, 2160, 59.94, [80, 160, 240, 480], "4K 59.94 fps, level 5.1"),
+        (3840, 2160, 120, [120, 240, 480, 800], "4K 120 fps, level 5.2"),
+        (1920, 1080, 29.97, [15, 30, 50, 100], "HD 29.97 fps, level 4"),
+        (1080, 1920, 60, [25, 50, 100, 160], "upright HD 60 fps, level 4.1"),
+        (7680, 4320, 30, [120, 240, 480, 800], "8K 30 fps, level 6"),
+        (7680, 4320, 60, [240, 480, 800, 800], "8K 60 fps, level 6.1, and no more than 800"),
+    ]
+    for (w, h, fps, expected, name) in ladders {
+        let got = [HEVCLevel.smaller, .standard, .high, .maximum].map {
+            hevcExport.megabits($0, width: w, height: h, frameRate: fps)
+        }
+        check(got == expected, "HEVC's levels at \(name): \(got.map { Int($0) }) Mbit/s")
+    }
+    let labels: [(Int, Int, Double, Double, String)] = [
+        (3840, 2160, 29.97, 100, "High tier, level 5"),
+        (3840, 2160, 29.97, 104, "High tier, level 5.1"),
+        (3840, 2160, 29.97, 20, "Main tier, level 5"),
+        (3840, 2160, 59.94, 160, "High tier, level 5.1"),
+        (3840, 2160, 29.97, 300, "High tier, level 6.1"),
+        (1920, 1080, 25, 30, "High tier, level 4"),
+    ]
+    for (w, h, fps, rate, expected) in labels {
+        let label = HEVCLevels.label(width: w, height: h, frameRate: fps, megabits: rate)
+        check(label.description == expected, "\(w)x\(h) at \(fps) fps and \(Int(rate)) Mbit/s is labelled \(label)")
+    }
+    hevcExport.hevcLevel = .custom
+    hevcExport.hevcCustomMegabits = 120
+    check(hevcExport.megabits(width: 1920, height: 1080, frameRate: 24) == 120 && hevcExport.compressionTitle == "120 Mbit/s"
+          && hevcExport.title == "HEVC 10-bit, 120 Mbit/s", "a rate of its own, whatever the clip: \(hevcExport.title)")
+    var writes: [String] = []
+    for flavour in ProResFlavour.allCases {
+        var options = ClipExporter.Options(codec: .proRes422HQ, display: .appleDisplay, timeRange: nil)
+        options.proRes = flavour
+        let settings = ClipExporter.videoSettings(options, width: 1920, height: 1080, frameRate: 25)
+        writes.append((settings[AVVideoCodecKey] as? AVVideoCodecType)?.rawValue ?? "?")
+    }
+    check(writes == ["apco", "apcs", "apcn", "apch"], "each flavour writes its own ProRes: \(writes)")
+    var hevcOptions = ClipExporter.Options(codec: .hevc10, display: .appleDisplay, timeRange: nil)
+    hevcOptions.hevcLevel = .standard
+    let hevcSettings = ClipExporter.videoSettings(hevcOptions, width: 3840, height: 2160, frameRate: 25)
+    let written = (hevcSettings[AVVideoCompressionPropertiesKey] as? [String: Any])?[AVVideoAverageBitRateKey] as? Double
+    check(written.map { abs($0 - 100e6) < 1 } ?? false,
+          "HEVC is asked for its level's rate: \((written ?? 0) / 1e6) Mbit/s at Standard")
 
     print("partial export")
     let part = dir.appendingPathComponent("part.mov")
@@ -627,11 +713,206 @@ func run() async throws {
     check(rotatedInfo.quarterTurns == 1 && rotatedOutInfo.quarterTurns == 1 && !rotatedOutInfo.hasAudio,
           "a portrait clip stays portrait (\(rotatedOutInfo.displaySize.width)x\(rotatedOutInfo.displaySize.height))")
 
-    print("speed, 3840x2160")
+    print("grain")
+    pipeline.setLUT(lut)
+    let clean = try pipeline.renderLinear(frame0, width: width, height: height, effects: noEffects,
+                                          settings: InputSettings(), mode: .graded)
+    var grainOn = MotionGrain()
+    grainOn.enabled = true
+    let greyCore = layout.core(TestClip.grey)
+    /// Luminance, pixel by pixel, over `r` of a `w`-wide frame.
+    func lumas(_ px: [Float], width w: Int, _ r: (x0: Int, y0: Int, x1: Int, y1: Int)) -> [Double] {
+        var out: [Double] = []
+        for y in r.y0..<r.y1 {
+            for x in r.x0..<r.x1 {
+                let o = (y * w + x) * 4
+                out.append(0.2126 * Double(px[o]) + 0.7152 * Double(px[o + 1]) + 0.0722 * Double(px[o + 2]))
+            }
+        }
+        return out
+    }
+    func rms(_ v: [Double]) -> Double {
+        let m = v.reduce(0, +) / Double(v.count)
+        var s = 0.0
+        for x in v { s += (x - m) * (x - m) }
+        return (s / Double(v.count)).squareRoot()
+    }
+    func correlation(_ a: [Double], _ b: [Double]) -> Double {
+        let ma = a.reduce(0, +) / Double(a.count), mb = b.reduce(0, +) / Double(b.count)
+        var ab = 0.0, aa = 0.0, bb = 0.0
+        for i in 0..<a.count {
+            ab += (a[i] - ma) * (b[i] - mb)
+            aa += (a[i] - ma) * (a[i] - ma)
+            bb += (b[i] - mb) * (b[i] - mb)
+        }
+        return ab / (aa * bb).squareRoot()
+    }
+    if let table = try baker.printGrain(recipe: look.recipe) {
+        // The table: the green channel's grain as the print shows it, each
+        // record's coefficient through the print's answer to it: none on white
+        // paper, most in the middle of the print's scale; and the green
+        // channel answers the magenta layer most.
+        var peak = 0.0, peakDensity = 0.0, atWhite = 0.0, ownMost = true
+        for j in 0..<table.samples {
+            var s = 0.0
+            var answers: [Double] = []
+            for r in 0..<3 {
+                let answer = Double(table.response[(1 * table.samples + j) * 3 + r])
+                answers.append(abs(answer))
+                for layer in 0..<3 { s += answer * answer * Double(table.selwynUm2[(r * table.samples + j) * 3 + layer]) }
+            }
+            if j == 0 { atWhite = s }
+            if s > peak {
+                peak = s
+                peakDensity = Double(j) / Double(table.samples - 1) * Double(table.tableDensityMax[1])
+            }
+            if j > table.samples / 8, j < table.samples * 3 / 4, answers[1] < max(answers[0], answers[2]) { ownMost = false }
+        }
+        check(peak > 0 && atWhite < 0.05 * peak && peakDensity > 0.1 && peakDensity < 2.5 && ownMost,
+              String(format: "the print's grain from the film's data: none on white paper, most at print density %.2f, each channel answering its own layer most",
+                     peakDensity))
+        pipeline.setLUT(lut)
+        func grained(_ settings: MotionGrain, frame: Int = 0, width w: Int = width, height h: Int = height,
+                     table t: PrintGrainTable = table) throws -> [Float] {
+            try pipeline.renderLinear(frame0, width: w, height: h, effects: noEffects,
+                                      grain: FrameGrain(table: t, settings: settings, clipSeed: 7, frame: frame),
+                                      settings: InputSettings(), mode: .graded)
+        }
+        let g0 = try grained(grainOn)
+        let cleanGrey = lumas(clean, width: width, greyCore)
+        let grain0 = zip(lumas(g0, width: width, greyCore), cleanGrey).map { $0 - $1 }
+        let level = cleanGrey.reduce(0, +) / Double(cleanGrey.count)
+        let strength = rms(grain0) / level
+        check(strength > 0.005, String(format: "35 mm grain shows on the grey card: %.1f%% RMS of its light", strength * 100))
+        // The card's core is some 3,600 pixels: one frame's grain moves its
+        // mean by 0.12% by chance, sixteen frames' by 0.03%.
+        var shift = 0.0
+        for frame in 0..<16 {
+            let grainy = lumas(try grained(grainOn, frame: frame), width: width, greyCore)
+            shift += (grainy.reduce(0, +) / Double(grainy.count) - level) / level / 16
+        }
+        check(abs(shift) < 0.0015, String(format: "and leaves its light where it was (%+.3f%% over 16 frames)", shift * 100))
+        let again = try grained(grainOn)
+        check(again == g0, "a frame's grain is the same every time it is drawn")
+        let grain1 = zip(lumas(try grained(grainOn, frame: 1), width: width, greyCore), cleanGrey).map { $0 - $1 }
+        let r01 = correlation(grain0, grain1)
+        check(abs(r01) < 0.05, String(format: "and the next frame's is its own (correlation %.3f)", r01))
+        var noAmount = grainOn
+        noAmount.amount = 0
+        let off = try grained(MotionGrain()), none = try grained(noAmount)
+        check(off == clean && none == clean, "grain off, or at amount 0, leaves the frame as it was")
+
+        // A smaller frame is enlarged more: grain grows as the pixel's size on the film shrinks.
+        func gaugeStrength(_ gauge: FilmGauge, amount: Double = 1) throws -> Double {
+            var g = grainOn
+            g.gauge = gauge
+            g.amount = amount
+            return rms(zip(lumas(try grained(g), width: width, greyCore), cleanGrey).map { $0 - $1 }) / level
+        }
+        let s16 = try gaugeStrength(.sixteen), s35 = try gaugeStrength(.thirtyFive), s70 = try gaugeStrength(.seventy)
+        func pitch(_ gauge: FilmGauge) -> Double {
+            Double(Renderer.pixelSizeUm(width: width, height: height, frame: gauge.frameMM))
+        }
+        // Selwyn's law, grain falling as the square root of the area it is
+        // seen over, holds for pixels much larger than the dye clouds. A 720p
+        // frame's pixels on 16 mm are 10 um, the clouds 4-6, so the grain is
+        // partly resolved there and grows more slowly than the pixel shrinks:
+        // more grain each step to a smaller frame, never more than Selwyn.
+        let selwyn16 = pitch(.thirtyFive) / pitch(.sixteen), selwyn70 = pitch(.seventy) / pitch(.thirtyFive)
+        let step16 = s16 / s35, step70 = s35 / s70
+        check(step16 > 1.15 && step70 > 1.15 && step16 < selwyn16 * 1.05 && step70 < selwyn70 * 1.05,
+              String(format: "16 mm %.1f%%, 35 mm %.1f%%, 70 mm %.1f%%: coarser on the smaller frame (x%.2f, x%.2f; Selwyn's at most x%.2f, x%.2f)",
+                     s16 * 100, s35 * 100, s70 * 100, step16, step70, selwyn16, selwyn70))
+        let s35Double = try gaugeStrength(.thirtyFive, amount: 2)
+        check(abs(s35Double / s35 - 2) < 0.2, String(format: "Amount scales it (x%.2f at 2)", s35Double / s35))
+
+        // The preview at half size shows the grain the export shows, at the same size on screen.
+        let half = try grained(grainOn, width: width / 2, height: height / 2)
+        let halfClean = try pipeline.renderLinear(frame0, width: width / 2, height: height / 2, effects: noEffects,
+                                                  settings: InputSettings(), mode: .graded)
+        let halfCore = layout.core(TestClip.grey, scale: 0.5)
+        let halfGrain = zip(lumas(half, width: width / 2, halfCore), lumas(halfClean, width: width / 2, halfCore))
+            .map { $0 - $1 }
+        var pooled: [Double] = []
+        for y in stride(from: greyCore.y0, to: greyCore.y1 - 1, by: 2) {
+            for x in stride(from: greyCore.x0, to: greyCore.x1 - 1, by: 2) {
+                var sum = 0.0
+                for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                    let o = ((y + dy) * width + x + dx) * 4, c = o
+                    sum += 0.2126 * Double(g0[o] - clean[c]) + 0.7152 * Double(g0[o + 1] - clean[c + 1])
+                        + 0.0722 * Double(g0[o + 2] - clean[c + 2])
+                }
+                pooled.append(sum / 4)
+            }
+        }
+        let ratio = rms(halfGrain) / rms(pooled)
+        check(abs(ratio - 1) < 0.15, String(format: "the half-size preview's grain is the full size's, seen as large (x%.2f)", ratio))
+
+        // Black and white: one record, so the grain is neutral.
+        if let silverTable = try baker.printGrain(recipe: bw.recipe) {
+            pipeline.setLUT(try baker.bake(recipe: bw.recipe))
+            let silverClean = try pipeline.renderLinear(frame0, width: width, height: height, effects: noEffects,
+                                                        settings: InputSettings(), mode: .graded)
+            let silverGrain = try grained(grainOn, table: silverTable)
+            var redGreen = 0.0, green = 0.0
+            for y in greyCore.y0..<greyCore.y1 {
+                for x in greyCore.x0..<greyCore.x1 {
+                    let o = (y * width + x) * 4
+                    let r = Double(silverGrain[o] - silverClean[o]), g = Double(silverGrain[o + 1] - silverClean[o + 1])
+                    redGreen += (r - g) * (r - g)
+                    green += g * g
+                }
+            }
+            check(silverTable.monochrome && green > 0 && redGreen < 0.01 * green,
+                  String(format: "Tri-X's grain is neutral (R - G %.4f of G's variance)", redGreen / max(green, 1e-12)))
+            pipeline.setLUT(lut)
+        } else {
+            check(false, "Tri-X has grain data")
+        }
+    } else {
+        check(false, "the film's grain data reaches the print (\(look.recipe.filmStock))")
+    }
+
+    print("grain at 4K, as Export draws it")
     let uhd = TestClip.makeFrame(width: 3840, height: 2160)
     var out: CVPixelBuffer?
     CVPixelBufferCreate(nil, 3840, 2160, kCVPixelFormatType_64RGBAHalf,
                         [kCVPixelBufferMetalCompatibilityKey: true, kCVPixelBufferIOSurfacePropertiesKey: [String: Any]()] as CFDictionary, &out)
+    // A fresh pipeline's first frame, as every export's is: a Core Image
+    // render followed by the grain's Metal passes in one command buffer ran
+    // out of order at this size, and the frame came out black. A frame drawn
+    // again over its own last render hides that, so each case has a pipeline
+    // of its own and draws once.
+    if let table = try baker.printGrain(recipe: look.recipe) {
+        var settings = MotionGrain()
+        settings.enabled = true
+        var effectsOn = noEffects
+        effectsOn.glow.enabled = true
+        effectsOn.halation.enabled = true
+        /// The green channel of every 7th pixel of a fresh pipeline's first export.
+        func firstFrame(_ effects: GlowLook, grain: Bool) throws -> [Double] {
+            let fresh = try FramePipeline()
+            fresh.setLUT(lut)
+            try fresh.renderExport(uhd, into: out!, effects: effects,
+                                   grain: grain ? FrameGrain(table: table, settings: settings, clipSeed: 7, frame: 0) : nil,
+                                   settings: InputSettings(), display: .appleDisplay)
+            let px = floats(out!)
+            return stride(from: 1, to: px.count, by: 4 * 7).map { Double(px[$0]) }
+        }
+        for (name, effects) in [("no effects", noEffects), ("glow and halation", effectsOn)] {
+            let without = try firstFrame(effects, grain: false), with = try firstFrame(effects, grain: true)
+            let level = without.reduce(0, +) / Double(without.count)
+            let shift = with.reduce(0, +) / Double(with.count) / level - 1
+            var spread = 0.0
+            for i in 0..<with.count { spread += (with[i] - without[i]) * (with[i] - without[i]) }
+            spread = (spread / Double(with.count)).squareRoot() / level
+            check(level > 0.05 && abs(shift) < 0.01 && spread > 0.01,
+                  String(format: "a fresh export's first 4K frame has its grain, %@: %.1f%% of the light, the light kept (%+.2f%%)",
+                         name, spread * 100, shift * 100))
+        }
+    }
+
+    print("speed, 3840x2160")
     let plain = try timeIt(10) {
         try pipeline.renderExport(uhd, into: out!, effects: noEffects, settings: InputSettings(), display: .appleDisplay)
     }
@@ -655,10 +936,40 @@ func run() async throws {
     }
     print(String(format: "      export frame %.1f ms plain, %.1f ms with diffusion, glow and halation; preview frame %.1f ms with all three",
                  plain, busy, preview))
+    var grainy = GlowLook()
+    grainy.bloom.enabled = false
+    var withGrain: (export: Double, preview: Double)?
+    if let table = try baker.printGrain(recipe: look.recipe) {
+        var settings = MotionGrain()
+        settings.enabled = true
+        var frame = 0
+        let grainExport = try timeIt(10) {
+            frame += 1
+            try pipeline.renderExport(uhd, into: out!, effects: noEffects,
+                                      grain: FrameGrain(table: table, settings: settings, clipSeed: 7, frame: frame),
+                                      settings: InputSettings(), display: .appleDisplay)
+        }
+        let grainPreview = try timeIt(20) {
+            frame += 1
+            let cb = pipeline.queue.makeCommandBuffer()!
+            try pipeline.renderPreview(uhd, into: drawable, quarterTurns: 0, padding: 20,
+                                       background: CIColor(red: 0.01, green: 0.01, blue: 0.01), effects: grainy,
+                                       grain: FrameGrain(table: table, settings: settings, clipSeed: 7, frame: frame),
+                                       settings: InputSettings(), mode: .graded, commandBuffer: cb)
+            cb.commit()
+            cb.waitUntilCompleted()
+        }
+        withGrain = (grainExport, grainPreview)
+        print(String(format: "      with grain: export frame %.1f ms, preview frame %.1f ms", grainExport, grainPreview))
+    }
     // A shared CI machine's virtual GPU is no measure of the app's speed: there
     // the timings are reported, not judged.
     if ProcessInfo.processInfo.environment["CI"] == nil {
         check(busy < 60 && preview < 30, "fast enough to play 4K at 30 fps and export faster than real time")
+        if let withGrain {
+            check(withGrain.export < 80 && withGrain.preview < 33,
+                  "with grain, still fast enough to play at 30 fps, and to export 4K at 12 or more frames a second")
+        }
     } else {
         print("   note speed not judged on CI")
     }

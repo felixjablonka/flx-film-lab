@@ -170,6 +170,11 @@ public:
     QString suggestedExportName();
     void exportTo(const QString &path);
     void cancelExport();
+    // HEVC at a data rate of its own, in Mbit/s (the toolbar's Set Data Rate).
+    void setCustomRate(double megabits);
+    // A written clip's own data rate, Mbit/s: its size over its length. For
+    // ProRes, where it came out near Apple's target; for HEVC, its average.
+    static std::optional<double> dataRate(const QString &path);
     // The print as a .cube for DaVinci Resolve and other editors, Rec.709
     // BT.1886 out, taking the clip's log the way Resolve reads it. Per-pixel
     // only: no effects.

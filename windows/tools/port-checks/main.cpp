@@ -4,7 +4,8 @@
 // of Settings' rules (Recipe.pickingFilm), for Stills and Motion alike, and
 // the recipe a picture starts afresh with (NewPictures); the film menu's groups
 // and order, and the films Settings leaves in it; the colour films' camera
-// filters; instant prints' processing and frame; oval gradients; the undo
+// filters; instant prints' processing and frame; what an export's comment
+// says, as Settings asks (Provenance); oval gradients; the undo
 // steps' names; the library and its sidecars, read and written as the Mac app
 // reads and writes them (fixtures/, sidecars the Mac app wrote); a print shrunk
 // to Export's long edge, to the Mac checks' own numbers; and the decoder's
@@ -20,6 +21,8 @@
 #include "AppSettings.h"
 #include "ImageLibrary.h"
 #include "Filters.h"
+#include "HEVCLevels.h"
+#include "Motion.h"
 #include "Packs.h"
 #include "Provenance.h"
 #include "RawDetail.h"
@@ -187,7 +190,7 @@ void colourFilterChecks(PackLibrary &packs)
 
 // Polaroid's peel-apart prints (tests/checks' instant prints): the three
 // temperatures their sheets plot, nothing between; their own 4x5 frame; never
-// printed on paper; the metadata names how warm they developed.
+// printed on paper, and so named in an export's comment without one.
 void instantChecks(PackLibrary &packs)
 {
     std::printf("instant prints\n");
@@ -231,16 +234,68 @@ void instantChecks(PackLibrary &packs)
     stillsLook.scanFilm = false;
     stillsLook.processingTemperature = 35.0;
     check(provenance(stillsLook, packs, "1.5.0").description
-              == "Film: Polaroid Polacolor 559; instant print, processed at 95 F",
-          "the metadata names how warm it developed: " + provenance(stillsLook, packs, "1.5.0").description);
-    stillsLook.processingTemperature.reset();
-    check(provenance(stillsLook, packs, "1.5.0").description
-              == "Film: Polaroid Polacolor 559; instant print, processed at 70 F",
-          "and its sheet's normal temperature when none is chosen");
+              == "Edited with FLX Film Lab. Film profile: Polaroid Polacolor 559",
+          "an instant print, the print itself, names no paper: " + provenance(stillsLook, packs, "1.5.0").description);
     Recipe read = recipeFromJson(recipeToJson(r));
     check(read.processingTemperature && std::abs(*read.processingTemperature - 12.78) < 1e-9
               && !recipeToJson(Recipe()).contains("processingTemperature"),
           "the temperature is saved where it is set, and left out where not");
+}
+
+// What an exported picture's comment and a clip's description say (tests/app's
+// export checks): "Edited with FLX Film Lab." and the film profile, its
+// camera filter and the paper; a slide seen as one and an instant print name
+// no paper, a motion picture film its print film; Settings' switches each
+// alone, and with none on, nothing.
+void commentChecks(PackLibrary &packs)
+{
+    std::printf("the comment in exported files\n");
+    const auto said = [&](const Recipe &r, const ExportComment &c = {}) { return provenance(r, packs, "", c).description; };
+    Recipe portra;
+    portra.filmStock = "kodak_portra_400";
+    portra.printStock = "kodak_portra_endura";
+    check(said(portra) == "Edited with FLX Film Lab. Film profile: Kodak Portra 400; paper: " + packs.pack("kodak_portra_endura").name
+              && provenance(portra, packs, "").software == "FLX Film Lab"
+              && provenance(portra, packs, "2.1.0").software == "FLX Film Lab 2.1.0",
+          "the film and its paper, FLX Film Lab and its version as the software: " + said(portra));
+    Recipe slide;
+    slide.filmStock = "fujifilm_provia_100f";
+    slide.printStock = "kodak_portra_endura";
+    check(said(slide) == "Edited with FLX Film Lab. Film profile: Fujifilm Provia 100F",
+          "a slide viewed as one names no paper: " + said(slide));
+    slide.lensFilter = "81c";
+    const LensFilterRef *warming = packs.pack("fujifilm_provia_100f").lensFilter("81c");
+    check(warming && said(slide) == "Edited with FLX Film Lab. Film profile: Fujifilm Provia 100F; camera filter: "
+                                        + warming->designation(),
+          "and goes from the film straight to its camera filter: " + said(slide));
+    slide.scanFilm = false;
+    check(said(slide).ends_with("; paper: " + packs.pack("kodak_portra_endura").name),
+          "printed on paper, a slide names it: " + said(slide));
+    Recipe cine;
+    cine.filmStock = "kodak_vision3_250d";
+    cine.printStock = "kodak_2383";
+    check(said(cine) == "Edited with FLX Film Lab. Film profile: " + packs.pack("kodak_vision3_250d").name
+                            + "; print film: " + packs.pack("kodak_2383").name,
+          "a motion picture film names its print film: " + said(cine));
+    Recipe red;
+    red.filmStock = "kodak_tri_x_400";
+    red.printStock = "ilford_multigrade_rc_deluxe";
+    red.lensFilter = "red";
+    const LensFilterRef *filter = packs.pack("kodak_tri_x_400").lensFilter("red");
+    const std::string paper = packs.pack("ilford_multigrade_rc_deluxe").name;
+    check(filter && said(red) == "Edited with FLX Film Lab. Film profile: Kodak Tri-X 400; camera filter: "
+                                     + filter->designation() + "; paper: " + paper,
+          "the film, its filter and the paper: " + said(red));
+    check(said(red, {true, true, false, false}) == "Edited with FLX Film Lab. Film profile: Kodak Tri-X 400"
+              && said(red, {true, false, true, false}) == "Edited with FLX Film Lab. Paper: " + paper
+              && filter && said(red, {true, false, false, true}) == "Edited with FLX Film Lab. Camera filter: " + filter->designation()
+              && said(red, ExportComment::none()).empty() && provenance(red, packs, "", ExportComment::none()).software == "FLX Film Lab",
+          "each switch alone, and nothing with none on (FLX Film Lab still the software)");
+    check(filter && said(red, {false, true, true, true}) == "Film profile: Kodak Tri-X 400; camera filter: " + filter->designation()
+                                                               + "; paper: " + paper
+              && said(red, {false, false, true, false}) == "Paper: " + paper
+              && said(red, {true, false, false, false}) == "Edited with FLX Film Lab.",
+          "without the credit it starts at the film, and the credit alone stands alone: " + said(red, {false, true, true, true}));
 }
 
 // Ovals in Graduated Exposure (tests/checks' ovals, tests/app's): the Mac's
@@ -319,6 +374,124 @@ void nameChecks()
     e.processingTemperature = 35.0;
     check(joined(recipeChangeNames(d, e, Vocabulary::Photographic, false)) == "Processing Temperature",
           "the processing temperature");
+}
+
+// A clip export's compression, as tests/motion checks the Mac's: ProRes's
+// flavours at Apple's targets, HEVC's levels from HEVC's own limits, the label
+// a file gets, the titles, and looks saved before and by the Mac reading as
+// they should. And the grain's settings, kept in the look.
+void compressionChecks()
+{
+    std::printf("export compression\n");
+    const ExportSettings fresh;
+    check(fresh.flavour() == ProResFlavour::HQ && fresh.level() == HEVCLevel::Standard,
+          "ProRes HQ and HEVC Standard until chosen");
+    MotionLook old = MotionLook::initial();
+    const QJsonObject oldJson = motionLookToJson(old);
+    check(!oldJson.value("export").toObject().contains("proRes") && !oldJson.value("export").toObject().contains("hevcLevel")
+              && !oldJson.contains("grain"),
+          "nothing chosen, nothing written: a look reads as it did");
+    std::vector<double> prores;
+    for (ProResFlavour f : proResFlavours())
+        prores.push_back(proResMegabits(f, 3840, 2160, 29.97));
+    check(std::abs(prores[3] - 880) < 5 && std::is_sorted(prores.begin(), prores.end()),
+          "ProRes at 4K 29.97 fps: Proxy " + std::to_string(int(prores[0])) + ", LT " + std::to_string(int(prores[1]))
+              + ", 422 " + std::to_string(int(prores[2])) + ", HQ " + std::to_string(int(prores[3]))
+              + " Mbit/s, Apple's targets");
+    ExportSettings hevc;
+    hevc.codec = ExportCodec::HEVC10;
+    struct Ladder {
+        int w, h;
+        double fps;
+        std::vector<double> rates;
+        const char *name;
+    };
+    const Ladder ladders[] = {
+        {3840, 2160, 25, {50, 100, 160, 240}, "4K 25 fps, level 5"},
+        {4096, 2160, 30, {50, 100, 160, 240}, "DCI 4K 30 fps, level 5"},
+        {3840, 2160, 59.94, {80, 160, 240, 480}, "4K 59.94 fps, level 5.1"},
+        {3840, 2160, 120, {120, 240, 480, 800}, "4K 120 fps, level 5.2"},
+        {1920, 1080, 29.97, {15, 30, 50, 100}, "HD 29.97 fps, level 4"},
+        {1080, 1920, 60, {25, 50, 100, 160}, "upright HD 60 fps, level 4.1"},
+        {7680, 4320, 30, {120, 240, 480, 800}, "8K 30 fps, level 6"},
+        {7680, 4320, 60, {240, 480, 800, 800}, "8K 60 fps, level 6.1, and no more than 800"},
+    };
+    for (const Ladder &l : ladders) {
+        std::vector<double> got;
+        std::string shown;
+        for (HEVCLevel level : {HEVCLevel::Smaller, HEVCLevel::Standard, HEVCLevel::High, HEVCLevel::Maximum}) {
+            got.push_back(hevc.megabits(level, l.w, l.h, l.fps));
+            shown += (shown.empty() ? "" : ", ") + std::to_string(int(got.back()));
+        }
+        check(got == l.rates, std::string("HEVC's levels at ") + l.name + ": " + shown + " Mbit/s");
+    }
+    struct Labelled {
+        int w, h;
+        double fps, megabits;
+        const char *label;
+    };
+    const Labelled labels[] = {
+        {3840, 2160, 29.97, 100, "High tier, level 5"}, {3840, 2160, 29.97, 104, "High tier, level 5.1"},
+        {3840, 2160, 29.97, 20, "Main tier, level 5"},  {3840, 2160, 59.94, 160, "High tier, level 5.1"},
+        {3840, 2160, 29.97, 300, "High tier, level 6.1"}, {1920, 1080, 25, 30, "High tier, level 4"},
+    };
+    for (const Labelled &l : labels) {
+        const std::string got = hevclevels::label(l.w, l.h, l.fps, l.megabits).description();
+        check(got == l.label, std::to_string(l.w) + "x" + std::to_string(l.h) + " at " + std::to_string(l.fps).substr(0, 5)
+                                  + " fps and " + std::to_string(int(l.megabits)) + " Mbit/s is labelled " + got);
+    }
+    ExportSettings custom = hevc;
+    custom.hevcLevel = HEVCLevel::Custom;
+    custom.hevcCustomMegabits = 120;
+    check(custom.megabits(1920, 1080, 24) == 120 && custom.compressionTitle() == "120 Mbit/s"
+              && custom.title() == "HEVC 10-bit, 120 Mbit/s",
+          "a rate of its own, whatever the clip: " + custom.title());
+    custom.hevcCustomMegabits = 5000;
+    check(custom.megabits(1920, 1080, 24) == 800, "and no more than 800 Mbit/s");
+    ExportSettings lt;
+    lt.proRes = ProResFlavour::LT;
+    check(lt.title() == "ProRes 422 LT" && lt.compressionTitle() == "LT" && ExportSettings::rate(8.54) == "8.5 Mbit/s"
+              && ExportSettings::rate(207.4) == "207 Mbit/s",
+          "the titles: " + lt.title() + ", " + ExportSettings::rate(8.54) + ", " + ExportSettings::rate(207.4));
+
+    // a look as the Mac writes it, with the new settings and grain
+    const QByteArray mac = R"({"recipe":{},"effects":{},"input":{"levels":"From the file","matrix":"From the file"},
+        "export":{"codec":"HEVC 10-bit","display":"Apple displays","proRes":"LT","hevcLevel":"Custom","hevcCustomMegabits":120},
+        "grain":{"enabled":true,"gauge":"16 mm","amount":1.5,"size":2},"version":2})";
+    const MotionLook read = motionLookFromJson(QJsonDocument::fromJson(mac).object());
+    check(read.exportSettings.codec == ExportCodec::HEVC10 && read.exportSettings.flavour() == ProResFlavour::LT
+              && read.exportSettings.level() == HEVCLevel::Custom && read.exportSettings.customMegabits() == 120
+              && read.grain && read.grain->enabled && read.grain->gauge == FilmGauge::Sixteen
+              && read.grain->amount == 1.5 && read.grain->size == 2,
+          "a look the Mac wrote, with its compression and grain");
+    const MotionLook again = motionLookFromJson(motionLookToJson(read));
+    check(again == read, "and written back as it was read");
+    check(!motionLookFromJson(oldJson).grain.has_value(), "an old look has no grain");
+
+    std::printf("grain on clips\n");
+    MotionGrain grain;
+    check(!grain.isVisible() && grain.gauge == FilmGauge::ThirtyFive && grain.amount == 1 && grain.size == 1,
+          "off, 35 mm, Amount and Size 1 until chosen");
+    grain.enabled = true;
+    grain.amount = 0;
+    check(!grain.isVisible(), "no grain at Amount 0");
+    check(filmGaugeName(FilmGauge::Sixteen) == "16 mm" && filmGaugeFrameMM(FilmGauge::Seventy).first == 52.48
+              && filmGaugeFrameMM(FilmGauge::Sixteen).second == 7.41,
+          "the gauges: Super 16, Super 35 and 65 mm 5-perf");
+    check(FrameGrain::frameNumber(1.001, 29.97) == 30 && FrameGrain::frameNumber(0, 24) == 0
+              && FrameGrain::frameNumber(std::nan(""), 24) == 0,
+          "frames numbered by their time");
+    PrintGrainTable table;
+    table.stockSeed = 0x12345678u;
+    const FrameGrain f30{&table, grain, 7, 30}, f31{&table, grain, 7, 31}, other{&table, grain, 8, 30};
+    check(f30.seed() != f31.seed() && f30.seed() != other.seed()
+              && f30.seed() == (0x12345678u ^ (7u * 0x9E3779B9u) ^ (30u * 0x85EBCA6Bu)),
+          "each frame and each clip its own grains, seeded as the Mac seeds them");
+    check(FrameGrain::clipSeedFor("/a/b/C0001.MOV") == fnv1a("C0001.MOV"), "a clip's seed is its file's name, hashed");
+    MotionLook a = MotionLook::initial(), b = a;
+    b.grain = MotionGrain{};
+    b.grain->enabled = true;
+    check(motionChangeName(a, b, false) == "Grain", "switching grain on is the undo step Grain");
 }
 
 // The Edit menu's undo and redo (app/EditHistory.h), as tests/app checks the
@@ -811,8 +984,10 @@ int main(int argc, char **argv)
         filmMenuChecks(packs);
         colourFilterChecks(packs);
         instantChecks(packs);
+        commentChecks(packs);
         ovalChecks(packs);
         nameChecks();
+        compressionChecks();
         undoChecks();
         libraryChecks();
         resamplerChecks();

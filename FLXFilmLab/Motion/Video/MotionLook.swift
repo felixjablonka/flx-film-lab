@@ -196,10 +196,93 @@ struct InputSettings: Codable, Equatable {
     var format: LogFormat? = nil
 }
 
+/// The codec Export writes. The raw values are kept as looks saved them
+/// before there was a choice of compression: ProRes's is still its old name,
+/// "ProRes 422 HQ", whichever flavour is chosen (`ExportSettings.proRes`).
 enum ExportCodec: String, Codable, CaseIterable, Identifiable {
     case proRes422HQ = "ProRes 422 HQ"
     case hevc10 = "HEVC 10-bit"
     var id: String { rawValue }
+    /// The family, as the toolbar names it: its compression is beside it.
+    var title: String { self == .proRes422HQ ? "ProRes 422" : "HEVC 10-bit" }
+}
+
+/// ProRes 422's flavours, from the most compressed to the least. ProRes takes
+/// no data rate: each flavour has Apple's target for a frame size and rate,
+/// and a clip comes out near it.
+enum ProResFlavour: String, Codable, CaseIterable, Identifiable {
+    case proxy = "Proxy"
+    case lt = "LT"
+    case standard = "422"
+    case hq = "HQ"
+    var id: String { rawValue }
+
+    /// The full name, as the file's codec is called: "ProRes 422 LT".
+    var title: String { self == .standard ? "ProRes 422" : "ProRes 422 \(rawValue)" }
+
+    /// Apple's target data rate at 1920 x 1080 and 29.97 frames a second, in
+    /// Mbit/s (Apple ProRes white paper): 45, 102, 147 and 220. It grows with
+    /// the pixels and the frames: 182, 409, 589 and 884 at 4K.
+    private var megabitsAt1080p30: Double {
+        switch self {
+        case .proxy: return 45
+        case .lt: return 102
+        case .standard: return 147
+        case .hq: return 220
+        }
+    }
+
+    func megabits(width: Int, height: Int, frameRate: Double) -> Double {
+        megabitsAt1080p30 * Double(width * height) / (1920 * 1080) * max(frameRate, 1) / 29.97
+    }
+}
+
+/// HEVC's data rate: four levels from HEVC's own limits for the clip's size
+/// and frame rate (`HEVCLevels`), or a rate of its own
+/// (`ExportSettings.hevcCustomMegabits`).
+///
+/// Standard is the most the HEVC level the clip needs allows, High tier: 100
+/// Mbit/s for 4K up to 30 fps, 160 up to 60 and 240 up to 120; for HD 30, 50
+/// and 100. High and Maximum are the next two levels' limits, Smaller half of
+/// Standard: 50, 100, 160 and 240 Mbit/s for 4K at 30 fps, 80, 160, 240 and
+/// 480 at 60. Every export is labelled with the lowest level that holds it,
+/// so a Standard file asks a player for no more than the clip's size and
+/// frame rate do. Cameras' own HEVC sits on the same steps: a Sony FX5's 4K
+/// 4:2:0 is 30, 50 or 100 Mbit/s at 24 fps, 45, 75 or 150 at 60 and 200 at
+/// 120; a Lumix S1II's is 150 at 24-30, 200 at 60 and 300 at 120.
+///
+/// What each keeps of the film's grain was measured on 4K clips from a Nikon
+/// Z (29.97 fps), a Lumix (DCI 4K 59.94) and an iPhone (30), Vision3 250D on
+/// 2383 at 35 mm, through VideoToolbox's encoder: the share of the grain's
+/// light that survives, against the uncompressed frames, was 0.4 at 0.125
+/// bits a pixel and frame, 0.5 at 0.25, 0.65 at 0.5, 0.75 at 1 and 0.85 at 2,
+/// alike at 30 and 60 fps. At 4K 30 fps the four levels keep about 50%, 60%,
+/// 70% and 75%; at 60 fps a little less, as a camera's would; ProRes 422 HQ
+/// 98-99%. Nothing in HEVC favours one rate over its neighbours: 104 Mbit/s
+/// kept 1% more grain than 100, for 4% more data. Without grain the picture
+/// levels off at 57-58 dB PSNR from 1 or 2 bits a pixel, and the encoder
+/// spends less than it is asked for: a clean clip is often smaller than the
+/// rate shown.
+enum HEVCLevel: String, Codable, CaseIterable, Identifiable {
+    case smaller = "Smaller"
+    case standard = "Standard"
+    case high = "High"
+    case maximum = "Maximum"
+    case custom = "Custom"
+    var id: String { rawValue }
+
+    /// The level's rate for a clip `width` x `height` at `frameRate`, in
+    /// Mbit/s; nil under Custom.
+    func megabits(width: Int, height: Int, frameRate: Double) -> Double? {
+        let steps = HEVCLevels.steps(width: width, height: height, frameRate: frameRate)
+        switch self {
+        case .smaller: return steps[0] / 2
+        case .standard: return steps[0]
+        case .high: return steps[1]
+        case .maximum: return steps[2]
+        case .custom: return nil
+        }
+    }
 }
 
 struct ExportSettings: Codable, Equatable {
@@ -207,6 +290,62 @@ struct ExportSettings: Codable, Equatable {
     /// Which displays the file is encoded for. Both are tagged Rec.709;
     /// they differ in the curve the values are written with.
     var display: LookLUT.Output = .appleDisplay
+    /// ProRes's flavour; nil, HQ, all there was before. Optional, as are the
+    /// two below, so that settings saved before still open.
+    var proRes: ProResFlavour? = nil
+    /// HEVC's level; nil, Standard.
+    var hevcLevel: HEVCLevel? = nil
+    /// HEVC's data rate under Custom, in Mbit/s; nil, 100.
+    var hevcCustomMegabits: Double? = nil
+
+    /// The data rates HEVC can be set to, Mbit/s: up to the most HEVC's
+    /// highest level, 6.2, allows, 800 at High tier.
+    static let hevcMegabits: ClosedRange<Double> = 1...800
+
+    var flavour: ProResFlavour { proRes ?? .hq }
+    var level: HEVCLevel { hevcLevel ?? .standard }
+    var customMegabits: Double {
+        min(max(hevcCustomMegabits ?? 100, Self.hevcMegabits.lowerBound), Self.hevcMegabits.upperBound)
+    }
+
+    /// The data rate a clip `width` x `height` at `frameRate` is written at,
+    /// in Mbit/s: HEVC's as set, ProRes's Apple's target for its flavour.
+    func megabits(width: Int, height: Int, frameRate: Double) -> Double {
+        switch codec {
+        case .proRes422HQ:
+            return flavour.megabits(width: width, height: height, frameRate: frameRate)
+        case .hevc10:
+            return megabits(level, width: width, height: height, frameRate: frameRate)
+        }
+    }
+
+    /// HEVC's data rate at `level` for a clip of that size and frame rate.
+    func megabits(_ level: HEVCLevel, width: Int, height: Int, frameRate: Double) -> Double {
+        let rate = level.megabits(width: width, height: height, frameRate: frameRate) ?? customMegabits
+        return min(max(rate, Self.hevcMegabits.lowerBound), Self.hevcMegabits.upperBound)
+    }
+
+    /// The compression alone, as the toolbar shows it: "HQ", "High", or a
+    /// custom rate, "120 Mbit/s".
+    var compressionTitle: String {
+        switch codec {
+        case .proRes422HQ: return flavour.rawValue
+        case .hevc10: return level == .custom ? Self.rate(customMegabits) : level.rawValue
+        }
+    }
+
+    /// The codec and its compression: "ProRes 422 LT", "HEVC 10-bit, High".
+    var title: String {
+        switch codec {
+        case .proRes422HQ: return flavour.title
+        case .hevc10: return "\(codec.title), \(compressionTitle)"
+        }
+    }
+
+    /// A data rate as the app writes it: "207 Mbit/s", "8.5 Mbit/s".
+    static func rate(_ megabits: Double) -> String {
+        megabits < 10 ? String(format: "%.1f Mbit/s", megabits) : String(format: "%.0f Mbit/s", megabits)
+    }
 }
 
 /// Everything that decides how a clip looks and is written out.
@@ -217,6 +356,9 @@ struct MotionLook: Codable, Equatable {
     var recipe: Recipe
     /// Glow's diffusion, glow and halation, applied to the print.
     var effects: GlowLook
+    /// Grain on the finished frames; nil, none, as in a look saved before
+    /// clips had any. Optional so that such a look still opens.
+    var grain: MotionGrain? = nil
     var input = InputSettings()
     var export = ExportSettings()
     /// Which version of the app saved this look; nil before the clip meter.

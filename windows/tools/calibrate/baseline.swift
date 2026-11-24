@@ -8,12 +8,21 @@ import Foundation
 //   flxbaseline FILE...    one line per file: FILE, a tab, EV ("-" where it does not open)
 //
 // On the decoder version the film decode uses (RawLoader.keepDecoderVersion):
-// Core Image's RAW decoder 8 where its default is newer and the file offers 8.
+// Core Image's RAW decoder 8, or the newest version before it the file offers,
+// where its default is newer.
 func decoderNumber(_ version: CIRAWDecoderVersion) -> Int? { Int(version.rawValue.prefix(while: \.isNumber)) }
+// 8, or the newest version before it the file offers (a D700's are 6, 7 and 9)
+func keptVersion(_ filter: CIRAWFilter) -> CIRAWDecoderVersion? {
+    var kept: (version: CIRAWDecoderVersion, number: Int)?
+    for version in filter.supportedDecoderVersions {
+        guard let n = decoderNumber(version), n <= 8, n > (kept?.number ?? Int.min) else { continue }
+        kept = (version, n)
+    }
+    return kept?.version
+}
 for path in CommandLine.arguments.dropFirst() {
     if let filter = CIRAWFilter(imageURL: URL(fileURLWithPath: path)) {
-        if let current = decoderNumber(filter.decoderVersion), current > 8,
-           let kept = filter.supportedDecoderVersions.first(where: { decoderNumber($0) == 8 }) {
+        if let current = decoderNumber(filter.decoderVersion), current > 8, let kept = keptVersion(filter) {
             filter.decoderVersion = kept
         }
         print("\(path)\t\(filter.baselineExposure)")
